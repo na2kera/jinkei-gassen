@@ -1,0 +1,17 @@
+{
+  "name": "jinkei-gassen",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.14.0",
+  "volta": {
+    "node": "22.13.1"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @jinkei/client dev",
+    "build": "pnpm --filter @jinkei/client build",
+    "preview": "pnpm --filter @jinkei/client preview",
+    "test": "pnpm -r --if-present test",
+    "typecheck": "pnpm -r --if-present typecheck"
+  }
+}

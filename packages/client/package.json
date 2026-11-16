@@ -1,0 +1,22 @@
+{
+  "name": "@jinkei/client",
+  "private": true,
+  "type": "module",
+  "volta": {
+    "extends": "../../package.json"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@jinkei/engine": "workspace:*",
+    "phaser": "4.2.1"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
+  }
+}
