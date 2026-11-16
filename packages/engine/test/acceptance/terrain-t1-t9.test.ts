@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createBattle, step, type BattleEvent, type BattleState, type Stance } from '../../src/index.ts';
 import { T } from '../../src/tuning.ts';
 import { clearOfWalls, sideOfWall, wallsOf } from '../../src/walls.ts';
-import { castleSetup, t1, t2, t3, t4, withTerrain, at, CASTLE_WALL_ROW } from '../../sim/terrain-scenes.ts';
+import { castleSetup, t1, t2, t3, t4, t4Cav, withTerrain, at, CASTLE_WALL_ROW } from '../../sim/terrain-scenes.ts';
 import { place } from '../helpers.ts';
 
 function make(setup: Parameters<typeof createBattle>[0]): BattleState {
@@ -25,10 +25,21 @@ describe('T1〜T4：地形が戦いに効く（種40個）', () => {
     expect(plain).toBeGreaterThanOrEqual(0.35);
     expect(plain).toBeLessThanOrEqual(0.65);
   }, 120_000);
-  it('T4 柵：柵の側の得点率が 0.6 以上、柵がなければ 0.2 以下。騎兵2を背面から当てると、正面からより 0.3 以上低い', () => {
+  it('T4 柵（前半・幅 3）：柵の側の得点率が 0.6 以上、柵がなければ 0.2 以下', () => {
     expect(t4(true, 'none')).toBeGreaterThanOrEqual(0.6);
     expect(t4(false, 'none')).toBeLessThanOrEqual(0.2);
-    expect(t4(true, 'front') - t4(true, 'rear')).toBeGreaterThanOrEqual(0.3);
+  }, 120_000);
+  it('T4 柵（後半・幅 8）：騎兵2を、迂回させて背面から当てると、正面から当てた場合より柵の側の得点率が 0.3 以上低い', () => {
+    const front = t4Cav('front');
+    const rear = t4Cav('rear');
+    // 場面の条件：正面の場合は柵の正面から当たって突入が起きない。背面の場合は、正面の歩兵と組み合っている守る側に突入が起き、
+    // 騎兵の損害の大半が側面・背面から
+    expect(front.impacts).toBe(0);
+    expect(front.sideRearShare).toBeLessThan(0.1);
+    expect(rear.impacts).toBeGreaterThanOrEqual(1);
+    expect(rear.pinnedImpacts).toBe(rear.impacts);
+    expect(rear.sideRearShare).toBeGreaterThan(0.8);
+    expect(front.score - rear.score).toBeGreaterThanOrEqual(0.3);
   }, 120_000);
 });
 
@@ -127,32 +138,41 @@ describe('T7 弓は城壁を越える', () => {
 
 describe('T8 止まったままにならない', () => {
   for (const stance of ['advance', 'flank', 'hunt'] as const) {
-    it(`攻める側の全部隊を ${stance} にしても、門が立っている間に 30 秒以上ほとんど動かない部隊がいない。門が破れる`, () => {
+    it(`攻める側の全部隊を ${stance} にして最後まで流しても、30 秒以上ほとんど動かない部隊がいない（攻撃している部隊・持ち場にいる守備の部隊・門が立っている間に門の前で待つ部隊を除く）。門が破れる`, () => {
       const w = wallsOf(castleSetup(stance, 1).field)!;
       const gx = 5.5;
       const gy = CASTLE_WALL_ROW + 0.5;
       const history: { x: number; y: number }[][] = [];
       let gateDown = -1;
       const stuck: string[] = [];
+      let checked = 0;
+      let checkedAfterGate = 0;
       runCastle(stance, 1, (st, ev) => {
         for (const e of ev) if (e.type === 'destroyed' && e.unit === st.gate!.id) gateDown = e.tick;
-        if (gateDown >= 0) return;
         history.push(st.units.map((u) => ({ x: u.x, y: u.y })));
         if (history.length <= 300) return;
         const then = history[history.length - 301]!;
         for (const u of st.units) {
           if (u.side !== 0 || u.kind === 'hq' || u.status !== 'active') continue;
+          // 攻撃している部隊と、守備で持ち場にいる部隊は、動かなくてよい
+          if (u.attacking !== null) continue;
+          if (u.stance === 'hold' && Math.hypot(u.x - u.home.x, u.y - u.home.y) <= T.homeTolerance) continue;
+          checked++;
+          if (gateDown >= 0) checkedAfterGate++;
           // 門の前で攻撃に加われない部隊は除く：狙いが門か、城壁の反対側にあって（門を通りたい）、門のマスの中心から 3.0 以内で順番を待っている部隊。
           // 切れ目は1マスなので、門を攻められるのは1部隊だけで、残りは門の前に固まって待つ
           const tgt = u.target === null ? null : st.units[u.target]!;
           const wantsThrough = tgt !== null && (tgt.kind === 'gate' || sideOfWall(w, tgt.y) !== sideOfWall(w, u.y));
-          if (wantsThrough && Math.hypot(u.x - gx, u.y - gy) <= 3.0) continue;
+          if (gateDown < 0 && wantsThrough && Math.hypot(u.x - gx, u.y - gy) <= 3.0) continue;
           const p = then[u.id]!;
           if (Math.hypot(u.x - p.x, u.y - p.y) < 0.3) stuck.push(`${u.id} @${st.tick}`);
         }
       });
       expect(stuck.slice(0, 5)).toEqual([]);
       expect(gateDown).toBeGreaterThan(0);
+      // 検査が実際に走っていること（門が破れたあとも含めて）
+      expect(checked).toBeGreaterThan(100);
+      expect(checkedAfterGate).toBeGreaterThan(0);
       expect(w.gapCol).toBe(5);
     }, 60_000);
   }

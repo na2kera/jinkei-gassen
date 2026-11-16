@@ -1,7 +1,7 @@
 // 第2章・第3章の10面（design §3.8「第2章・第3章の面」、§3.10）
 import { describe, expect, it } from 'vitest';
 import { createBattle, KIND_STATS, MAX_UNITS, STAGES, stageEnemyVisible, stageLineArmy, stageSetup, starsFor, summarize, validateStageArmy, type Placement, type Stage } from '../src/index.ts';
-import { lineStats, runStage, solutionStats, STAGE_SEEDS, templateWins } from '../sim/stagelib.ts';
+import { lineStats, ORDER_PERMS, runStage, solutionStats, STAGE_SEEDS, stageStats, templateWins } from '../sim/stagelib.ts';
 
 const LATER = STAGES.filter((s) => s.chapter !== 1);
 const byId = (id: string): Stage => STAGES.find((s) => s.id === id)!;
@@ -111,6 +111,15 @@ describe('第2章・第3章の面の手ごたえ', () => {
   }, 300_000);
 });
 
+describe('置く順だけを変えても、勝ち負けが変わらない（全15面）', () => {
+  // 画面は置いた順に id を振る。同点を id で割る決まりがあるので、見本が置く順に頼って勝っていないことを確かめる
+  for (const s of STAGES) {
+    it(`${s.id}：見本を並べ替えても（${ORDER_PERMS.map((p) => p.name).join('・')}）、種20個のうち18個以上で勝つ`, () => {
+      for (const p of ORDER_PERMS) expect(stageStats(s, p.apply(s.solution), STAGE_SEEDS, s.solutionOrders ?? []).wins, p.name).toBeGreaterThanOrEqual(18);
+    }, 300_000);
+  }
+});
+
 describe('星3つは取れる（第2章・第3章）', () => {
   // 見本を出発点に、部隊の位置・方針・号令を少しずつ変えて探した配置。Stage には入れない。[兵種, 列, 行, 方針]
   type Row = [Placement['kind'], number, number, Placement['stance']];
@@ -126,21 +135,24 @@ describe('星3つは取れる（第2章・第3章）', () => {
     '2-5': { ps: [['hq', 8, 10, 'hold'], ['infantry', 7, 10, 'hold'], ['infantry', 11, 10, 'hold'], ['infantry', 4, 11, 'flank'], ['infantry', 0, 10, 'hold'], ['shield', 5, 10, 'hold'], ['shield', 6, 10, 'hold'], ['archer', 3, 12, 'hunt'], ['archer', 4, 13, 'hold'], ['cavalry', 8, 13, 'flank'], ['cavalry', 4, 10, 'hold']], orders: [{ atSec: 10, target: 'all', kind: 'brace' }, { atSec: 16, target: 'center', kind: 'brace' }, { atSec: 23, target: 'all', kind: 'charge' }] },
     // 探索
     '3-1': { ps: [['hq', 3, 10, 'hold'], ['infantry', 9, 10, 'hold'], ['infantry', 9, 12, 'hold'], ['infantry', 5, 10, 'hold'], ['infantry', 7, 10, 'hold'], ['infantry', 8, 10, 'hold'], ['infantry', 2, 10, 'hold'], ['shield', 4, 10, 'hold'], ['shield', 1, 11, 'hold'], ['shield', 6, 10, 'hold'], ['shield', 10, 11, 'hold'], ['archer', 6, 11, 'hold'], ['archer', 5, 11, 'hunt']], orders: [{ atSec: 22, target: 'all', kind: 'brace' }, { atSec: 28, target: 'right', kind: 'charge' }, { atSec: 58, target: 'all', kind: 'brace' }] },
-    // 鶴翼のひな形そのまま
-    '3-3': { ps: [['hq', 5, 14, 'hold'], ['shield', 5, 12, 'hold'], ['shield', 6, 12, 'hold'], ['shield', 4, 12, 'hold'], ['shield', 7, 12, 'hold'], ['archer', 5, 13, 'advance'], ['archer', 6, 13, 'advance'], ['infantry', 3, 11, 'advance'], ['infantry', 2, 10, 'advance'], ['infantry', 1, 10, 'advance'], ['cavalry', 0, 10, 'flank'], ['infantry', 8, 11, 'advance'], ['infantry', 9, 10, 'advance'], ['infantry', 10, 10, 'advance'], ['cavalry', 11, 10, 'flank']], orders: [] },
-    // 探索
-    '3-4': { ps: [['hq', 0, 10, 'hold'], ['shield', 2, 10, 'hold'], ['shield', 6, 10, 'hold'], ['shield', 1, 10, 'hold'], ['shield', 5, 10, 'hold'], ['shield', 4, 10, 'hold'], ['infantry', 3, 10, 'hold'], ['archer', 3, 11, 'hold']], orders: [{ atSec: 32, target: 'all', kind: 'brace' }, { atSec: 48, target: 'all', kind: 'brace' }] },
-    // 探索
-    '3-5': { ps: [['hq', 9, 10, 'hold'], ['shield', 10, 10, 'hold'], ['shield', 6, 10, 'hold'], ['infantry', 7, 12, 'hold'], ['infantry', 5, 10, 'hold'], ['infantry', 0, 12, 'hold'], ['infantry', 10, 13, 'flank'], ['archer', 7, 11, 'advance'], ['archer', 5, 11, 'hold'], ['archer', 4, 11, 'advance'], ['shield', 4, 10, 'hold'], ['infantry', 7, 10, 'hold'], ['cavalry', 3, 10, 'flank'], ['cavalry', 0, 11, 'flank'], ['cavalry', 2, 12, 'flank']], orders: [{ atSec: 9, target: 'right', kind: 'brace' }, { atSec: 23, target: 'right', kind: 'brace' }, { atSec: 39, target: 'center', kind: 'charge' }] },
+    // 探索（鶴翼のひな形から。置く順を変えても星3つ）
+    '3-3': { ps: [['hq', 5, 15, 'hold'], ['shield', 5, 12, 'hold'], ['shield', 6, 12, 'hold'], ['shield', 4, 12, 'hold'], ['shield', 8, 11, 'hold'], ['archer', 3, 13, 'hunt'], ['archer', 6, 13, 'advance'], ['infantry', 3, 10, 'advance'], ['infantry', 9, 10, 'advance'], ['infantry', 10, 10, 'advance'], ['cavalry', 0, 10, 'flank'], ['infantry', 1, 10, 'advance'], ['infantry', 2, 11, 'advance'], ['infantry', 8, 12, 'advance'], ['cavalry', 11, 13, 'flank']], orders: [{ atSec: 5, target: 'left', kind: 'retreat' }, { atSec: 38, target: 'right', kind: 'charge' }] },
+    // 探索（手持ちを直したあと。置く順を変えても12個以上で星3つ）
+    '3-4': { ps: [['hq', 1, 10, 'hold'], ['shield', 6, 10, 'hold'], ['shield', 3, 10, 'hold'], ['shield', 4, 10, 'hold'], ['shield', 0, 10, 'hold'], ['shield', 5, 10, 'hold'], ['infantry', 2, 10, 'hold'], ['infantry', 5, 11, 'flank']], orders: [{ atSec: 5, target: 'all', kind: 'brace' }, { atSec: 27, target: 'all', kind: 'brace' }, { atSec: 51, target: 'all', kind: 'brace' }] },
+    // 探索（置く順を変えても星3つ）
+    '3-5': { ps: [['hq', 5, 10, 'hold'], ['shield', 9, 10, 'hold'], ['shield', 6, 10, 'hold'], ['infantry', 10, 12, 'hold'], ['infantry', 10, 10, 'hold'], ['infantry', 6, 11, 'hold'], ['infantry', 10, 13, 'flank'], ['archer', 7, 11, 'advance'], ['archer', 5, 11, 'hold'], ['archer', 4, 11, 'hold'], ['shield', 4, 10, 'hold'], ['infantry', 0, 12, 'flank'], ['cavalry', 0, 11, 'flank'], ['cavalry', 3, 10, 'flank'], ['cavalry', 1, 12, 'flank']], orders: [{ atSec: 8, target: 'right', kind: 'brace' }, { atSec: 22, target: 'right', kind: 'brace' }, { atSec: 41, target: 'all', kind: 'brace' }] },
   };
   for (const [id, f] of Object.entries(FOUND)) {
     it(`${id}：見つけた配置で、種20個のうち10個以上で星3つ`, () => {
       const s = byId(id);
       const ps: Placement[] = f.ps.map(([kind, col, row, stance]) => ({ kind, col, row, stance }));
       expect(validateStageArmy(s, ps)).toEqual([]);
-      let three = 0;
-      for (const seed of STAGE_SEEDS) if (starsFor(summarize(runStage(s, ps, seed, undefined, f.orders)), 0) === 3) three++;
-      expect(three).toBeGreaterThanOrEqual(10);
-    }, 300_000);
+      // 置く順だけを変えても、10個以上で星3つ
+      for (const order of [{ name: 'そのまま', apply: <T,>(a: T[]): T[] => a }, ...ORDER_PERMS]) {
+        let three = 0;
+        for (const seed of STAGE_SEEDS) if (starsFor(summarize(runStage(s, order.apply(ps), seed, undefined, f.orders)), 0) === 3) three++;
+        expect(three, order.name).toBeGreaterThanOrEqual(10);
+      }
+    }, 600_000);
   }
 });

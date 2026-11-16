@@ -710,14 +710,6 @@ function decide(ctx: TickCtx, u: Unit): Decision {
     }
   }
 
-  // 狙いが門で、門が近接の距離に入ったら、門と戦う（近接の距離にふつうの敵がいるときは、上でその敵と戦っている）
-  if (plan.target !== null && plan.target === ctx.gateUp && gateInMelee && !plan.hunt) {
-    d.anchor = true;
-    d.target = plan.target;
-    d.attack = 'melee';
-    return d;
-  }
-
   // 弓兵は、近接で戦わないときは撃つ（迂回の①②は撃たずに進む）
   if (u.kind === 'archer' && !(stance === 'flank' && u.flankPhase !== 3)) {
     const t = pickArrow(ctx, u);
@@ -727,6 +719,14 @@ function decide(ctx: TickCtx, u: Unit): Decision {
       d.attack = 'arrow';
       return d;
     }
+  }
+
+  // 狙いが門で、門が近接の距離に入ったら、門と戦う（近接の距離にふつうの敵がいるときは、上でその敵と戦っている。弓兵は、撃てる敵がいる間は上で撃っている）
+  if (plan.target !== null && plan.target === ctx.gateUp && gateInMelee && !plan.hunt) {
+    d.anchor = true;
+    d.target = plan.target;
+    d.attack = 'melee';
+    return d;
   }
 
   d.target = plan.target;

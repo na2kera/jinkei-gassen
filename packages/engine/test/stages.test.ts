@@ -16,7 +16,7 @@ import {
   type Placement,
   type Stage,
 } from '../src/index.ts';
-import { lineStats, runStage, solutionStats, STAGE_SEEDS, templateWins } from '../sim/stagelib.ts';
+import { lineStats, ORDER_PERMS, runStage, solutionStats, STAGE_SEEDS, templateWins } from '../sim/stagelib.ts';
 
 /** 第1章の5面（第2章・第3章は stages-ch23.test.ts） */
 const CH1 = STAGES.filter((s) => s.chapter === 1);
@@ -150,8 +150,8 @@ describe('星3つは取れる（1-2〜1-5）', () => {
   // [兵種, 列, 行, 方針]。号令は秒・相手・種類
   type Row = [Placement['kind'], number, number, Placement['stance']];
   const FOUND: Record<string, { ps: Row[]; orders: { atSec: number; target: 'all' | 'left' | 'center' | 'right'; kind: 'charge' | 'brace' | 'retreat' }[] }> = {
-    // 盾兵を3・5・7列に散らして騎兵の通り道を広く受け、歩兵を両端へ
-    '1-2': { ps: [['hq', 5, 14, 'hold'], ['shield', 3, 10, 'hold'], ['shield', 7, 10, 'hold'], ['shield', 5, 10, 'hold'], ['infantry', 0, 10, 'advance'], ['infantry', 1, 11, 'advance'], ['infantry', 11, 10, 'advance'], ['infantry', 7, 11, 'advance'], ['infantry', 8, 11, 'advance']], orders: [] },
+    // 盾兵を散らして騎兵の通り道を受け、歩兵を両端へ（置く順を変えても星3つになるように探し直した）
+    '1-2': { ps: [['hq', 5, 14, 'hold'], ['shield', 4, 10, 'hold'], ['shield', 6, 11, 'hold'], ['shield', 5, 10, 'hold'], ['infantry', 0, 10, 'advance'], ['infantry', 0, 12, 'advance'], ['infantry', 8, 12, 'advance'], ['infantry', 11, 10, 'advance'], ['infantry', 8, 11, 'advance']], orders: [] },
     // 盾兵の壁の後ろと右の端に弓兵を散らし、歩兵は後ろ
     '1-3': { ps: [['hq', 2, 15, 'hold'], ['shield', 4, 10, 'hold'], ['shield', 5, 10, 'hold'], ['shield', 6, 10, 'hold'], ['shield', 7, 10, 'hold'], ['archer', 4, 11, 'advance'], ['archer', 10, 12, 'advance'], ['archer', 8, 12, 'advance'], ['archer', 11, 10, 'advance'], ['infantry', 4, 12, 'advance'], ['infantry', 5, 14, 'advance'], ['infantry', 6, 11, 'advance']], orders: [] },
     // 正面は守備、右の歩兵2と騎兵3で右から回り込み、本陣は右の後ろ
@@ -167,9 +167,12 @@ describe('星3つは取れる（1-2〜1-5）', () => {
       const s = STAGES.find((x) => x.id === id)!;
       const ps: Placement[] = f.ps.map(([kind, col, row, stance]) => ({ kind, col, row, stance }));
       expect(validateStageArmy(s, ps)).toEqual([]);
-      let three = 0;
-      for (const seed of STAGE_SEEDS) if (starsFor(summarize(runStage(s, ps, seed, undefined, f.orders)), 0) === 3) three++;
-      expect(three).toBeGreaterThanOrEqual(10);
-    }, 120_000);
+      // 置く順だけを変えても、10個以上で星3つ
+      for (const order of [{ name: 'そのまま', apply: <T,>(a: T[]): T[] => a }, ...ORDER_PERMS]) {
+        let three = 0;
+        for (const seed of STAGE_SEEDS) if (starsFor(summarize(runStage(s, order.apply(ps), seed, undefined, f.orders)), 0) === 3) three++;
+        expect(three, order.name).toBeGreaterThanOrEqual(10);
+      }
+    }, 600_000);
   }
 });

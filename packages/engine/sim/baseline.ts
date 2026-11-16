@@ -1,4 +1,5 @@
-// T10 の記録を書き出す道具。地形を入れる前のコミットで、一度だけ動かす（作業の間は作り直さない）。
+// T10 の記録を書き出す道具。最初は地形を入れる前のコミット（4b3a90b）で動かし、2026-11-17 に本陣狙いの直しのために作り直した
+// （3つめの引数に、作り直した理由を書く）。平地の戦いを変える直しをしない限り、動かさない。
 //   node --experimental-strip-types --no-warnings sim/baseline.ts <コミット> <日付> [作り直した理由]
 import { writeFileSync } from 'node:fs';
 import { createBattle, STAGES, stageSetupWith } from '../src/index.ts';

@@ -2,7 +2,7 @@
 // 場面：戦場全体を両陣営の配置エリアにした 12 × 16 の戦場で、地形を置いたマスだけを変える。
 // 損害は、同じ種で「平地の同じ場面」と比べる（ばらつきの乱数が同じになるので、比がそのまま地形の倍率になる）。
 import { describe, expect, it } from 'vitest';
-import { createBattle, KIND_STATS, remainingRatio, step, type BattleState, type Kind, type Terrain } from '../src/index.ts';
+import { canOrder, createBattle, KIND_STATS, remainingRatio, step, type BattleState, type Kind, type Terrain } from '../src/index.ts';
 import { T } from '../src/tuning.ts';
 import { castleField, castleSetup, openTerrainField } from '../sim/terrain-scenes.ts';
 import { face, p, place } from './helpers.ts';
@@ -305,6 +305,23 @@ describe('門', () => {
     for (let i = 0; i < 60; i++) step(s, []);
     expect(s.units[1]!.y).toBeLessThan(5);
   });
+  it('門のそばの弓兵は、撃てる敵がいれば門を殴らずに撃つ（兵種ごとの違いが方針より先）。撃てる敵がいなければ門と戦う', () => {
+    // 弓兵を門 (5.5, 5.5) の 1.4 下に置く。城壁の内側の歩兵 (4.5, 3.5) までは約 3.5 で、撃てる距離に入る
+    const r = createBattle({ ...castleSetup('advance', 1), armies: [[p('hq', 5, 14, 'hold'), p('archer', 5, 10, 'advance')], [p('hq', 0, 0, 'hold'), p('infantry', 4, 3, 'hold')]] });
+    if (!r.ok) throw new Error(r.error.message);
+    const s = r.value;
+    const g = s.gate!.id;
+    place(s, 1, 5.5, 6.9);
+    s.units[1]!.target = g;
+    expect(Math.hypot(0, 6.9 - 5.5)).toBeLessThanOrEqual(T.gateReach);
+    step(s, []);
+    expect(s.units[1]!.attacking).toBe(3);
+    expect(s.units[g]!.men).toBe(T.gateMen);
+    // 内側の歩兵がいなくなれば（本陣は撃てる距離の外）、門と戦う
+    s.units[3]!.status = 'gone';
+    step(s, []);
+    expect(s.units[1]!.attacking).toBe(g);
+  });
   it('残った兵の割合・開戦時の兵数に、門を数えない', () => {
     const s = gateScene();
     const initial1 = s.units.filter((u) => u.side === 1 && u.kind !== 'gate').reduce((a, u) => a + u.men, 0);
@@ -316,7 +333,20 @@ describe('門', () => {
     const r = createBattle({ ...castleSetup('advance', 1), armies: [[p('hq', 5, 14, 'hold'), p('infantry', 5, 10, 'advance')], [p('hq', 0, 0, 'hold'), p('infantry', 11, 0, 'hold')]] });
     if (!r.ok) throw new Error(r.error.message);
     const s = r.value;
+    // 全軍への号令：ほかの部隊にはかかるが、門にはかからない
     step(s, [{ side: 1, target: 'all', kind: 'brace' }]);
+    expect(s.units[gateId(s)]!.order).toBeNull();
+    expect(s.units[3]!.order).not.toBeNull();
+    // 門 (5, 5) は陣営1の中央の翼。中央には門しかいないので、中央への号令は受け付けない（号令の回数も減らない）
+    expect(s.units[gateId(s)]!.wing).toBe('center');
+    expect(s.units.filter((u) => u.side === 1 && u.kind !== 'gate').every((u) => u.wing !== 'center')).toBe(true);
+    const used = s.ordersUsed[1];
+    const c = canOrder(s, 1, 'center', 'brace');
+    expect(c.ok).toBe(false);
+    if (!c.ok) expect(c.error.code).toBe('no_target_units');
+    const ev = step(s, [{ side: 1, target: 'center', kind: 'brace' }]);
+    expect(ev.some((e) => e.type === 'order')).toBe(false);
+    expect(s.ordersUsed[1]).toBe(used);
     expect(s.units[gateId(s)]!.order).toBeNull();
   });
 });

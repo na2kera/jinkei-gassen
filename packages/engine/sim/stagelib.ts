@@ -61,3 +61,13 @@ export function templateWins(stage: Stage, seeds = STAGE_SEEDS): { id: TemplateI
     return { id, wins: r.wins, starsMean: r.starsMean };
   });
 }
+
+/**
+ * 配置の並べ替え（置く順だけを変える）。画面は置いた順に id を振り、id は同点の割り方に使われるので、
+ * 見本や星3つの配置が、置く順に頼って勝っていないことを確かめるのに使う
+ */
+export const ORDER_PERMS: { name: string; apply: <T>(a: T[]) => T[] }[] = [
+  { name: '逆順', apply: (a) => a.slice().reverse() },
+  { name: '半分で回す', apply: (a) => a.slice(Math.floor(a.length / 2)).concat(a.slice(0, Math.floor(a.length / 2))) },
+  { name: '奇数番が先', apply: (a) => [...a.filter((_, i) => i % 2 === 1), ...a.filter((_, i) => i % 2 === 0)] },
+];

@@ -242,10 +242,11 @@ export const STAGES: Stage[] = [
     index: 3,
     name: '挟み撃ち',
     hint: '横から来る騎兵は、どこで止める？',
-    // 正面に歩兵8と盾兵2（前進）。中間地帯の両端（行 7）に騎兵2ずつ（前進）。開戦してすぐ、両脇から突っ込んでくる
+    // 正面に歩兵8と盾兵2（前進）。中間地帯の両端（行 7）に騎兵2ずつ（前進）。開戦してすぐ、両脇から突っ込んでくる。4秒に全軍突撃
     field: plainField(),
     roster: { hq: 1, infantry: 6, shield: 4, archer: 2, cavalry: 2 },
     enemy: [hq(5, 0), ...at('infantry', 'advance', span(2, 9), 4), ...at('shield', 'advance', [5, 6], 3), ...at('cavalry', 'advance', [0, 1], 7), ...at('cavalry', 'advance', [10, 11], 7)],
+    enemyOrders: [{ atSec: 4, target: 'all', kind: 'charge' }],
     win: { type: 'defeat' },
     // 両翼の歩兵3つずつを前へ出して、両脇の騎兵が助走をつける前にぶつかる（突入させない）。中央は盾兵4の守備で正面の敵を受け、
     // 弓兵がその後ろから撃つ。騎兵は両端から回り込む
@@ -257,14 +258,15 @@ export const STAGES: Stage[] = [
     index: 4,
     name: '時を稼ぐ',
     hint: '柵と号令で、どこまで粘れる？',
-    // 幅 7。自軍の配置エリアのいちばん前の行（行 10）が柵、いちばん奥の2行が丘。手持ちは8部隊で、敵は倍（2.08 倍）。90秒守り切れば勝ち
+    // 幅 7。自軍の配置エリアのいちばん前の行（行 10）が柵、いちばん奥の2行が丘。手持ちは8部隊で、敵は倍（2.03 倍）。90秒守り切れば勝ち
     field: terrainField(7, [['fence', span(0, 6), [10]], ['hill', span(0, 6), [14, 15]]]),
-    roster: { hq: 1, shield: 5, infantry: 1, archer: 1 },
+    roster: { hq: 1, shield: 5, infantry: 2 },
     enemy: [hq(3, 0), ...at('infantry', 'advance', span(0, 6), 4), ...at('infantry', 'advance', span(0, 6), 3), ...at('infantry', 'advance', [3], 2)],
     win: { type: 'survive' },
     seconds: 90,
-    // 柵のマスに盾兵5と歩兵1を守備で並べ（盾の正面と柵の両方が効く）、弓兵はその後ろ。15秒ごとに堅守をかけ直して持ちこたえる
-    solution: [hq(3, 13), ...at('shield', 'hold', [0, 1, 2, 4, 5], 10), ...at('infantry', 'hold', [6], 10), ...at('archer', 'hold', [3], 11)],
+    // 柵の7マスを、盾兵5（中）と歩兵2（両端）の守備ですき間なく埋め（盾の正面と柵の両方が効く）、15秒ごとに堅守をかけ直して持ちこたえる。
+    // 柵の列にすき間があると、そこへ入った敵が両隣のどちらを攻めるかが置く順で変わり、勝ち負けが置く順で変わる
+    solution: [hq(3, 13), ...at('shield', 'hold', [1, 2, 3, 4, 5], 10), ...at('infantry', 'hold', [0, 6], 10)],
     solutionOrders: [
       { atSec: 15, target: 'all', kind: 'brace' },
       { atSec: 30, target: 'all', kind: 'brace' },
