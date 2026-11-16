@@ -2,7 +2,12 @@
 // 状態はすべてただの JSON で表せる形にする（Map・Set・クラス・undefined の値を持たない）。
 
 export type Side = 0 | 1;
-export type Kind = 'infantry' | 'shield' | 'cavalry' | 'archer' | 'hq'; // 段階4で 'gate' を足す
+export type Kind = 'infantry' | 'shield' | 'cavalry' | 'archer' | 'hq';
+/**
+ * 戦場に立つ部隊の種類。門（'gate'）は配置の兵種としては扱わず（validateArmy は知らない兵種として落とす）、
+ * BattleSetup.gate で置く。画面に渡す UnitView には門を入れず、BattleView.gate で別に渡す。
+ */
+export type UnitKind = Kind | 'gate';
 export type Stance = 'advance' | 'hold' | 'flank' | 'hunt'; // 前進・守備・迂回・本陣狙い
 export type OrderKind = 'charge' | 'brace' | 'retreat'; // 突撃・堅守・後退
 export type OrderTarget = 'all' | 'left' | 'center' | 'right';
@@ -80,6 +85,17 @@ export interface BattleSetup {
   scriptedOrders?: ScriptedOrder[];
   /** 既定は true。false は部分的な戦いのテスト用 */
   requireHq?: boolean;
+  /** 門（§3.8）。城壁の行の切れ目に置く。win が true なら、門が全滅した刻みに門の側の負け（理由は gate） */
+  gate?: GateSetup;
+  /** この陣営の配置は「配置エリアの中」の検査をしない（面の敵の配置用）。戦場の中・城壁のマスでない・兵種・方針・本陣・部隊数は調べる */
+  skipZoneCheck?: Side;
+}
+
+export interface GateSetup {
+  side: Side;
+  col: number;
+  row: number;
+  win: boolean;
 }
 
 export interface UnitOrder {
@@ -97,7 +113,7 @@ export interface UnitStats {
 export interface Unit {
   id: number;
   side: Side;
-  kind: Kind;
+  kind: UnitKind;
   wing: Wing;
   /** 位置 */
   x: number;
@@ -178,6 +194,8 @@ export interface BattleState {
   brokenLastTick: BrokenRecord[];
   /** 陣営ごとの、迂回の②で進む先の y（開戦時の敵軍の重心から決める） */
   flankY: [number, number];
+  /** 門（ない戦場は null）。id は門の部隊の id */
+  gate: null | (GateSetup & { id: number });
 }
 
 export interface OrderInput {
@@ -212,6 +230,23 @@ export interface BattleView {
   units: UnitView[];
   ordersLeft: [number, number];
   outcome: BattleState['outcome'];
+  /** 門（ない戦場では項目ごとない）。門は units には入れない */
+  gate?: GateView;
+}
+
+/** 映す側に渡す門 */
+export interface GateView {
+  id: number;
+  side: Side;
+  col: number;
+  row: number;
+  x: number;
+  y: number;
+  /** 耐久 */
+  men: number;
+  maxMen: number;
+  /** gone になったら門は破れている。そのとき門のマスと、その左右1マスずつの城壁は平地になっている（state.field.terrain も平地に変わる） */
+  status: UnitStatus;
 }
 
 export type BattleEvent =
@@ -232,6 +267,8 @@ export interface BattleSummary {
     id: number;
     side: Side;
     kind: Kind;
+    /** その部隊の陣営から見た翼（UnitView.wing と同じ）。結果の画面だけに戻ってきた人も、振り返りの値だけで部隊を呼べるようにするため */
+    wing: Wing;
     menLeft: number;
     dealt: number;
     routsCaused: number;
@@ -250,7 +287,8 @@ export type ArmyErrorCode =
   | 'over_budget'
   | 'too_many_units'
   | 'too_few_units'
-  | 'over_roster';
+  | 'over_roster'
+  | 'on_wall';
 
 export interface ArmyError {
   code: ArmyErrorCode;

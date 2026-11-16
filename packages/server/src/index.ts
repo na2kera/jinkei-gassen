@@ -8,7 +8,7 @@
 // 4桁のコードの総当たりで友達より先に空席を取られることと、作成の連打で予約と Durable Object の呼び出しを起こされることを抑える。
 //
 // テストのときだけ（開発サーバーに --var JINKEI_TEST_MODE:1 を渡したとき）:
-//   POST /api/rooms の本文に { timing: {...} } を付けて秒数を差し替え、{ codes: [...] } で試すコードの順を決められる
+//   POST /api/rooms の本文に { timing: {...} } を付けて秒数を差し替え、{ codes: [...] } で試すコードの順を、{ map } で戦場を決められる
 //   POST /api/rooms/:code/test/alarm     アラームの処理をいま実行する（2回鳴った場合の確認）
 //   POST /api/rooms/:code/test/abort     Durable Object を作り直させる（再開の確認）
 //   POST /api/rooms/:code/test/state     保存した段階・成績・刻みと、インスタンスの識別子を返す
@@ -18,6 +18,7 @@ import { DEFAULT_TIMING, parseTimingOverride, type Timing } from './timing.ts';
 import type { CreateRoomResponse } from './protocol.ts';
 import { originAllowed } from './origin.ts';
 import { isPid, isRoomCode, normalizeName } from './validate.ts';
+import { isMapId } from './maps.ts';
 
 export { Room } from './room.ts';
 
@@ -101,7 +102,7 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   }
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return json({ error: 'body must be an object' }, 400);
   const b = body as Record<string, unknown>;
-  const allowed = isTestMode(env) ? ['pid', 'timing', 'codes'] : ['pid'];
+  const allowed = isTestMode(env) ? ['pid', 'timing', 'codes', 'map'] : ['pid'];
   if (Object.keys(b).some((k) => !allowed.includes(k))) return json({ error: 'unknown fields' }, 400);
   const pid = b['pid'];
   if (!isPid(pid)) return json({ error: 'pid must be 32 lowercase hex characters' }, 400);
@@ -118,10 +119,16 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
     if (!Array.isArray(c) || c.length < 1 || c.length > MAX_CODE_TRIES || !c.every(isRoomCode)) return json({ error: 'invalid codes' }, 400);
     codes = c;
   }
+  // テストでは、選ぶ戦場を決めておける
+  let map: string | null = null;
+  if (b['map'] !== undefined) {
+    if (!isMapId(b['map'])) return json({ error: 'invalid map' }, 400);
+    map = b['map'];
+  }
   const tries = codes ?? Array.from({ length: MAX_CODE_TRIES }, randomCode);
   for (const code of tries) {
     const stub = env.ROOM.getByName(code);
-    if (await stub.create(code, pid, timing)) {
+    if (await stub.create(code, pid, timing, map)) {
       const res: CreateRoomResponse = { code };
       return json(res, 201);
     }

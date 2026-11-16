@@ -27,3 +27,7 @@ declare class URL {
   constructor(url: string, base?: string);
   pathname: string;
 }
+
+declare module 'node:fs' {
+  export function writeFileSync(path: string, data: string): void;
+}

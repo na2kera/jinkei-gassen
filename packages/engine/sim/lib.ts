@@ -183,14 +183,26 @@ export function formatMatrix(st: MatrixStats): string {
   return lines.join('\n');
 }
 
-const GLYPH: Record<string, string> = { infantry: 'i', shield: 's', cavalry: 'c', archer: 'a', hq: 'h' };
+const GLYPH: Record<string, string> = { infantry: 'i', shield: 's', cavalry: 'c', archer: 'a', hq: 'h', gate: 'g' };
+/** 地形の文字：丘 ^、森 #、川 ~、柵 +、城壁 =（平地は .） */
+const TERRAIN_GLYPH: Record<string, string> = { plain: '.', hill: '^', forest: '#', river: '~', fence: '+', wall: '=' };
 
-/** 盤面を文字で描く。1マスを横2文字で描く。陣営0は大文字、陣営1は小文字。敗走中は '!'、同じ場所に2部隊以上は '*' */
+/**
+ * 盤面を文字で描く。1マスを横2文字で描く。陣営0は大文字、陣営1は小文字（門は G / g）。敗走中は '!'、同じ場所に2部隊以上は '*'。
+ * 部隊のいないマスには地形の文字（平地 .、丘 ^、森 #、川 ~、柵 +、城壁 =）を描く。
+ */
 export function renderBoard(state: BattleState): string {
   const { width, height } = state.field;
   const W = width * 2;
   const grid: string[][] = Array.from({ length: height }, () => new Array<string>(W).fill('.'));
-  for (let y = 0; y < height; y++) for (let x = 0; x < W; x += 2) (grid[y] as string[])[x + 1] = ' ';
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < W; x += 2) {
+      const t = state.field.terrain[y * width + x / 2] ?? 'plain';
+      const ch = TERRAIN_GLYPH[t] ?? '.';
+      (grid[y] as string[])[x] = ch;
+      (grid[y] as string[])[x + 1] = t === 'plain' ? ' ' : ch;
+    }
+  }
   for (const u of state.units) {
     if (u.status === 'gone') continue;
     const gx = Math.floor(u.x * 2);
@@ -201,7 +213,7 @@ export function renderBoard(state: BattleState): string {
     if (u.side === 0) ch = ch.toUpperCase();
     if (u.status === 'routing') ch = '!';
     const cur = row[gx] as string;
-    row[gx] = cur === '.' || cur === ' ' ? ch : '*';
+    row[gx] = Object.values(TERRAIN_GLYPH).includes(cur) || cur === ' ' ? ch : '*';
   }
   return grid.map((r) => r.join('')).join('\n');
 }

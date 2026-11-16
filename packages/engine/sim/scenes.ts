@@ -252,7 +252,7 @@ export type A8Kind = 'charge' | 'brace' | 'retreat';
 export const A8_ORDER_TICK: Record<A8Kind, number> = { charge: 80, brace: 60, retreat: 50 };
 export const A8_TEMPLATES: Record<'charge' | 'brace', [TemplateId, TemplateId]> = { charge: ['crane', 'crescent'], brace: ['crane', 'scale'] };
 
-function a8Setup(kind: A8Kind, seed: number): BattleSetup {
+export function a8Setup(kind: A8Kind, seed: number): BattleSetup {
   if (kind === 'charge' || kind === 'brace') {
     const [a, b] = A8_TEMPLATES[kind];
     return { field: plainField(), armies: [templateArmy(a, 0), templateArmy(b, 1)], seed, maxTicks: 1800, timeout: 'compare' };

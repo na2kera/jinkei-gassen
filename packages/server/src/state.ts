@@ -58,6 +58,8 @@ export interface RoomState {
   lastResult: BattleSummary | null;
   /** 部屋を作ったときの秒数（テストでは縮める） */
   timing: Timing;
+  /** テスト専用：選ぶ戦場を決めておく（本番は常に null で、毎回ランダムに選ぶ） */
+  testMap: string | null;
 }
 
 /** 戦闘の状態。部屋の状態とは別の鍵 "battle" に書く（毎刻みは書かないため、design §4.2） */
@@ -67,6 +69,11 @@ export interface BattleRecord {
   armies: [Placement[], Placement[]];
   startsAt: number;
   state: BattleState;
+  /**
+   * いままでに出た出来事の数（= 次の出来事の通し番号）。state と一緒に保存するので、作り直されたあと保存した刻みから
+   * 続けても、同じ出来事には同じ番号が付く（engine は再現でき、号令を受け付けた step の直後は必ず保存するため）
+   */
+  evCount: number;
 }
 
 export function newRoom(code: string, gen: number, timing: Timing): RoomState {
@@ -83,6 +90,7 @@ export function newRoom(code: string, gen: number, timing: Timing): RoomState {
     rematch: [false, false],
     lastResult: null,
     timing,
+    testMap: null,
   };
 }
 

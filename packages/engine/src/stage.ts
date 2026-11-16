@@ -42,6 +42,10 @@ export interface Stage {
   solution: Placement[];
   /** 見本で出す号令（テスト用。画面には出さない）。号令が開く面で、配置と号令の組で勝つ見本にするため */
   solutionOrders?: StageEnemyOrder[];
+  /** 面の長さ（秒）。省略すると 180 秒 */
+  seconds?: number;
+  /** 門の場所（門はいつも陣営1のもの）。win が gate の面では必須 */
+  gate?: { col: number; row: number };
 }
 
 /** 配置の画面に見せる敵の部隊。方針は含めない */
@@ -62,15 +66,19 @@ export function stageSetup(stage: Stage, placements: Placement[], seed: number):
 /** stageSetup に、自軍の予定された号令（見本の号令など）を足したもの */
 export function stageSetupWith(stage: Stage, placements: Placement[], seed: number, myOrders: StageEnemyOrder[]): BattleSetup {
   const mine = myOrders.map((o) => ({ tick: Math.round(o.atSec * 10), side: 0 as Side, target: o.target, kind: o.kind }));
+  const maxTicks = Math.round((stage.seconds ?? STAGE_MAX_TICKS / 10) * 10);
   // 門を破る面（gate）は段階4。それまでは、ふつうの面と同じく時間切れで負けにする
   const timeout: BattleSetup['timeout'] = stage.win.type === 'survive' ? 'side0_wins' : 'side0_loses';
   return {
     field: stage.field,
     armies: [placements, stage.enemy],
     seed,
-    maxTicks: STAGE_MAX_TICKS,
+    maxTicks,
     timeout,
     scriptedOrders: [...mine, ...(stage.enemyOrders ?? []).map((o) => ({ tick: Math.round(o.atSec * 10), side: 1 as Side, target: o.target, kind: o.kind }))],
+    // 敵の配置は「配置エリアの中」の検査を外す（面のデータでは、敵のエリアを中間地帯まで広げてよいため）
+    skipZoneCheck: 1,
+    ...(stage.gate ? { gate: { side: 1 as Side, col: stage.gate.col, row: stage.gate.row, win: stage.win.type === 'gate' } } : {}),
   };
 }
 
@@ -104,6 +112,15 @@ export function validateStageArmy(stage: Stage, placements: Placement[]): ArmyEr
     const have = stage.roster[kind] ?? 0;
     if (n > have) errors.push({ code: 'over_roster', message: `${kind} が手持ちより多い: ${n} > ${have}` });
   }
+  // 城壁のマス・敵の部隊のマス・門のマスには置けない
+  const enemyCells = new Set((isDenseArray(stage.enemy) ? stage.enemy : []).map((e) => `${e.col},${e.row}`));
+  if (stage.gate) enemyCells.add(`${stage.gate.col},${stage.gate.row}`);
+  const w = stage.field.width;
+  placements.forEach((p, index) => {
+    if (!isObject(p) || typeof p.col !== 'number' || typeof p.row !== 'number') return;
+    if (Array.isArray(stage.field.terrain) && stage.field.terrain[p.row * w + p.col] === 'wall') errors.push({ code: 'on_wall', index, message: '城壁のマスには置けない' });
+    if (enemyCells.has(`${p.col},${p.row}`)) errors.push({ code: 'overlap', index, message: '敵の部隊とマスが重なっている' });
+  });
   return errors;
 }
 

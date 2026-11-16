@@ -102,8 +102,10 @@ export async function postRoom(base, body, { rlKey = randomKey() } = {}) {
   return { status: r.status, body: await r.json() };
 }
 
-export async function createRoom(base, pid, timing, codes) {
+/** 部屋を作る。map は選ぶ戦場（既定は平原に固定して、テストの結果がぶれないようにする。null ならランダム） */
+export async function createRoom(base, pid, timing, codes, map = 'plain') {
   const body = { pid };
+  if (map !== null) body.map = map;
   if (timing !== undefined) body.timing = timing;
   if (codes !== undefined) body.codes = codes;
   const r = await postRoom(base, body);
@@ -244,9 +246,9 @@ export class Client {
 }
 
 /** 部屋を作り、2人を入れて setup まで進める */
-export async function setupPair(base, timing, { names = ['A', 'B'] } = {}) {
+export async function setupPair(base, timing, { names = ['A', 'B'], map = 'plain' } = {}) {
   const A = new Client(base, '', { name: names[0] });
-  const code = await createRoom(base, A.pid, timing);
+  const code = await createRoom(base, A.pid, timing, undefined, map);
   A.code = code;
   const B = new Client(base, code, { name: names[1] });
   await A.connect();
@@ -319,4 +321,28 @@ export function upgradeStatus(base, path, headers = {}) {
     req.on('error', reject);
     req.end();
   });
+}
+
+/**
+ * snap の出来事を通し番号つきで集める。番号が重なるもの（作り直しのあとに送り直されたもの）は中身が同じかを確かめ、
+ * { byIndex, mismatches, gaps } を返す。gaps は、1つの接続の中で evBase が「前の evBase + 前の件数」から飛んだ回数
+ */
+export function collectEvents(clients) {
+  const byIndex = new Map();
+  const mismatches = [];
+  let gaps = 0;
+  for (const c of clients) {
+    let next = null;
+    for (const s of c.of('snap')) {
+      if (next !== null && s.evBase > next) gaps += 1;
+      s.events.forEach((e, i) => {
+        const k = s.evBase + i;
+        const j = JSON.stringify(e);
+        if (byIndex.has(k) && byIndex.get(k) !== j) mismatches.push({ index: k, a: byIndex.get(k), b: j });
+        byIndex.set(k, j);
+      });
+      next = Math.max(next ?? 0, s.evBase + s.events.length);
+    }
+  }
+  return { byIndex, mismatches, gaps };
 }

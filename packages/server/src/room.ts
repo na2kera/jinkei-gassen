@@ -205,7 +205,7 @@ export class Room extends DurableObject<Env> {
    * 部屋を作る（design §4.3）。部屋がないときだけ、世代を乱数で決めて reserved にし、作った人の pid を覚える。
    * 空きの確認と予約を、await を挟まない1回の処理で行う（同時に来た2つの作成が両方通ることはない）。
    */
-  async create(code: string, pid: string, timing: Timing): Promise<boolean> {
+  async create(code: string, pid: string, timing: Timing, testMap: string | null = null): Promise<boolean> {
     if (this.room !== null) return false;
     if (!isPid(pid)) return false;
     const now = Date.now();
@@ -213,6 +213,7 @@ export class Room extends DurableObject<Env> {
     const tx = new Tx(s, now);
     s.seats = [newSeat(pid, ''), null];
     s.deadlines.reserve = now + timing.reserveMs;
+    s.testMap = testMap;
     this.room = s;
     this.battle = null;
     this.settle(tx);
@@ -595,7 +596,7 @@ export class Room extends DurableObject<Env> {
     const s = this.room;
     if (s === null) return;
     s.phase = 'setup';
-    s.map = pickMap();
+    s.map = pickMap(s.testMap);
     s.deadlines.setup = tx.now + s.timing.setupMs;
     delete s.deadlines.reveal;
     delete s.deadlines.away;
@@ -635,7 +636,7 @@ export class Room extends DurableObject<Env> {
     delete s.deadlines.setup;
     s.deadlines.reveal = tx.now + s.timing.revealMs;
     for (const seat of s.seats) if (seat !== null) seat.ready = false;
-    const rec: BattleRecord = { battleNo: s.battleNo, armies, startsAt: s.deadlines.reveal, state: created.value };
+    const rec: BattleRecord = { battleNo: s.battleNo, armies, startsAt: s.deadlines.reveal, state: created.value, evCount: 0 };
     this.battle = rec;
     this.put(BATTLE_KEY, rec);
     tx.sends.push({ all: (side) => this.revealMsg(side, rec, field) });
@@ -661,6 +662,8 @@ export class Room extends DurableObject<Env> {
     if (this.battle !== null && this.battle.battleNo === s.battleNo) return this.battle;
     const rec = this.ctx.storage.kv.get<BattleRecord>(BATTLE_KEY) ?? null;
     if (rec === null || rec.battleNo !== s.battleNo) return null;
+    // 通し番号を持たない古い記録（この変更の前に保存したもの）は 0 から数える
+    if (typeof rec.evCount !== 'number') rec.evCount = 0;
     this.battle = rec;
     return rec;
   }
@@ -726,6 +729,8 @@ export class Room extends DurableObject<Env> {
         this.pendingOrders = [];
         const events = step(st, orders);
         for (const e of events) this.pendingEvents.push(e);
+        // 出来事の通し番号は、state と同じ記録に持つ（保存した刻みと、そこまでの出来事の数が必ずそろう）
+        rec.evCount += events.length;
         // 号令を受け付けた step の直後は書く（作り直されても、使った回数が巻き戻らないように）
         if (events.some((e) => e.type === 'order')) save = true;
         if (st.tick % SAVE_EVERY_TICKS === 0) save = true;
@@ -940,11 +945,16 @@ export class Room extends DurableObject<Env> {
     };
   }
 
+  /**
+   * evBase は events の先頭の通し番号。events は、いままでに出た出来事（rec.evCount 個）の最後の部分なので、
+   * 先頭の番号は「出た数 − 送る数」になる。入り直した人には events を空にして送るので、evBase は出た数そのもの
+   */
   private snapMsg(side: Side, rec: BattleRecord, events: BattleEvent[], field: Field): SnapMessage {
     const view = viewFor(rec.state, side);
     return {
       type: 'snap',
       battleNo: rec.battleNo,
+      evBase: rec.evCount - events.length,
       tick: view.tick,
       maxTicks: view.maxTicks,
       units: packView(side, view, field),

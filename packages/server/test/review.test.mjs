@@ -248,7 +248,7 @@ describe('回数の上限（送信元ごと）', () => {
 
 describe('テスト用のフラグなし（本番と同じ設定）', () => {
   it('テスト用の経路と秒数の差し替えは 404・400 になり、回数の上限は送信元の IP で効く', async () => {
-    const prod = await startServer({ port: 8806, testMode: false });
+    const prod = await startServer({ port: 8816, testMode: false });
     try {
       for (const name of ['alarm', 'abort', 'state']) {
         const r = await fetch(`${prod.base}/api/rooms/1234/test/${name}`, { method: 'POST' });

@@ -6,15 +6,8 @@ import { MAX_UNITS, validateArmy } from './army.ts';
 import { angleBetween, dist, leftOf, normalize, rotateToward, sideSign } from './geom.ts';
 import { applyOrder, endOrder } from './orders.ts';
 import { nextFloat, rngFromSeed } from './rng.ts';
-import {
-  terrainAllowsImpact,
-  terrainArcherRange,
-  terrainArrowClear,
-  terrainAttackMult,
-  terrainSpeedMult,
-  terrainTakenMult,
-  type AttackKind,
-} from './terrain.ts';
+import { hasTerrain, terrainAllowsImpact, terrainArcherRange, terrainArrowClear, terrainDamageMult, terrainSpeedMult, type AttackKind } from './terrain.ts';
+import { collapseBesideGate, pathLength, pushOutOfWalls, readWalls, routeTo, sideOfWall, wallsOfGate, type WallInfo } from './walls.ts';
 import { DT, KIND_STATS, T } from './tuning.ts';
 import { isDenseArray, isInt, isObject, isOrderKind, isOrderTarget, isSide, isTerrain, MAX_FIELD_SIDE, MAX_ORDERS_PER_STEP, MAX_SCRIPTED_ORDERS } from './input.ts';
 import { wingOf } from './army.ts';
@@ -25,6 +18,7 @@ import {
   type BattleSetup,
   type BattleState,
   type BrokenRecord,
+  type GateSetup,
   type Facing,
   type Field,
   type OrderInput,
@@ -33,8 +27,23 @@ import {
   type ScriptedOrder,
   type Side,
   type Unit,
+  type UnitKind,
   type Zone,
 } from './types.ts';
+import type { KindStats } from './tuning.ts';
+
+/** 門の数字（動かない、攻撃しない、向きを変えない） */
+const GATE_STATS: KindStats = { men: T.gateMen, speed: 0, melee: 0, turn: 0 };
+
+/** 兵種の数字。門は GATE_STATS */
+function statsOf(kind: UnitKind): KindStats {
+  return kind === 'gate' ? GATE_STATS : KIND_STATS[kind];
+}
+
+/** 門か（門は、支え・囲み・壊滅・残った兵・号令の対象に数えない） */
+export function isGate(u: Unit): boolean {
+  return u.kind === 'gate';
+}
 
 // ---------------------------------------------------------------- 作成
 
@@ -93,9 +102,38 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
     scripted.push({ tick: o.tick, side: o.side, target: o.target, kind: o.kind });
   }
   const requireHq = setup.requireHq ?? true;
+  // 城壁と門の形（§3.8）：城壁は戦場を横切る1行だけ、その行の1マスだけが切れ目で、そこに門を置く
+  const walls = readWalls(field);
+  if (typeof walls === 'string') return { ok: false, error: { code: 'invalid_field', message: walls } };
+  const z0 = field.zones[0];
+  if (walls && walls.row >= z0.row && walls.row < z0.row + z0.height) return { ok: false, error: { code: 'invalid_field', message: '陣営0の配置エリアに城壁を置けない' } };
+  let gate: GateSetup | null = null;
+  if (setup.gate !== undefined) {
+    const g: unknown = setup.gate;
+    if (!isObject(g) || !isSide(g.side) || !isInt(g.col) || !isInt(g.row) || typeof g.win !== 'boolean') return bad('門の指定が正しくない');
+    if (!walls) return bad('門は城壁の行の切れ目に置く（城壁がない）');
+    if (g.row !== walls.row || g.col !== walls.gapCol) return bad('門は城壁の行の切れ目に置く');
+    gate = { side: g.side, col: g.col, row: g.row, win: g.win };
+  } else if (walls) {
+    return bad('城壁の切れ目には門を置く');
+  }
+  if (setup.skipZoneCheck !== undefined && !isSide(setup.skipZoneCheck)) return bad('skipZoneCheck が正しくない');
   if (!isDenseArray(setup.armies) || setup.armies.length !== 2) return bad('軍は2つ');
+  const whole: Zone = { col: 0, row: 0, width: field.width, height: field.height };
+  const taken = new Map<string, Side>();
+  if (gate) taken.set(`${gate.col},${gate.row}`, gate.side);
   for (const side of [0, 1] as const) {
-    const errors = validateArmy(setup.armies[side] as Placement[], field.zones[side], { maxUnits: MAX_UNITS, requireHq });
+    const zone = setup.skipZoneCheck === side ? whole : field.zones[side];
+    const errors = validateArmy(setup.armies[side] as Placement[], zone, { maxUnits: MAX_UNITS, requireHq });
+    if (errors.length === 0) {
+      // 城壁のマスには置けない。両軍のマス（と門のマス）も重ならない
+      (setup.armies[side] as Placement[]).forEach((pl, index) => {
+        if (field.terrain[pl.row * field.width + pl.col] === 'wall') errors.push({ code: 'on_wall', index, message: `城壁のマスには置けない: (${pl.col}, ${pl.row})` });
+        const key = `${pl.col},${pl.row}`;
+        if (taken.has(key)) errors.push({ code: 'overlap', index, message: `ほかの部隊（門・相手の軍）とマスが重なっている: (${pl.col}, ${pl.row})` });
+        taken.set(key, side);
+      });
+    }
     if (errors.length > 0) {
       return { ok: false, error: { code: 'invalid_army', message: `陣営${side}の配置が正しくない`, side, armyErrors: errors } };
     }
@@ -104,7 +142,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
   const units: Unit[] = [];
   for (const side of [0, 1] as const) {
     for (const p of setup.armies[side]) {
-      const stats = KIND_STATS[p.kind];
+      const stats = statsOf(p.kind);
       const f = frontOf(side);
       const x = p.col + 0.5;
       const y = p.row + 0.5;
@@ -175,6 +213,44 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
   const initialMen: [number, number] = [0, 0];
   for (const u of units) initialMen[u.side] += u.men;
 
+  // 門は、守る側の部隊として戦場に立つ（ほかの部隊の id のあとに置く）。開戦時の兵数・迂回の計算には数えない
+  let gateState: BattleState['gate'] = null;
+  if (gate) {
+    const gx = gate.col + 0.5;
+    const gy = gate.row + 0.5;
+    const f = frontOf(gate.side);
+    gateState = { ...gate, id: units.length };
+    units.push({
+      id: units.length,
+      side: gate.side,
+      kind: 'gate',
+      wing: 'center',
+      x: gx,
+      y: gy,
+      fx: f.x,
+      fy: f.y,
+      men: T.gateMen,
+      maxMen: T.gateMen,
+      morale: T.moraleMax,
+      stance: 'hold',
+      home: { x: gx, y: gy },
+      status: 'active',
+      goneReason: null,
+      target: null,
+      attacking: null,
+      order: null,
+      stats: { dealt: 0, taken: 0, flankDealt: 0, routsCaused: 0 },
+      flankPhase: 1,
+      flankEdgeX: gx,
+      runup: 0,
+      huntMoves: [],
+      huntStuckOn: null,
+      slideSign: 0,
+      lastHitTick: null,
+      routTick: null,
+    });
+  }
+
   const state: BattleState = {
     tick: 0,
     rng: rngFromSeed(setup.seed),
@@ -191,6 +267,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
     scriptedNext: 0,
     brokenLastTick: [],
     flankY,
+    gate: gateState,
   };
   return { ok: true, value: state };
 }
@@ -243,6 +320,16 @@ interface TickCtx {
   state: BattleState;
   snap: Snap[];
   t: number;
+  /** 城壁（ない戦場は null） */
+  walls: WallInfo | null;
+  /** 刻みの初めに立っている門の id（ないか、もう破れていれば null） */
+  gateUp: number | null;
+  /**
+   * 距離のしきい値（近接の距離）の比べ方の遊び。地形のある戦場では 1e-9、平地だけの戦場では 0。
+   * 地形（速さ 0.5 倍など）で動く距離の刻みが変わると、鏡写しの位置どうしで浮動小数の丸めの差（1e-14 ほど）がしきい値をまたぎ、
+   * 対称な戦場でも陣営で判定が分かれる。平地だけの戦場は、地形を入れる前と1刻みも変えない（T10）ため 0 のままにする
+   */
+  eps: number;
 }
 
 function isEnemy(a: Unit, b: Unit): boolean {
@@ -295,13 +382,15 @@ function pickMelee(ctx: TickCtx, u: Unit, meleeEnemies: number[], curInMelee: bo
 /** 弓兵が撃つ相手：撃てる距離にいる active な敵のうち、いちばん近い敵。いなければ、撃っていた敗走中の狙いが届く間は撃ち続ける。 */
 function pickArrow(ctx: TickCtx, u: Unit): number | null {
   const { state } = ctx;
-  const range = terrainArcherRange(state.field, u);
+  const me = ctx.snap[u.id] as Snap;
+  const range = terrainArcherRange(state.field, me);
   let best: number | null = null;
   let bestD = Infinity;
   for (const e of state.units) {
-    if (!isEnemy(u, e) || (ctx.snap[e.id] as Snap).status !== 'active') continue;
+    // 弓兵は門を狙わない
+    if (!isEnemy(u, e) || isGate(e) || (ctx.snap[e.id] as Snap).status !== 'active') continue;
     const d = sd(ctx, u.id, e.id);
-    if (d > range || !terrainArrowClear(state.field, u, e)) continue;
+    if (d > range || !terrainArrowClear(state.field, me, ctx.snap[e.id] as Snap)) continue;
     if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && best !== null && e.id < best)) {
       best = e.id;
       bestD = d;
@@ -310,8 +399,7 @@ function pickArrow(ctx: TickCtx, u: Unit): number | null {
   if (best !== null) return best;
   const cur = (ctx.snap[u.id] as Snap).target;
   if (cur !== null) {
-    const c = state.units[cur] as Unit;
-    if ((ctx.snap[cur] as Snap).status === 'routing' && sd(ctx, u.id, cur) <= range && terrainArrowClear(state.field, u, c)) return cur;
+    if ((ctx.snap[cur] as Snap).status === 'routing' && sd(ctx, u.id, cur) <= range && terrainArrowClear(state.field, me, ctx.snap[cur] as Snap)) return cur;
   }
   return null;
 }
@@ -321,7 +409,7 @@ function nearestEnemy(ctx: TickCtx, u: Unit, filter: (e: Unit) => boolean, maxD 
   let best: number | null = null;
   let bestD = Infinity;
   for (const e of ctx.state.units) {
-    if (!isEnemy(u, e) || (ctx.snap[e.id] as Snap).status !== 'active' || !filter(e)) continue;
+    if (!isEnemy(u, e) || isGate(e) || (ctx.snap[e.id] as Snap).status !== 'active' || !filter(e)) continue;
     const d = sd(ctx, u.id, e.id);
     if (d > maxD) continue;
     if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && best !== null && e.id < best)) {
@@ -369,15 +457,29 @@ function setDir(d: Decision, vx: number, vy: number, limit = Infinity): void {
 
 /** 前進の狙い：距離 + 横のずれ がいちばん小さい敵。いまの狙いは、ほかの敵が 1.0 以上小さくならない限り変えない */
 function pickAdvance(ctx: TickCtx, u: Unit): number | null {
+  const chosen = pickAdvanceOrdinary(ctx, u);
+  // 門が立っている間、城壁の反対側に狙いを持つ前進の部隊は、狙いを門に替える（門を破らないと先へ進めない）
+  if (chosen !== null && ctx.gateUp !== null && ctx.walls && isEnemy(u, ctx.state.units[ctx.gateUp] as Unit)) {
+    const s = ctx.snap[u.id] as Snap;
+    const e = ctx.snap[chosen] as Snap;
+    const a = sideOfWall(ctx.walls, s.y);
+    const b = sideOfWall(ctx.walls, e.y);
+    if (a !== 0 && b !== a) return ctx.gateUp;
+  }
+  return chosen;
+}
+
+function pickAdvanceOrdinary(ctx: TickCtx, u: Unit): number | null {
   const s = ctx.snap[u.id] as Snap;
+  // 距離は、城壁の反対側の敵については、門のマスの中心を通る折れ線の長さ
   const score = (id: number): number => {
     const e = ctx.snap[id] as Snap;
-    return dist(s.x, s.y, e.x, e.y) + Math.abs(e.x - s.x);
+    return pathLength(ctx.walls, s.x, s.y, e.x, e.y) + Math.abs(e.x - s.x);
   };
   let best: number | null = null;
   let bestScore = Infinity;
   for (const e of ctx.state.units) {
-    if (!isEnemy(u, e) || (ctx.snap[e.id] as Snap).status !== 'active') continue;
+    if (!isEnemy(u, e) || isGate(e) || (ctx.snap[e.id] as Snap).status !== 'active') continue;
     const sc = score(e.id);
     if (sc < bestScore - 1e-9 || (Math.abs(sc - bestScore) <= 1e-9 && best !== null && e.id < best)) {
       best = e.id;
@@ -385,7 +487,7 @@ function pickAdvance(ctx: TickCtx, u: Unit): number | null {
     }
   }
   const cur = s.target;
-  if (cur !== null && best !== null && cur !== best) {
+  if (cur !== null && best !== null && cur !== best && !isGate(ctx.state.units[cur] as Unit)) {
     const c = ctx.state.units[cur] as Unit;
     // ほかの敵の値が 1.0 以上小さければ切り替える（ちょうど 1.0 小さいときも切り替える）
     if (isEnemy(u, c) && (ctx.snap[cur] as Snap).status === 'active' && !(bestScore <= score(cur) - T.advanceSwitchMargin + 1e-9)) {
@@ -408,12 +510,20 @@ interface Plan {
   hunt?: boolean;
 }
 
+/** 行き先 (dx, dy) へ向かう向き。城壁をはさむときは通り道（門の手前 → 門 → 行き先）の、いま向かう点へ */
+function steer(ctx: TickCtx, s: Snap, dx: number, dy: number, limit: number): { vx: number; vy: number; limit: number } {
+  const w = routeTo(ctx.walls, s.x, s.y, dx, dy);
+  if (!w.waypoint) return { vx: dx - s.x, vy: dy - s.y, limit };
+  return { vx: w.x - s.x, vy: w.y - s.y, limit: Math.min(limit, Math.hypot(w.x - s.x, w.y - s.y)) };
+}
+
 function planAdvance(ctx: TickCtx, u: Unit): Plan {
   const s = ctx.snap[u.id] as Snap;
   const target = pickAdvance(ctx, u);
   if (target === null) return { target: null, vx: 0, vy: 0, limit: Infinity, passing: false, atHome: false };
   const e = ctx.snap[target] as Snap;
-  return { target, vx: e.x - s.x, vy: e.y - s.y, limit: Infinity, passing: false, atHome: false };
+  const v = steer(ctx, s, e.x, e.y, Infinity);
+  return { target, vx: v.vx, vy: v.vy, limit: v.limit, passing: false, atHome: false };
 }
 
 function planMove(ctx: TickCtx, u: Unit, stance: Unit['stance']): Plan {
@@ -425,16 +535,24 @@ function planMove(ctx: TickCtx, u: Unit, stance: Unit['stance']): Plan {
       const target = nearestEnemy(ctx, u, () => true, T.holdWatchRange);
       const dh = dist(s.x, s.y, u.home.x, u.home.y);
       if (dh > T.homeTolerance) {
-        return { target, vx: u.home.x - s.x, vy: u.home.y - s.y, limit: dh, passing: false, atHome: false };
+        const v = steer(ctx, s, u.home.x, u.home.y, dh);
+        return { target, vx: v.vx, vy: v.vy, limit: v.limit, passing: false, atHome: false };
       }
       return { target, vx: 0, vy: 0, limit: Infinity, passing: false, atHome: true };
     }
     case 'flank': {
-      const fy = ctx.state.flankY[u.side];
+      let fy = ctx.state.flankY[u.side];
+      // 城壁のある戦場では、①②を自分の側だけで行い、③で前進と同じになる
+      if (ctx.walls) {
+        const side = sideOfWall(ctx.walls, s.y);
+        if (side !== 0 && sideOfWall(ctx.walls, fy) !== side) fy = side < 0 ? ctx.walls.row - 0.5 : ctx.walls.row + 1.5;
+        if (u.flankPhase === 3) return planAdvance(ctx, u);
+      }
       if (u.flankPhase === 1 && Math.abs(s.x - u.flankEdgeX) <= T.waypointTolerance) u.flankPhase = 2;
       if (u.flankPhase === 2) {
         const reached = u.side === 0 ? s.y <= fy + T.waypointTolerance : s.y >= fy - T.waypointTolerance;
         if (reached) u.flankPhase = 3;
+        if (reached && ctx.walls) return planAdvance(ctx, u);
       }
       if (u.flankPhase === 1) {
         const dx = u.flankEdgeX - s.x;
@@ -450,14 +568,16 @@ function planMove(ctx: TickCtx, u: Unit, stance: Unit['stance']): Plan {
       if (target === null) target = nearestEnemy(ctx, u, () => true);
       if (target === null) return { target: null, vx: 0, vy: 0, limit: Infinity, passing: false, atHome: false };
       const e = ctx.snap[target] as Snap;
-      return { target, vx: e.x - s.x, vy: e.y - s.y, limit: Infinity, passing: false, atHome: false };
+      const v = steer(ctx, s, e.x, e.y, Infinity);
+      return { target, vx: v.vx, vy: v.vy, limit: v.limit, passing: false, atHome: false };
     }
     case 'hunt': {
       // 敵の本陣へまっすぐ向かう。途中の敵にぶつかったら、④の決まり（手前で止まり、接線に回る）で列に沿って滑る。
       const hq = enemyHq(ctx, u);
       if (hq === null) return planAdvance(ctx, u);
       const h = ctx.snap[hq] as Snap;
-      return { target: hq, vx: h.x - s.x, vy: h.y - s.y, limit: Infinity, passing: false, atHome: false, hunt: true };
+      const v = steer(ctx, s, h.x, h.y, Infinity);
+      return { target: hq, vx: v.vx, vy: v.vy, limit: v.limit, passing: false, atHome: false, hunt: true };
     }
   }
 }
@@ -476,19 +596,28 @@ function decide(ctx: TickCtx, u: Unit): Decision {
     return d;
   }
   if (s.status !== 'active') return d;
+  // 門は動かない、攻撃しない、向きを変えない
+  if (isGate(u)) {
+    d.anchor = true;
+    return d;
+  }
 
+  // 近接の距離にいる敵（門は別に数える：門と戦うのは、門を狙っているとき・詰まったときだけ）
   const meleeEnemies: number[] = [];
   for (const e of state.units) {
-    if (!isEnemy(u, e) || (ctx.snap[e.id] as Snap).status !== 'active') continue;
-    if (sd(ctx, u.id, e.id) <= T.meleeRange) meleeEnemies.push(e.id);
+    if (!isEnemy(u, e) || isGate(e) || (ctx.snap[e.id] as Snap).status !== 'active') continue;
+    if (sd(ctx, u.id, e.id) <= T.meleeRange + ctx.eps) meleeEnemies.push(e.id);
   }
+  // 門は大きな構えなので、門を攻めるときだけ、近接が届く距離を gateReach にする（門の前に3部隊ほどが並んで攻められる）
+  const gateInMelee = ctx.gateUp !== null && isEnemy(u, state.units[ctx.gateUp] as Unit) && sd(ctx, u.id, ctx.gateUp) <= T.gateReach + ctx.eps;
   d.hadMeleeEnemy = meleeEnemies.length > 0;
   const cur = s.target;
   const curInMelee =
     cur !== null &&
     isEnemy(u, state.units[cur] as Unit) &&
+    !isGate(state.units[cur] as Unit) &&
     (ctx.snap[cur] as Snap).status !== 'gone' &&
-    sd(ctx, u.id, cur) <= T.meleeRange;
+    sd(ctx, u.id, cur) <= T.meleeRange + ctx.eps;
   const hasMelee = meleeEnemies.length > 0 || curInMelee;
   const order = u.order?.kind ?? null;
 
@@ -534,8 +663,10 @@ function decide(ctx: TickCtx, u: Unit): Decision {
     };
     if (meleeEnemies.includes(hq)) return fightWith(hq);
     // 詰まって戦っている相手がまだ近接の距離にいれば、戦い続ける。消えたか離れたら、また本陣へ向かう
+    // 門の前で止められたときも、詰まったときの決まりで門と戦う
+    const stuckCandidates = gateInMelee && ctx.gateUp !== null ? [...meleeEnemies, ctx.gateUp] : meleeEnemies;
     if (u.huntStuckOn !== null) {
-      if (meleeEnemies.includes(u.huntStuckOn)) return fightWith(u.huntStuckOn);
+      if (stuckCandidates.includes(u.huntStuckOn)) return fightWith(u.huntStuckOn);
       u.huntStuckOn = null;
       u.huntMoves = [];
     }
@@ -549,9 +680,9 @@ function decide(ctx: TickCtx, u: Unit): Decision {
       my += m[1];
     }
     const moved = Math.hypot(mx, my);
-    if (u.huntMoves.length >= T.huntStuckTicks && moved < T.huntStuckDist && meleeEnemies.length > 0) {
-      let best = meleeEnemies[0] as number;
-      for (const id of meleeEnemies) {
+    if (u.huntMoves.length >= T.huntStuckTicks && moved < T.huntStuckDist && stuckCandidates.length > 0) {
+      let best = stuckCandidates[0] as number;
+      for (const id of stuckCandidates) {
         const dd = sd(ctx, u.id, id);
         const db = sd(ctx, u.id, best);
         if (dd < db - 1e-9 || (Math.abs(dd - db) <= 1e-9 && id < best)) best = id;
@@ -577,6 +708,14 @@ function decide(ctx: TickCtx, u: Unit): Decision {
       d.attack = 'melee';
       return d;
     }
+  }
+
+  // 狙いが門で、門が近接の距離に入ったら、門と戦う（近接の距離にふつうの敵がいるときは、上でその敵と戦っている）
+  if (plan.target !== null && plan.target === ctx.gateUp && gateInMelee && !plan.hunt) {
+    d.anchor = true;
+    d.target = plan.target;
+    d.attack = 'melee';
+    return d;
   }
 
   // 弓兵は、近接で戦わないときは撃つ（迂回の①②は撃たずに進む）
@@ -652,7 +791,14 @@ function resolveMove(ctx: TickCtx, u: Unit, mx: number, my: number, target: numb
   const dot = (t1.x * mx + t1.y * my) / L;
   let tx: number;
   let ty: number;
-  if (keepSlide && u.slideSign !== 0) {
+  // ぶつかった相手が味方で、保った回る側の接線が動きたい向きと反対（後ろ向き）になったら、保つのをやめて決め直す
+  // （詰まった味方どうしで回り合って下がり続けないように。敵の列に沿って滑るときは、つなぎ目で後ろ向きになっても保つ）
+  const keptBackward = keepSlide && u.slideSign !== 0 && (ctx.state.units[hitId] as Unit).side === u.side && (() => {
+    const left = sideSign(mx, my, t1.x, t1.y) >= 0;
+    const sg = left === (u.slideSign > 0) ? 1 : -1;
+    return (t1.x * sg * mx + t1.y * sg * my) / L < -1e-9;
+  })();
+  if (keepSlide && u.slideSign !== 0 && !keptBackward) {
     // 本陣狙い：ぶつかり続けている間は、最初に決めた回る側（動きたい向きの左か右か）を保つ。
     // 敵の列にぶつかると、相手が隣の部隊へ次々に変わる。相手ごとに向きを決め直すと、隣どうしのすき間で
     // 左右に行き来して挟まるため、同じ側へ滑り続けて列の端か穴まで進ませる
@@ -759,7 +905,7 @@ function attackerOrderMult(u: Unit): number {
 
 function meleeDamage(state: BattleState, snap: Snap[], a: Unit, def: Unit): Damage {
   const facing = facingOf(snap, def.id, a.id);
-  let v = KIND_STATS[a.kind].melee * Math.sqrt(Math.max(0, a.men) / a.maxMen) * rand(state) * attackerOrderMult(a);
+  let v = statsOf(a.kind).melee * Math.sqrt(Math.max(0, a.men) / a.maxMen) * rand(state) * attackerOrderMult(a);
   if (def.kind === 'archer') {
     if (a.kind === 'cavalry') v *= T.cavalryVsArcher;
     if (a.kind === 'infantry') v *= T.infantryVsArcher;
@@ -768,8 +914,15 @@ function meleeDamage(state: BattleState, snap: Snap[], a: Unit, def: Unit): Dama
   if (def.kind === 'hq') v *= T.hqTakenMult;
   if (def.kind === 'archer') v *= T.archerMeleeTakenMult;
   v *= orderTakenMult(def);
-  v *= terrainAttackMult(state.field, a, def, 'melee') * terrainTakenMult(state.field, a, def, 'melee');
+  v *= terrainDamageMult(state.field, snap[a.id] as Snap, snap[def.id] as Snap, 'melee');
   return { attacker: a.id, defender: def.id, kind: 'melee', facing, amount: v * DT };
+}
+
+/** 門への損害：攻撃 × √(兵数の割合) × ばらつき × 攻める側の倍率（突撃の号令、丘、川）。向きと受ける側の倍率はかけない */
+function gateDamage(state: BattleState, snap: Snap[], a: Unit, gate: Unit): Damage {
+  let v = statsOf(a.kind).melee * Math.sqrt(Math.max(0, a.men) / a.maxMen) * rand(state) * attackerOrderMult(a);
+  v *= terrainDamageMult(state.field, snap[a.id] as Snap, snap[gate.id] as Snap, 'melee', false);
+  return { attacker: a.id, defender: gate.id, kind: 'melee', facing: 'front', amount: v * DT };
 }
 
 function arrowDamage(state: BattleState, snap: Snap[], a: Unit, def: Unit): Damage {
@@ -778,7 +931,7 @@ function arrowDamage(state: BattleState, snap: Snap[], a: Unit, def: Unit): Dama
   if (def.kind === 'shield' && facing === 'front') v *= T.shieldFrontArrow;
   if (def.kind === 'hq') v *= T.hqTakenMult;
   v *= orderTakenMult(def);
-  v *= terrainAttackMult(state.field, a, def, 'arrow') * terrainTakenMult(state.field, a, def, 'arrow');
+  v *= terrainDamageMult(state.field, snap[a.id] as Snap, snap[def.id] as Snap, 'arrow');
   return { attacker: a.id, defender: def.id, kind: 'arrow', facing, amount: v * DT };
 }
 
@@ -789,7 +942,7 @@ function impactDamage(state: BattleState, snap: Snap[], a: Unit, def: Unit): Dam
   if (def.kind === 'hq') v *= T.hqTakenMult;
   if (def.kind === 'archer') v *= T.archerMeleeTakenMult;
   v *= orderTakenMult(def);
-  v *= terrainAttackMult(state.field, a, def, 'impact') * terrainTakenMult(state.field, a, def, 'impact');
+  v *= terrainDamageMult(state.field, snap[a.id] as Snap, snap[def.id] as Snap, 'impact');
   return { attacker: a.id, defender: def.id, kind: 'impact', facing, amount: v };
 }
 
@@ -798,7 +951,7 @@ function supportMult(ctx: TickCtx, u: Unit): number {
   let allies = 0;
   let hqNear = false;
   for (const o of ctx.state.units) {
-    if (o.id === u.id || o.side !== u.side || (ctx.snap[o.id] as Snap).status !== 'active') continue;
+    if (o.id === u.id || o.side !== u.side || isGate(o) || (ctx.snap[o.id] as Snap).status !== 'active') continue;
     const d = sd(ctx, u.id, o.id);
     if (d <= T.supportRange) allies++;
     if (o.kind === 'hq' && d <= T.hqSupportRange) hqNear = true;
@@ -852,7 +1005,11 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   for (const u of state.units) if (u.order && t >= u.order.untilTick) endOrder(u);
 
   const snap: Snap[] = state.units.map((u) => ({ x: u.x, y: u.y, fx: u.fx, fy: u.fy, status: u.status, target: u.target }));
-  const ctx: TickCtx = { state, snap, t };
+  // 城壁は門のある戦場だけ（createBattle で調べ済み）。門が破れて両隣が崩れたあとも、城壁の行と門の列で通り道を決める
+  const walls = state.gate ? wallsOfGate(state.gate) : null;
+  const gateUp = state.gate && (state.units[state.gate.id] as Unit).status === 'active' ? state.gate.id : null;
+  const eps = hasTerrain(state.field) ? 1e-9 : 0;
+  const ctx: TickCtx = { state, snap, t, walls, gateUp, eps };
 
   // ③ 狙いと動く向きを決める
   const decisions = state.units.map((u) => decide(ctx, u));
@@ -867,7 +1024,7 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   for (const u of state.units) {
     const d = decisions[u.id] as Decision;
     if (u.status === 'gone' || d.anchor || (d.dx === 0 && d.dy === 0)) continue;
-    const speed = KIND_STATS[u.kind].speed * d.speedMult * terrainSpeedMult(state.field, u, d.dx, d.dy);
+    const speed = statsOf(u.kind).speed * d.speedMult * terrainSpeedMult(state.field, u.kind, snap[u.id] as Snap);
     const step = Math.min(speed * DT, d.limit);
     const mx = d.dx * step;
     const my = d.dy * step;
@@ -881,6 +1038,14 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   }
   separate(state, anchors);
   for (const u of state.units) if (u.status === 'active') clampInside(state, u);
+  // 城壁のマスからも押し出す（動き・滑り・重なりをほどく処理のあとで、必ず行う。部隊どうしの間隔より優先する）
+  if (ctx.walls) {
+    for (const u of state.units) {
+      if (u.status !== 'active' || isGate(u)) continue;
+      pushOutOfWalls(ctx.walls, state.field, u, (snap[u.id] as Snap).y);
+      clampInside(state, u);
+    }
+  }
   for (const u of state.units) {
     const d = decisions[u.id] as Decision;
     const s = snap[u.id] as Snap;
@@ -900,7 +1065,7 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
 
   // ⑤ 向きを変える
   for (const u of state.units) {
-    if (u.status === 'gone') continue;
+    if (u.status === 'gone' || isGate(u)) continue;
     const d = decisions[u.id] as Decision;
     const s = snap[u.id] as Snap;
     let gx = 0;
@@ -920,7 +1085,7 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
       gx = f.x;
       gy = f.y;
     }
-    const r = rotateToward(u.fx, u.fy, gx, gy, KIND_STATS[u.kind].turn * DT);
+    const r = rotateToward(u.fx, u.fy, gx, gy, statsOf(u.kind).turn * DT);
     u.fx = r.x;
     u.fy = r.y;
   }
@@ -937,8 +1102,12 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
     const def = state.units[d.target] as Unit;
     if ((snap[def.id] as Snap).status === 'gone') continue;
     a.attacking = def.id;
-    if (d.attack === 'melee') {
-      if (a.kind === 'cavalry' && a.runup >= T.impactRunup && terrainAllowsImpact(state.field, a, def)) {
+    if (d.attack === 'melee' && isGate(def)) {
+      // 門：近接だけで、突入は受けない。突入が起きなくても助走は 0 に戻る
+      if (a.kind === 'cavalry') a.runup = 0;
+      damages.push(gateDamage(state, snap, a, def));
+    } else if (d.attack === 'melee') {
+      if (a.kind === 'cavalry' && a.runup >= T.impactRunup && terrainAllowsImpact(state.field, snap[a.id] as Snap, snap[def.id] as Snap)) {
         const imp = impactDamage(state, snap, a, def);
         damages.push(imp);
         const bounce = def.kind === 'shield' && imp.facing === 'front';
@@ -997,7 +1166,7 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
     if ((snap[a.id] as Snap).status === 'active' && d.attack === 'melee' && d.target !== null) meleeAttackers[d.target]?.push(a.id);
   }
   for (const u of state.units) {
-    if ((snap[u.id] as Snap).status !== 'active') continue;
+    if ((snap[u.id] as Snap).status !== 'active' || isGate(u)) continue;
     let delta = 0;
     // 囲まれている：近接で攻めてくる敵が2部隊以上いて、そのうち2部隊の方向が 100°以上開いている
     const atk = meleeAttackers[u.id] as number[];
@@ -1030,7 +1199,7 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
     let enemyNear = false;
     let hqNear = false;
     for (const o of state.units) {
-      if (o.id === u.id || (snap[o.id] as Snap).status !== 'active') continue;
+      if (o.id === u.id || isGate(o) || (snap[o.id] as Snap).status !== 'active') continue;
       const d = sd(ctx, u.id, o.id);
       if (o.side !== u.side && d <= T.recoverEnemyRange) enemyNear = true;
       if (o.side === u.side && o.kind === 'hq' && d <= T.hqSupportRange) hqNear = true;
@@ -1051,7 +1220,8 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
       u.lastHitTick = t;
     }
     const wasActive = u.status === 'active';
-    if (wasActive) u.morale = Math.min(T.moraleMax, Math.max(0, u.morale + (moraleDelta[u.id] as number)));
+    // 門の士気は 100 のまま変わらず、敗走しない
+    if (wasActive && !isGate(u)) u.morale = Math.min(T.moraleMax, Math.max(0, u.morale + (moraleDelta[u.id] as number)));
     const holders = (): number[] => state.units.filter((o) => isEnemy(o, u) && (snap[o.id] as Snap).target === u.id).map((o) => o.id);
     if (u.men <= 1e-9) {
       u.men = 0;
@@ -1059,7 +1229,10 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
       u.goneReason = 'destroyed';
       u.order = null;
       pushEvent(events, { type: 'destroyed', tick: t, unit: u.id });
-      if (wasActive) newBroken.push({ unit: u.id, side: u.side, x: u.x, y: u.y, reason: 'destroyed', holders: holders() });
+      // 門が破れたら、両隣の城壁も崩れる（刻み t+1 から3マスの幅で通れる）
+      if (isGate(u) && state.gate) collapseBesideGate(state.field, state.gate);
+      // 門が全滅しても、まわりの士気は動かない。最初に消えた部隊・敗走させた数にも数えない
+      if (wasActive && !isGate(u)) newBroken.push({ unit: u.id, side: u.side, x: u.x, y: u.y, reason: 'destroyed', holders: holders() });
     } else if (wasActive && u.morale <= 0) {
       u.morale = 0;
       u.status = 'routing';
@@ -1083,22 +1256,26 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   state.brokenLastTick = newBroken;
 
   // ⑧ 決着を調べる
-  const lost: [{ hq: boolean; wipe: boolean }, { hq: boolean; wipe: boolean }] = [
-    { hq: false, wipe: false },
-    { hq: false, wipe: false },
+  const lost: [{ hq: boolean; wipe: boolean; gate: boolean }, { hq: boolean; wipe: boolean; gate: boolean }] = [
+    { hq: false, wipe: false, gate: false },
+    { hq: false, wipe: false, gate: false },
   ];
   for (const side of [0, 1] as const) {
-    const mine = state.units.filter((u) => u.side === side);
+    const mine = state.units.filter((u) => u.side === side && !isGate(u));
     const hq = mine.find((u) => u.kind === 'hq');
     lost[side].hq = hq !== undefined && hq.status !== 'active';
     const others = mine.filter((u) => u.kind !== 'hq');
     lost[side].wipe = others.length > 0 && others.every((u) => u.status !== 'active');
   }
-  const l0 = lost[0].hq || lost[0].wipe;
-  const l1 = lost[1].hq || lost[1].wipe;
+  // 門を破る決着：win が true の門が全滅した刻みに、門の側は負けの条件を満たす
+  if (state.gate && state.gate.win && (state.units[state.gate.id] as Unit).status !== 'active') lost[state.gate.side].gate = true;
+  const l0 = lost[0].hq || lost[0].wipe || lost[0].gate;
+  const l1 = lost[1].hq || lost[1].wipe || lost[1].gate;
   if (l0 || l1) {
     const winner: Side | 'draw' = l0 && l1 ? 'draw' : l0 ? 1 : 0;
-    const reason = (l0 && lost[0].hq) || (l1 && lost[1].hq) ? 'hq' : 'wipeout';
+    // 理由の優先は gate、hq、wipeout の順
+    const why = (k: 'gate' | 'hq'): boolean => (l0 && lost[0][k]) || (l1 && lost[1][k]);
+    const reason = why('gate') ? 'gate' : why('hq') ? 'hq' : 'wipeout';
     state.outcome = { winner, reason, tick: t };
     pushEvent(events, { type: 'end', tick: t, winner, reason });
   }
@@ -1118,7 +1295,7 @@ export function remainingRatio(state: BattleState, side: Side): number {
   const init = state.initialMen[side];
   if (init <= 0) return 0;
   let sum = 0;
-  for (const u of state.units) if (u.side === side && u.status === 'active') sum += u.men;
+  for (const u of state.units) if (u.side === side && u.status === 'active' && !isGate(u)) sum += u.men;
   return sum / init;
 }
 

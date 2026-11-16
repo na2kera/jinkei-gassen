@@ -70,3 +70,22 @@ describe('A15 隠す情報が漏れない', () => {
     expect(sawBoth).toBe(true);
   });
 });
+
+describe('振り返りの翼', () => {
+  it('BattleSummary.units の各部隊に、その陣営から見た翼（UnitView.wing と同じ）がある。門は振り返りに出さない', () => {
+    const r = createBattle(matchupSetup('line', 'crane', 2));
+    if (!r.ok) throw new Error();
+    const s = r.value;
+    while (!s.outcome) step(s, []);
+    const sum = summarize(s);
+    const view = viewFor(s, 'both');
+    expect(sum.units.length).toBe(view.units.length);
+    for (const u of sum.units) {
+      expect(['left', 'center', 'right']).toContain(u.wing);
+      expect(u.wing).toBe(view.units.find((v) => v.id === u.id)!.wing);
+    }
+    // 陣営1は向きが逆なので、列の大きいほうが左翼
+    const left1 = sum.units.filter((u) => u.side === 1 && u.wing === 'left').map((u) => s.units[u.id]!.home.x);
+    expect(left1.every((x) => x > 8)).toBe(true);
+  });
+});

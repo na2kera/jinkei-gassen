@@ -122,6 +122,32 @@ export const T = {
   recoverQuietTicks: 20,
   recoverPerSec: 1.5,
   hqNearPerSec: 1,
+
+  // 地形（design §3.8。ここから下は地形の数字で、条件を通すために変えてよい）
+  /** 速さの倍率（いるマスの地形） */
+  hillSpeedMult: 0.85,
+  forestSpeedMult: 0.8,
+  forestCavalrySpeedMult: 0.5,
+  riverSpeedMult: 0.5,
+  fenceSpeedMult: 0.4,
+  /** 丘の上の弓兵の、届く距離の伸び */
+  hillArcherRangeBonus: 1.5,
+  /** 損害の倍率 */
+  hillAttackMult: 1.2,
+  hillDefendMult: 0.85,
+  riverAttackMult: 0.7,
+  riverTakenMult: 1.3,
+  forestArrowTakenMult: 0.5,
+  fenceMeleeMult: 0.55,
+  fenceArrowMult: 0.5,
+  /** 門の耐久 */
+  gateMen: 150,
+  /** 門を攻めるときだけの、近接が届く距離（門は大きな構えなので、横に並んだ部隊も打てる） */
+  gateReach: 1.6,
+  /** 部隊の中心を、城壁のマスからこれより内側に入れない */
+  wallMargin: 0.45,
+  /** 通り道の①（門の手前）を済んだとみなす、門のマスの中心からの x の差 */
+  gateApproachTolerance: 0.3,
 } as const;
 
 /** 対戦の値段の初期値（assumptions S1）。予算の検査と armyCost の既定に使う */

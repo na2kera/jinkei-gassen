@@ -6,7 +6,8 @@ import { isObject } from './input.ts';
 
 /** その部隊が号令の対象になるか（翼と、突撃は本陣にかからないこと） */
 export function orderApplies(u: Unit, side: Side, target: OrderTarget, kind: OrderKind): boolean {
-  if (u.side !== side || u.status !== 'active') return false;
+  // 門には号令がかからない
+  if (u.side !== side || u.status !== 'active' || u.kind === 'gate') return false;
   if (target !== 'all' && u.wing !== target) return false;
   if (kind === 'charge' && u.kind === 'hq') return false;
   return true;

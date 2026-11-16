@@ -99,7 +99,7 @@ export type RoomMessage = {
   deadlines: { setup: number | null; reveal: number | null };
   /** 送った時点の server の時刻。client は自分の時計との差を補正に使う */
   serverTime: number;
-  /** 戦場の id（段階3は 'plain' だけ） */
+  /** 戦場の id（'plain' | 'hill' | 'river' | 'forest'。setup に入るたびにランダムに選ぶ） */
   map: string;
   /** 戦場（自分が下の座標）。zones は陣営の順で、zones[you] がいつも下側 */
   field: Field;
@@ -159,6 +159,13 @@ export type SnapMessage = {
   tick: number;
   maxTicks: number;
   units: PackedUnit[];
+  /**
+   * events の先頭の出来事の通し番号（その戦いの最初から 0, 1, 2, …）。events[i] の番号は evBase + i。
+   * client は、すでに受け取った番号より小さい出来事を捨てる（server が作り直されたあとに同じ出来事がもう一度届いても、
+   * 同じ番号が付いている。同じ刻みに同じ号令が2つ受け付けられても、番号は別になる）。
+   * 入り直したときに最初に届く snap は events が空で、evBase は「いままでに出た出来事の数」（過去の出来事は演出しない）
+   */
+  evBase: number;
   /**
    * 前の snap のあとに起きた出来事（engine の BattleEvent。陣営の番号はそのまま）。
    * server が作り直されたあとは、保存した刻みから続けるので、tick が少し戻り、同じ出来事がもう一度届くことがある。

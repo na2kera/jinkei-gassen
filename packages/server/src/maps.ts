@@ -1,23 +1,21 @@
-// 対戦用の戦場（decisions §9-2）。段階3は平原だけ。
-// 段階4で戦場を足すときは、MAPS に id と作り方を足し、pickMap の候補に入れる。部屋は id だけを保存する。
+// 対戦用の戦場（decisions §9-2）。engine の PVP_MAPS から、setup に入るたびにランダムに1つ選ぶ。
+// 部屋は id だけを保存し、戦場は id から作り直す（engine の pvpField）。
 
-import { plainField, type Field } from '@jinkei/engine';
+import { PVP_MAPS, pvpField, type Field, type PvpMapId } from '@jinkei/engine';
 
-export const MAPS: Readonly<Record<string, () => Field>> = Object.freeze({
-  plain: () => plainField(),
-});
+export function isMapId(v: unknown): v is PvpMapId {
+  return typeof v === 'string' && PVP_MAPS.some((m) => m.id === v);
+}
 
-/** 対戦で選べる戦場の id。毎回ここからランダムに1つ選ぶ */
-const PVP_MAP_IDS: readonly string[] = ['plain'];
-
-export function pickMap(): string {
+/** 戦場を選ぶ。fixed（テストで決めた戦場）があればそれ、なければ PVP_MAPS から crypto.getRandomValues で選ぶ */
+export function pickMap(fixed: string | null = null): PvpMapId {
+  if (isMapId(fixed)) return fixed;
   const a = new Uint32Array(1);
   crypto.getRandomValues(a);
-  return PVP_MAP_IDS[(a[0] ?? 0) % PVP_MAP_IDS.length] ?? 'plain';
+  return PVP_MAPS[(a[0] ?? 0) % PVP_MAPS.length]?.id ?? 'plain';
 }
 
 /** id から戦場を作る。知らない id（保存した部屋が古い場合など）は平原にする */
 export function fieldOf(map: string): Field {
-  const make = Object.hasOwn(MAPS, map) ? MAPS[map] : undefined;
-  return (make ?? MAPS['plain'] ?? plainField)();
+  return pvpField(isMapId(map) ? map : 'plain');
 }

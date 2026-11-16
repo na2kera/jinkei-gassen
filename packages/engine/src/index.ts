@@ -30,3 +30,7 @@ export { recognizeFormation, formationScores, FORMATION_MIN_SCORE, FORMATION_MIN
 export { STAR_THRESHOLDS, stageSetup, stageSetupWith, validateStageArmy, starsFor, stageEnemyVisible, stageLineArmy, stanceAllowedInStage, STAGE_MAX_TICKS } from './stage.ts';
 export type { Stage, StageAllow, StageEnemyOrder, StageEnemyView } from './stage.ts';
 export { STAGES } from './stages.ts';
+export { PVP_MAPS, pvpField } from './maps.ts';
+export type { PvpMapId } from './maps.ts';
+export { isGate } from './battle.ts';
+export { terrainAt } from './terrain.ts';

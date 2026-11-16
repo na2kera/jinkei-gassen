@@ -6,6 +6,7 @@
 
 import { DT, STAGES, stageLineArmy, starsFor, summarize } from '../src/index.ts';
 import { runStage, templateWins } from './stagelib.ts';
+import { castleSetup } from './terrain-scenes.ts';
 import type { TemplateId } from '../src/index.ts';
 import { a1, a2, a3, a4, a5, a8, a11, a13, a14 } from './scenes.ts';
 import { formatMatrix, matchupSetup, matrixStats, renderBoard, runMatrix, runSetup, TEMPLATE_IDS, unitLine } from './lib.ts';
@@ -16,6 +17,7 @@ function usage(): void {
   console.log('  sim matrix');
   console.log('  sim stage <面の id> [solution|line] [種] [何秒おき]');
   console.log('  sim stage-templates [面の id ...]   7つのひな形をそのまま置いたときの勝ち数');
+  console.log('  sim castle [advance|flank|hunt] [種] [何秒おき]   城壁と門の戦場（T5）');
   console.log('  sim accept [a1 a2 a3 a4 a5 a8 a11 a13 a14]   合格条件の実測値');
   console.log(`ひな形: ${TEMPLATE_IDS.join(', ')}`);
 }
@@ -112,6 +114,26 @@ if (cmd === 'battle') battle(rest);
 else if (cmd === 'matrix') matrix();
 else if (cmd === 'accept') accept(rest);
 else if (cmd === 'stage') stage(rest);
+else if (cmd === 'castle') {
+  // T5 の戦場（城壁と門）を、攻める側の方針を変えて流す：sim castle [advance|flank|hunt] [種] [何秒おき]
+  const stance = (rest[0] ?? 'advance') as 'advance' | 'flank' | 'hunt';
+  const seed = rest[1] ? Number(rest[1]) : 1;
+  const every = Math.max(1, Math.round((rest[2] ? Number(rest[2]) : 3) / DT));
+  console.log(`城壁と門（攻める側は ${stance}）  種 ${seed}`);
+  const { state } = runSetup(castleSetup(stance, seed), {
+    onTick: (st, ev) => {
+      for (const e of ev) if (e.type === 'destroyed' && st.gate && e.unit === st.gate.id) console.log(`  [${(e.tick * DT).toFixed(1)}s] 門が破れた`);
+      if (st.tick % every === 0 || st.outcome) {
+        console.log(`--- ${(st.tick * DT).toFixed(1)} 秒`);
+        console.log(renderBoard(st));
+        console.log(`  0: ${unitLine(st, 0)}`);
+        console.log(`  1: ${unitLine(st, 1)}`);
+      }
+    },
+  });
+  const sum = summarize(state);
+  console.log(`結果: 勝者 ${sum.winner} 理由 ${sum.reason} ${sum.seconds}秒`);
+}
 else if (cmd === 'stage-templates') {
   for (const st of STAGES.filter((x) => rest.length === 0 || rest.includes(x.id))) {
     const rows = templateWins(st);
