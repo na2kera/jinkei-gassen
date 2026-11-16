@@ -5,7 +5,7 @@
 // Node 22 の --experimental-strip-types で TS を直接動かす（新しいパッケージを足さないため）。
 
 import { DT, STAGES, stageLineArmy, starsFor, summarize } from '../src/index.ts';
-import { runStage } from './stagelib.ts';
+import { runStage, templateWins } from './stagelib.ts';
 import type { TemplateId } from '../src/index.ts';
 import { a1, a2, a3, a4, a5, a8, a11, a13, a14 } from './scenes.ts';
 import { formatMatrix, matchupSetup, matrixStats, renderBoard, runMatrix, runSetup, TEMPLATE_IDS, unitLine } from './lib.ts';
@@ -15,6 +15,7 @@ function usage(): void {
   console.log('  sim battle <ひな形A> <ひな形B> [種=1] [何秒おき=3]');
   console.log('  sim matrix');
   console.log('  sim stage <面の id> [solution|line] [種] [何秒おき]');
+  console.log('  sim stage-templates [面の id ...]   7つのひな形をそのまま置いたときの勝ち数');
   console.log('  sim accept [a1 a2 a3 a4 a5 a8 a11 a13 a14]   合格条件の実測値');
   console.log(`ひな形: ${TEMPLATE_IDS.join(', ')}`);
 }
@@ -111,4 +112,10 @@ if (cmd === 'battle') battle(rest);
 else if (cmd === 'matrix') matrix();
 else if (cmd === 'accept') accept(rest);
 else if (cmd === 'stage') stage(rest);
+else if (cmd === 'stage-templates') {
+  for (const st of STAGES.filter((x) => rest.length === 0 || rest.includes(x.id))) {
+    const rows = templateWins(st);
+    console.log(`${st.id} ${st.name}: ${rows.map((r) => `${r.id} ${r.wins}`).join('  ')}（10個より多く勝つひな形 ${rows.filter((r) => r.wins > 10).length}）`);
+  }
+}
 else usage();

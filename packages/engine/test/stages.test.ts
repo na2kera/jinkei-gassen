@@ -10,10 +10,12 @@ import {
   validateArmy,
   validateStageArmy,
   MAX_UNITS,
+  summarize,
   type BattleSummary,
+  type Placement,
   type Stage,
 } from '../src/index.ts';
-import { lineStats, solutionStats } from '../sim/stagelib.ts';
+import { lineStats, runStage, solutionStats, STAGE_SEEDS, templateWins } from '../sim/stagelib.ts';
 
 describe('第1章の5面', () => {
   it('id は 1-1〜1-5、手持ちは 8〜15 部隊で、面が進むにつれて増える', () => {
@@ -58,6 +60,15 @@ describe('第1章の5面', () => {
   }
 });
 
+describe('ひな形を選ぶだけでは勝ちきれない（1-4・1-5）', () => {
+  for (const id of ['1-4', '1-5']) {
+    it(`${id}：7つのひな形をそのまま置いたとき、種20個のうち10個より多く勝つひな形は2つ以下`, () => {
+      const rows = templateWins(STAGES.find((s) => s.id === id)!);
+      expect(rows.filter((r) => r.wins > 10).map((r) => r.id).length, JSON.stringify(rows)).toBeLessThanOrEqual(2);
+    }, 300_000);
+  }
+});
+
 describe('stageSetup', () => {
   it('defeat は時間切れで負け、survive は時間切れで勝ち。敵の号令は陣営1の予定された号令', () => {
     const s = STAGES.find((x) => x.id === '1-5')!;
@@ -66,7 +77,10 @@ describe('stageSetup', () => {
     expect(setup.armies).toEqual([s.solution, s.enemy]);
     expect(setup.seed).toBe(7);
     expect(setup.maxTicks).toBe(1800);
-    expect(setup.scriptedOrders).toEqual([{ tick: 100, side: 1, target: 'all', kind: 'charge' }]);
+    expect(setup.scriptedOrders).toEqual([
+      { tick: 100, side: 1, target: 'all', kind: 'charge' },
+      { tick: 300, side: 1, target: 'all', kind: 'charge' },
+    ]);
     const surv: Stage = { ...s, win: { type: 'survive' } };
     expect(stageSetup(surv, s.solution, 1).timeout).toBe('side0_wins');
   });
@@ -123,4 +137,43 @@ describe('stageEnemyVisible', () => {
     expect(v.length).toBe(s.enemy.length - 1);
     expect(v.some((e) => e.col === s.enemy[1]!.col && e.row === s.enemy[1]!.row)).toBe(false);
   });
+});
+
+describe('星3つは取れる（1-5）', () => {
+  // 見本を出発点に、部隊の位置・方針・号令を少しずつ変えて探した配置（Stage には入れない）。
+  // 楔の先の歩兵を迂回にして中央の外側へ、盾兵を前へ出し、騎兵は左の端と後ろから回す。
+  // 号令：5秒に全軍堅守（敵の突撃を待ち構える）、21秒に右翼突撃、36秒に全軍突撃
+  it('1-5：この配置と号令で、種20個のうち10個以上で星3つ', () => {
+    const s = STAGES.find((x) => x.id === '1-5')!;
+    const p = (kind: Placement['kind'], col: number, row: number, stance: Placement['stance']): Placement => ({ kind, col, row, stance });
+    const ps: Placement[] = [
+      p('hq', 4, 13, 'hold'),
+      p('infantry', 3, 11, 'hold'),
+      p('infantry', 6, 10, 'flank'),
+      p('infantry', 2, 11, 'advance'),
+      p('infantry', 8, 12, 'advance'),
+      p('infantry', 2, 14, 'advance'),
+      p('shield', 2, 10, 'advance'),
+      p('shield', 8, 11, 'advance'),
+      p('shield', 6, 11, 'advance'),
+      p('archer', 6, 13, 'advance'),
+      p('archer', 5, 12, 'hold'),
+      p('archer', 7, 13, 'advance'),
+      p('cavalry', 0, 12, 'flank'),
+      p('cavalry', 0, 13, 'flank'),
+      p('cavalry', 7, 15, 'flank'),
+    ];
+    expect(validateStageArmy(s, ps)).toEqual([]);
+    const orders = [
+      { atSec: 5, target: 'all' as const, kind: 'brace' as const },
+      { atSec: 21, target: 'right' as const, kind: 'charge' as const },
+      { atSec: 36, target: 'all' as const, kind: 'charge' as const },
+    ];
+    let three = 0;
+    for (const seed of STAGE_SEEDS) {
+      const sm = summarize(runStage(s, ps, seed, undefined, orders));
+      if (starsFor(sm, 0) === 3) three++;
+    }
+    expect(three).toBeGreaterThanOrEqual(10);
+  }, 120_000);
 });

@@ -1,4 +1,5 @@
 // 面の実測（テストと sim stage で共有する）
+import { applyTemplate, defaultStance, listTemplates, stanceAllowedInStage, type TemplateId } from '../src/index.ts';
 import { createBattle, stageLineArmy, stageSetupWith, starsFor, step, summarize, type BattleState, type Placement, type Stage, type StageEnemyOrder } from '../src/index.ts';
 
 /** 面の種（20個。固定の一覧） */
@@ -44,4 +45,19 @@ export function solutionStats(stage: Stage, seeds = STAGE_SEEDS): StageStats {
 
 export function lineStats(stage: Stage, seeds = STAGE_SEEDS): StageStats {
   return stageStats(stage, stageLineArmy(stage), seeds);
+}
+
+/** ひな形をそのまま置いた配置（方針を出さない面では、初期設定の方針に直す） */
+export function stageTemplateArmy(stage: Stage, id: TemplateId): Placement[] {
+  return applyTemplate(id, stage.roster, stage.field.zones[0], 0).map((p) =>
+    stanceAllowedInStage(stage, p.kind, p.stance) ? p : { ...p, stance: defaultStance(p.kind) },
+  );
+}
+
+/** 7つのひな形それぞれの勝ち数（号令なし） */
+export function templateWins(stage: Stage, seeds = STAGE_SEEDS): { id: TemplateId; wins: number; starsMean: number }[] {
+  return listTemplates().map(({ id }) => {
+    const r = stageStats(stage, stageTemplateArmy(stage, id), seeds);
+    return { id, wins: r.wins, starsMean: r.starsMean };
+  });
 }

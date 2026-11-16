@@ -84,19 +84,22 @@ export const STAGES: Stage[] = [
     hint: '鶴の真ん中は薄い。突撃はどう受ける？',
     field: plainField(),
     roster: { hq: 1, infantry: 5, shield: 3, cavalry: 3, archer: 3 },
-    // 敵は鶴翼（13部隊）。10秒で全軍突撃してくる
-    enemy: applyTemplate('crane', { hq: 1, infantry: 5, shield: 3, cavalry: 2, archer: 2 }, plainField().zones[1], 1),
-    enemyOrders: [{ atSec: 10, target: 'all', kind: 'charge' }],
+    // 敵は鶴翼（14部隊）。10秒と30秒に全軍突撃してくる
+    enemy: applyTemplate('crane', { hq: 1, infantry: 5, shield: 3, cavalry: 3, archer: 2 }, plainField().zones[1], 1),
+    enemyOrders: [
+      { atSec: 10, target: 'all', kind: 'charge' },
+      { atSec: 30, target: 'all', kind: 'charge' },
+    ],
     win: { type: 'defeat' },
-    // 歩兵を楔にして鶴翼の薄い中央へ向け、盾兵で楔の両脇を固め、弓兵はその後ろで守備。騎兵は両端から回り込む。
-    // 敵の突撃（10秒）に合わせて全軍に堅守をかけ、突撃を受け止めてから押し返す
+    // 歩兵を楔にして鶴翼の薄い中央へ向け、盾兵で楔の両脇を固め、弓兵はその後ろで守備。騎兵3つは左の端からまとめて回り込む。
+    // 敵の最初の突撃（10秒）に合わせて全軍に堅守をかけ、受け止めてから押し返す
     solution: [
       hq(5, 14),
       ...at('infantry', 'advance', [5, 6], 10),
       ...at('infantry', 'advance', [4, 7, 5], 11),
       ...at('shield', 'advance', [3, 8, 6], 11),
       ...at('archer', 'hold', [4, 5, 6], 12),
-      ...at('cavalry', 'flank', [0, 11, 10], 11),
+      ...at('cavalry', 'flank', [0, 1, 2], 12),
     ],
     solutionOrders: [{ atSec: 10, target: 'all', kind: 'brace' }],
   },
