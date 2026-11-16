@@ -7,7 +7,7 @@ import type { Side } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { COLOR } from '../art/palette.ts';
 import { debug } from '../debug.ts';
-import { getLayout, LAYOUT_EVENT, resultLayout } from '../layout.ts';
+import { getLayout, LAYOUT_EVENT, resultLayout, type Rect } from '../layout.ts';
 import { client, pvp } from '../net/pvp.ts';
 import { Button } from '../ui/Button.ts';
 import { drawBox } from '../ui/panel.ts';
@@ -43,7 +43,8 @@ export class PvpResultScene extends Phaser.Scene {
     const r = resultLayout(layout);
     // 枠と「部屋を出る」は、結果が届く前から出す（届かなくても出られるように）
     drawBox(this.add.graphics(), r.box);
-    const [b1, , b3] = r.buttons;
+    const b1 = rematchRect(r.buttons);
+    const b3 = r.buttons[2];
     if (b3) new Button(this, b3, '部屋を出る', () => pvp.leave());
     // 相手が「もう一戦」を押したかは、ボタンの列の下に小さく出す
     this.otherText = addText(this, Math.round(r.centerX), b1 ? b1.y + b1.h + 8 : r.box.y + r.box.h + 2, '', 16, COLOR.muted).setOrigin(0.5, 0);
@@ -87,7 +88,7 @@ export class PvpResultScene extends Phaser.Scene {
     center(r.review + 68, '一番崩した', 16, COLOR.muted);
     center(r.review + 88, unitName(best ? best.id : null, units, you));
     center(r.review + 116, `残った兵 自軍${percent(s.remaining[you])} 敵軍${percent(s.remaining[enemy])}`);
-    const [b1] = r.buttons;
+    const b1 = rematchRect(r.buttons);
     if (b1) this.rematchButton = new Button(this, b1, 'もう一戦', () => this.rematch(), { primary: true });
   }
 
@@ -107,4 +108,15 @@ export class PvpResultScene extends Phaser.Scene {
     this.rematchButton?.setText(mine ? '待っています' : 'もう一戦').setSelected(mine);
     this.otherText.setText(theirs ? '相手 もう一戦' : '');
   }
+}
+
+/**
+ * 「もう一戦」のボタンは、1人用の結果の画面の1つ目と2つ目の枠をつなげた幅にする。
+ * 押したあとの「待っています」（6文字）が、縦長の画面の1枠ぶんの幅には収まらないため
+ */
+function rematchRect(buttons: Rect[]): Rect | undefined {
+  const [a, b] = buttons;
+  if (!a) return undefined;
+  if (!b) return a;
+  return { x: a.x, y: a.y, w: b.x + b.w - a.x, h: a.h };
 }

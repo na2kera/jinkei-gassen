@@ -10,6 +10,7 @@ import { getLayout, LAYOUT_EVENT, stageSelectLayout } from '../layout.ts';
 import { starsOf } from '../save.ts';
 import { chapters, isUnlocked, orderedStages, session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
+import { checkFit } from '../ui/overflow.ts';
 import { addText } from '../ui/text.ts';
 
 /** 章の見出し */
@@ -63,11 +64,14 @@ export class StageSelectScene extends Phaser.Scene {
         session.stageId = stage.id;
         this.scene.start('Deploy', { stageId: stage.id });
       }).setEnabled(open);
-      addText(this, r.x + 14, r.y + r.h / 2, `${stage.id} ${stage.name}`, 16, open ? COLOR.cream : COLOR.dim)
+      const name = addText(this, r.x + 14, r.y + r.h / 2, `${stage.id} ${stage.name}`, 16, open ? COLOR.cream : COLOR.dim)
         .setOrigin(0, 0.5)
         .setDepth(1);
       const stars = starsOf(stage.id);
       const size = STAR_SIZE * 2;
+      // 名前が星に重ならないか（開発時だけ記録）：名前の左から、いちばん左の星の手前 6px までを使える幅とする
+      const starsLeft = r.x + r.w - 14 - 3 * (size + 4) + 4;
+      checkFit(this.scene.key, name.text, name.width, name.height, starsLeft - 6 - (r.x + 14) + 8, r.h);
       for (let s = 0; s < 3; s++) {
         drawStar(g, r.x + r.w - 14 - (3 - s) * (size + 4) + 4, Math.round(r.y + (r.h - size) / 2), s < stars);
       }

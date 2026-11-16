@@ -26,6 +26,7 @@ import { LocalBattleSource } from './battle/LocalBattleSource.ts';
 import { unitReach } from './art/UnitSprite.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
 import { runEventDedup } from './net/eventDedup.ts';
+import { overflows, type Overflow } from './ui/overflow.ts';
 import { client, pvp, pvpLocal } from './net/pvp.ts';
 import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
@@ -266,6 +267,13 @@ export function installDebug(game: Phaser.Game): void {
     resumeLoop(): void {
       game.loop.wake();
     },
+    /** 文字が枠からはみ出したボタンの記録（開発時だけ）。clear で消す */
+    get overflows(): Overflow[] {
+      return overflows.map((o) => ({ ...o }));
+    },
+    clearOverflows(): void {
+      overflows.length = 0;
+    },
     /** 出来事の重複の見分け方を、snap の並び（tick と出来事）で試す。渡された出来事の列を返す */
     dedupEvents(snaps: { tick: number; events: BattleEvent[] }[]): BattleEvent[] {
       return runEventDedup(snaps);
@@ -326,6 +334,13 @@ export function installDebug(game: Phaser.Game): void {
       clearSave();
     },
     /** 面を指定して配置の画面を開く */
+    /** 任意の画面を開く（すべての画面の見た目を順に確かめるため） */
+    goScene(key: string, data?: object): boolean {
+      const cur = game.scene.getScenes(true).find((s) => s.scene.key !== 'NetOverlay');
+      if (!cur) return false;
+      cur.scene.start(key, data);
+      return true;
+    },
     openStage(stageId: string): boolean {
       const cur = game.scene.getScenes(true)[0];
       if (!cur || !STAGES.some((s) => s.id === stageId)) return false;

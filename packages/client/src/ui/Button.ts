@@ -8,6 +8,7 @@ import { COLOR, css } from '../art/palette.ts';
 import type { Rect } from '../layout.ts';
 import { drawFrame, type FrameStyle } from './panel.ts';
 import { addText, type FontSize } from './text.ts';
+import { checkFit } from './overflow.ts';
 
 export interface ButtonOptions {
   size?: FontSize;
@@ -55,7 +56,10 @@ export class Button {
   }
 
   setText(text: string): this {
-    if (this.label.text !== text) this.label.setText(text);
+    if (this.label.text !== text) {
+      this.label.setText(text);
+      checkFit(this.label.scene.scene.key, text, this.label.width, this.label.height, this.rect.w, this.rect.h);
+    }
     return this;
   }
 
@@ -112,5 +116,7 @@ export class Button {
     this.label.setColor(css(text));
     // 文字の位置も整数の px に揃える。金の地のボタンは下と右が影なので、文字を 1px 上に寄せる
     this.label.setPosition(Math.round(r.x + r.w / 2), Math.round(r.y + r.h / 2) - (style === 'solid' ? 1 : 0));
+    // 文字が枠の内側からはみ出していないか（開発時だけ記録する）
+    checkFit(this.label.scene.scene.key, this.label.text, this.label.width, this.label.height, r.w, r.h);
   }
 }

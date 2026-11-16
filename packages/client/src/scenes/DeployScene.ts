@@ -48,6 +48,7 @@ import { CELL, deployInfo, deployPanel, getLayout, LAYOUT_EVENT, pvpDeployPanel,
 import { client, pvp, pvpLocal, setupKey } from '../net/pvp.ts';
 import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
 import { Button } from '../ui/Button.ts';
+import { checkFit } from '../ui/overflow.ts';
 import { KIND_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
@@ -305,7 +306,9 @@ export class DeployScene extends Phaser.Scene {
     const stage = this.stage;
     const panel = deployPanel(getLayout());
     this.backButton = new Button(this, panel.back, '戻る', () => this.scene.start('StageSelect'));
-    addText(this, panel.name.x, panel.name.y, `${stage.id} ${stage.name}`, 16, COLOR.goldHi).setOrigin(0, 0.5);
+    const name = addText(this, panel.name.x, panel.name.y, `${stage.id} ${stage.name}`, 16, COLOR.goldHi).setOrigin(0, 0.5);
+    // 面の名前が「音あり」に重ならないか（開発時だけ記録）
+    checkFit(this.scene.key, name.text, name.width, name.height, panel.mute.x - 6 - panel.name.x + 8, 40);
     addMuteButton(this, panel.mute);
     // 手持ちは、その面にある兵種だけを並べる（ない兵種のボタンは出さない）
     ROSTER_ORDER.filter((k) => (stage.roster[k] ?? 0) > 0).forEach((kind, i) => {

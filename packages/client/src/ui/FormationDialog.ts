@@ -13,6 +13,7 @@ import type { Layout, Rect } from '../layout.ts';
 import { deleteFormation, MAX_FORMATIONS, saveFormation, savedFormations, type SavedFormation } from '../save.ts';
 import { Button } from './Button.ts';
 import { HtmlInput } from './htmlInput.ts';
+import { checkFit } from './overflow.ts';
 import { drawBox } from './panel.ts';
 import { addText } from './text.ts';
 
@@ -126,17 +127,20 @@ export class FormationDialog {
     list.forEach((f, i) => {
       const y = top + i * ROW_H;
       this.drawMini(f, x, y + 6);
-      this.add(addText(s, x + 34, y + ROW_H / 2, f.name, 16, COLOR.cream).setOrigin(0, 0.5));
+      const name = this.add(addText(s, x + 34, y + ROW_H / 2, f.name, 16, COLOR.cream).setOrigin(0, 0.5));
+      // 8文字の名前が「呼ぶ」に重ならないか（開発時だけ記録）。縦長の窓で、名前の右と「呼ぶ」の左の間は 6px
+      checkFit(s.scene.key, f.name, name.width, name.height, w - 60 - 4 - 52 - 34 - 2 + 8, ROW_H);
       if (this.pending) {
         this.button({ x: x + w - 64, y: y + 2, w: 64, h: ROW_H - 4 }, '入替', () => this.replace(i));
         return;
       }
-      this.button({ x: x + w - 64 - 4 - 56, y: y + 2, w: 64, h: ROW_H - 4 }, '呼ぶ', () => {
+      // 「消す？」（3文字）が収まる幅を「消す」に取り、「呼ぶ」はその分だけ詰める
+      this.button({ x: x + w - 60 - 4 - 52, y: y + 2, w: 52, h: ROW_H - 4 }, '呼ぶ', () => {
         this.host.recall(f);
         this.close();
       });
       const armed = this.deleteArmed && this.deleteArmed.name === f.name && this.deleteArmed.until > s.time.now;
-      this.button({ x: x + w - 52, y: y + 2, w: 52, h: ROW_H - 4 }, armed ? '消す？' : '消す', () => this.pressDelete(f.name)).setSelected(!!armed);
+      this.button({ x: x + w - 60, y: y + 2, w: 60, h: ROW_H - 4 }, armed ? '消す？' : '消す', () => this.pressDelete(f.name)).setSelected(!!armed);
     });
     if (list.length === 0) this.add(addText(s, x, top + 6, 'まだありません', 16, COLOR.dim));
 
