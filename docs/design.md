@@ -589,11 +589,16 @@ empty → reserved（作った人の接続待ち）→ waiting（1人）→ setu
 ```ts
 interface BattleSource {
   onFrame(cb: (frame: { tick: number; view: BattleView; events: BattleEvent[] }) => void): void;
+  onEnd(cb: (summary: BattleSummary) => void): void;      // 決着したときの振り返り
   order(target: OrderTarget, kind: OrderKind): void;
-  setSpeed?(mult: 1 | 2): void;        // 1人用だけ
+  canOrder(target: OrderTarget, kind: OrderKind): boolean;  // まだ渡していない号令のぶんも数に入れる
+  setSpeed?(mult: number): void;       // 1人用だけ。ないときは、早送りのボタンを出さない
   dispose(): void;
 }
 ```
+
+- 戦闘の画面は、`BattleSource`・戦場・見る側の陣営（`viewer`）を、開始時に受け取る。自軍かどうか、残りの号令、色、号令の相手は、すべて `viewer` で決める。`viewer` が 1 なら、上下左右を返して自軍を下に映す。
+- 翼の呼び方は、いつも見ている人から見た左右にする。engine は、その陣営から見た左右で翼を持つので、敵軍の翼は左右を入れ替えて表示する。
 
 - `LocalBattleSource`：ブラウザで engine を動かす。実時間をためて 0.1 秒ごとに `step` を呼ぶ（早送りは2倍ためる）。場面は2刻みごとに出す（対戦と同じ見え方にする）。
 - `RemoteBattleSource`：サーバーの `snap` をそのまま流す。

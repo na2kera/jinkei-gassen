@@ -1,0 +1,137 @@
+// 調整できる数字（design §3.5・§3.6 の「初期値」）をここに集める。
+// 決まり（順番・狙いの決め方・動き方）はこのファイルに置かない。数字を変えたら docs/balance.md に書く。
+
+import type { Kind } from './types.ts';
+
+/** 1刻みの秒数 */
+export const DT = 0.1;
+
+export interface KindStats {
+  men: number;
+  /** マス/秒 */
+  speed: number;
+  /** 近接の攻撃（毎秒） */
+  melee: number;
+  /** 回転（度/秒） */
+  turn: number;
+}
+
+export const KIND_STATS: Record<Kind, KindStats> = {
+  infantry: { men: 100, speed: 1.0, melee: 3.0, turn: 180 },
+  shield: { men: 100, speed: 0.7, melee: 2.5, turn: 120 },
+  cavalry: { men: 60, speed: 2.2, melee: 3.6, turn: 240 },
+  archer: { men: 80, speed: 0.9, melee: 1.2, turn: 180 },
+  hq: { men: 80, speed: 0.6, melee: 2.6, turn: 120 },
+};
+
+export const T = {
+  /** 部隊どうしの中心がこれより近づかない */
+  spacing: 0.9,
+  /** 近接が届く距離（中心どうし） */
+  meleeRange: 1.05,
+  /** 戦場の端から中心までの最小の距離 */
+  edgeMargin: 0.45,
+
+  /** 弓 */
+  archerRange: 5.6,
+  arrowDamage: 3.1,
+
+  /** 騎兵の突入 */
+  impactDamage: 10,
+  impactRunup: 2.0,
+  impactShock: { front: 8, side: 14, rear: 20 },
+  /** 盾兵の正面に当たった騎兵が失う兵数と士気 */
+  impactBouncedMen: 9,
+  impactBouncedMorale: 8,
+
+  /** ばらつき（0.9〜1.1） */
+  randomMin: 0.9,
+  randomMax: 1.1,
+
+  /** 向きの境目（度） */
+  frontAngle: 50,
+  rearAngle: 120,
+
+  /** 受ける側：向き */
+  facingMult: { front: 1.0, side: 1.4, rear: 1.9 },
+  /** 盾兵の正面（向きの代わり） */
+  shieldFrontMelee: 0.35,
+  shieldFrontArrow: 0.4,
+  shieldFrontImpact: 0.2,
+  /** 受ける側：兵種 */
+  hqTakenMult: 0.7,
+  archerMeleeTakenMult: 1.3,
+  /** 相性（攻める側） */
+  cavalryVsArcher: 1.5,
+  infantryVsArcher: 1.2,
+
+  /** 号令 */
+  maxOrders: 3,
+  chargeTicks: 100,
+  braceTicks: 100,
+  retreatTicks: 60,
+  chargeAttackMult: 1.3,
+  chargeTakenMult: 1.2,
+  chargeSpeedMult: 1.25,
+  braceTakenMult: 0.7,
+  braceMoraleMult: 0.6,
+  chargeMoraleBonus: 5,
+  braceMoraleBonus: 10,
+  /** 後退で止まる、配置エリアのいちばん奥の行数 */
+  retreatRows: 2,
+
+  /** 敗走 */
+  routSpeedMult: 1.3,
+  routTicks: 50,
+
+  /** 方針 */
+  homeTolerance: 0.1,
+  holdWatchRange: 4,
+  advanceSwitchMargin: 1.0,
+  flankEdgeOffset: 0.5,
+  flankDepth: 1.8,
+  /** 迂回の①②で、着いたとみなす距離 */
+  waypointTolerance: 0.1,
+  huntAvoidRange: 2.5,
+  huntAvoidStrength: 2.0,
+  /** 本陣狙い・迂回①②が戦う「進む向きの正面」（度） */
+  passFrontAngle: 50,
+
+  /** 士気 */
+  moraleMax: 100,
+  moraleLossScale: 175,
+  moraleFacing: { front: 1.0, side: 1.35, rear: 2.1 },
+  moraleArrowMult: 0.6,
+  supportRange: 1.6,
+  supportPerAlly: 0.23,
+  supportMaxAllies: 2,
+  hqSupportRange: 3.5,
+  hqSupportMult: 0.7,
+  surroundAngle: 100,
+  surroundPerSec: 2,
+  allyRoutedRange: 2.0,
+  allyRoutedLoss: 11.5,
+  allyDestroyedLoss: 6,
+  targetBrokenGain: 8,
+  enemyBrokenRange: 2.5,
+  enemyBrokenGain: 3,
+  recoverEnemyRange: 2.0,
+  recoverQuietTicks: 20,
+  recoverPerSec: 1.5,
+  hqNearPerSec: 1,
+} as const;
+
+/** 対戦の値段の初期値（assumptions S1）。予算の検査と armyCost の既定に使う */
+export const DEFAULT_COSTS: Record<Kind, number> = {
+  infantry: 2,
+  shield: 3,
+  archer: 3,
+  cavalry: 4,
+  hq: 0,
+};
+
+/** 1戦に出せる号令の回数（陣営ごと）。画面の残り回数の表示に使う */
+export const MAX_ORDERS: number = T.maxOrders;
+
+/** 敗走してから消えるまでの刻み数。画面の消え方の演出に使う */
+export const ROUT_TICKS: number = T.routTicks;

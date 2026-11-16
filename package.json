@@ -12,6 +12,7 @@
     "build": "pnpm --filter @jinkei/client build",
     "preview": "pnpm --filter @jinkei/client preview",
     "test": "pnpm -r --if-present test",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "sim": "pnpm --filter @jinkei/engine sim"
   }
 }
