@@ -266,3 +266,24 @@ export function playDraw(): void {
     ]),
   );
 }
+
+/** 星を1つ取った：n 番目ほど高い短い音 */
+export function playStar(n: number): void {
+  const base = [784, 988, 1175][Math.max(0, Math.min(2, n))] ?? 784;
+  play('star', 0, (ac) =>
+    tones(ac, [
+      { from: base, to: base, delay: 0, duration: 0.08, type: 'square', volume: 0.06 },
+      { from: base * 1.5, to: base * 1.5, delay: 0.08, duration: 0.12, type: 'square', volume: 0.05 },
+    ]),
+  );
+}
+
+/** 陣形の名前が付いた：短い上がる2音 */
+export function playFormation(): void {
+  play('formation', 200, (ac) =>
+    tones(ac, [
+      { from: 523, to: 523, delay: 0, duration: 0.07, type: 'triangle', volume: 0.09 },
+      { from: 784, to: 784, delay: 0.08, duration: 0.14, type: 'triangle', volume: 0.09 },
+    ]),
+  );
+}

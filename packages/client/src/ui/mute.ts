@@ -1,8 +1,9 @@
-// 音を切るボタン（配置と戦闘の画面で同じ場所に出す）。設定は今回は保存しない。
+// 音を切るボタン（タイトル・配置・戦闘の画面で、同じ見た目で出す）。切ったかどうかは保存に残す。
 
 import type Phaser from 'phaser';
 import { isMuted, setMuted } from '../audio/sfx.ts';
 import type { Rect } from '../layout.ts';
+import { saveMuted } from '../save.ts';
 import { Button } from './Button.ts';
 
 function label(): string {
@@ -12,6 +13,7 @@ function label(): string {
 export function addMuteButton(scene: Phaser.Scene, rect: Rect): Button {
   const b: Button = new Button(scene, rect, label(), () => {
     setMuted(!isMuted());
+    saveMuted(isMuted());
     b.setText(label());
   });
   return b;

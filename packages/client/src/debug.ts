@@ -4,12 +4,11 @@
 
 import {
   KINDS,
-  type BattleSetup,
+  STAGES,
   type BattleView,
   type OrderKind,
   type OrderTarget,
   type Placement,
-  type ScriptedOrder,
   type Side,
   type TemplateId,
 } from '@jinkei/engine';
@@ -17,7 +16,8 @@ import type Phaser from 'phaser';
 import { effectCounts } from './art/effects.ts';
 import { unitReach } from './art/UnitSprite.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
-import { PLAIN_STAGE, session, type ResultData } from './session.ts';
+import { clearSave, loadSave, setStarsForDebug } from './save.ts';
+import { session, type ResultData } from './session.ts';
 
 interface DebugHooks {
   scene: string;
@@ -34,6 +34,15 @@ interface DebugHooks {
   order: ((target: OrderTarget, kind: OrderKind) => boolean) | null;
   setSpeed: ((n: number) => void) | null;
   retry: (() => void) | null;
+  /** 結果の画面の「次へ」「戻る」 */
+  next: (() => void) | null;
+  back: (() => void) | null;
+  /** 配置の画面で、面の見本の配置を置く */
+  placeSolution: (() => void) | null;
+  /** 見本の配置を置き、見本の号令を予定に入れて開戦する */
+  startSolution: (() => boolean) | null;
+  /** 矢を飛ばした組（射手の id と、その刻みの attacking）。最後の 50 組 */
+  arrows: [number, number][];
 }
 
 export const debug: DebugHooks = {
@@ -48,6 +57,11 @@ export const debug: DebugHooks = {
   order: null,
   setSpeed: null,
   retry: null,
+  next: null,
+  back: null,
+  placeSolution: null,
+  startSolution: null,
+  arrows: [],
 };
 
 export function pushCapped<T>(arr: T[], v: T, cap: number): void {
@@ -108,14 +122,51 @@ export function installDebug(game: Phaser.Game): void {
     start(viewer: Side = 0): boolean {
       return debug.start ? debug.start(viewer) : false;
     },
-    /** 次の開戦からの面の決まりを変える（引き分けや時間切れを早く確かめるため）。今の値を返す */
-    stage(
-      opts: { timeout?: BattleSetup['timeout']; maxTicks?: number; scriptedOrders?: ScriptedOrder[] } = {},
-    ): { timeout: string; maxTicks: number; scriptedOrders: ScriptedOrder[] } {
-      if (opts.scriptedOrders) PLAIN_STAGE.scriptedOrders = opts.scriptedOrders.map((o) => ({ ...o }));
-      if (opts.timeout) PLAIN_STAGE.timeout = opts.timeout;
-      if (opts.maxTicks !== undefined && Number.isInteger(opts.maxTicks) && opts.maxTicks > 0) PLAIN_STAGE.maxTicks = opts.maxTicks;
-      return { timeout: PLAIN_STAGE.timeout, maxTicks: PLAIN_STAGE.maxTicks, scriptedOrders: PLAIN_STAGE.scriptedOrders };
+    /** 面ごとの星と、保存の中身 */
+    get save(): unknown {
+      return JSON.parse(JSON.stringify(loadSave()));
+    },
+    get stageId(): string {
+      return session.stageId;
+    },
+    get arrows(): [number, number][] {
+      return [...debug.arrows];
+    },
+    /** 指定した面まで（その面も含めて）勝ったことにする。星は1つ（すでに多ければそのまま） */
+    skipTo(stageId: string): boolean {
+      const i = STAGES.findIndex((s) => s.id === stageId);
+      if (i < 0) return false;
+      for (const s of STAGES.slice(0, i + 1)) setStarsForDebug(s.id, Math.max(1, loadSave().stars[s.id] ?? 0));
+      return true;
+    },
+    /** 保存を消す（画面はいまのまま。開き直すと反映される） */
+    clearSave(): void {
+      clearSave();
+    },
+    /** 面を指定して配置の画面を開く */
+    openStage(stageId: string): boolean {
+      const cur = game.scene.getScenes(true)[0];
+      if (!cur || !STAGES.some((s) => s.id === stageId)) return false;
+      cur.scene.start('Deploy', { stageId });
+      return true;
+    },
+    placeSolution(): boolean {
+      if (!debug.placeSolution) return false;
+      debug.placeSolution();
+      return true;
+    },
+    startSolution(): boolean {
+      return debug.startSolution ? debug.startSolution() : false;
+    },
+    next(): boolean {
+      if (!debug.next) return false;
+      debug.next();
+      return true;
+    },
+    back(): boolean {
+      if (!debug.back) return false;
+      debug.back();
+      return true;
     },
     order(target: OrderTarget, kind: OrderKind): boolean {
       return debug.order ? debug.order(target, kind) : false;

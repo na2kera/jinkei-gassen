@@ -68,3 +68,20 @@ const DRUM = [
 export function drawDrum(g: Phaser.GameObjects.Graphics, x: number, y: number): void {
   drawRows(g, DRUM, x, y, { k: COLOR.outline, c: COLOR.cream, w: COLOR.red, r: COLOR.gold });
 }
+
+/** 星（7×7 の点を scale 倍で描く）。取った星は金、まだの星は暗い色 */
+const STAR = ['...x...', '...x...', 'xxxxxxx', '.xxxxx.', '..xxx..', '.xx.xx.', '.x...x.'];
+
+export function drawStar(g: Phaser.GameObjects.Graphics, x: number, y: number, filled: boolean, scale = 2): void {
+  const color = filled ? COLOR.gold : COLOR.dim;
+  STAR.forEach((line, ry) => {
+    for (let rx = 0; rx < line.length; rx++) {
+      if (line[rx] !== 'x') continue;
+      g.fillStyle(color, 1);
+      g.fillRect(x + rx * scale, y + ry * scale, scale, scale);
+    }
+  });
+}
+
+/** 星1つの幅（scale 倍） */
+export const STAR_SIZE = 7;

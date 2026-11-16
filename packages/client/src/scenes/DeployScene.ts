@@ -1,34 +1,39 @@
-// 配置の画面（design §5.1）。
+// 配置の画面（design §5.1）。面（Stage）ごとの手持ち・敵・決まり（allow）に合わせて出すものを変える。
 // 手持ちを選んでマスを押すと置く／置いた部隊を引きずると動く／ほかの部隊の上に落とすと入れ替わる／
-// 置いた部隊を押すと、方針の切り替え（その兵種で選べるものだけ）と「外す」が出る。
-// 配置は session に持ち、このシーンは向きが変わると作り直す。
+// 置いた部隊を押すと、方針の切り替え（その面で選べるものだけ）と「外す」が出る。
+// 配置は session に持ち、変えるたびに面ごとの最後の配置として保存する。このシーンは向きが変わると作り直す。
 
 import {
   applyTemplate,
   defaultStance,
   listTemplates,
+  recognizeFormation,
+  stageEnemyVisible,
   STANCES,
-  stanceAllowed,
   type Kind,
   type Placement,
   type Side,
+  type Stage,
   type Stance,
+  type StageEnemyOrder,
   type TemplateId,
 } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { addFieldImage, drawFieldFrame, drawZone } from '../art/field.ts';
 import { COLOR } from '../art/palette.ts';
-import { playPlace, playRemove, playStance, playStart } from '../audio/sfx.ts';
 import { UnitSprite } from '../art/UnitSprite.ts';
+import { playFormation, playPlace, playRemove, playStance, playStart } from '../audio/sfx.ts';
 import { FieldView, type Cell } from '../battle/FieldView.ts';
+import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
 import { debug } from '../debug.ts';
 import { CELL, deployPanel, getLayout, LAYOUT_EVENT, type Rect } from '../layout.ts';
-import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
-import { armyErrors, battleSetup, ROSTER, session } from '../session.ts';
-import type { BattleSceneData } from './BattleScene.ts';
+import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { KIND_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
+import { drawBox } from '../ui/panel.ts';
+import { addText } from '../ui/text.ts';
+import type { BattleSceneData } from './BattleScene.ts';
 
 /** これ以上動いたら「押した」ではなく「引きずった」とみなす（px） */
 const DRAG_THRESHOLD = 6;
@@ -41,7 +46,12 @@ interface Press {
   dragging: boolean;
 }
 
+export interface DeploySceneData {
+  stageId?: string;
+}
+
 export class DeployScene extends Phaser.Scene {
+  private stage!: Stage;
   private fv!: FieldView;
   private soldierLayer!: Phaser.GameObjects.Container;
   private markLayer!: Phaser.GameObjects.Container;
@@ -54,9 +64,17 @@ export class DeployScene extends Phaser.Scene {
   private popupIndex: number | null = null;
   private selectedKind: Kind | null = null;
   private press: Press | null = null;
+  private formationBox!: Phaser.GameObjects.Graphics;
+  private formationText!: Phaser.GameObjects.Text;
+  private formationName: string | null = null;
+  private stageIdArg: string | undefined;
 
   constructor() {
     super('Deploy');
+  }
+
+  init(data: DeploySceneData): void {
+    this.stageIdArg = data?.stageId;
   }
 
   create(): void {
@@ -69,8 +87,12 @@ export class DeployScene extends Phaser.Scene {
     this.popupIndex = null;
     this.selectedKind = null;
     this.press = null;
+    this.formationName = null;
 
-    const field = session.field;
+    // 面を開く（前にこの面で置いた配置があれば戻る）
+    this.stage = openStage(this.stageIdArg ?? session.stageId);
+    const stage = this.stage;
+    const field = stage.field;
     this.fv = new FieldView(layout.field, field.width, field.height);
     drawFieldFrame(this.add.graphics(), this.fv);
     addFieldImage(this, this.fv, field);
@@ -81,29 +103,47 @@ export class DeployScene extends Phaser.Scene {
     this.soldierLayer = this.add.container(0, 0);
     this.markLayer = this.add.container(0, 0);
     this.dropMark = this.add.graphics();
-    this.popupLayer = this.add.container(0, 0);
 
-    // 敵の配置は見せる（方針は見せない。decisions §8）
-    session.enemy.forEach((p, i) => {
+    // 敵の配置は見せる（方針と、霧のマスの部隊は見せない。decisions §8）
+    stageEnemyVisible(stage).forEach((p, i) => {
       const s = new UnitSprite(this, 1, p.kind, 100 + i, this.soldierLayer, this.markLayer);
       const c = this.fv.cellCenter(p.col, p.row);
       const d = this.fv.dirToScreen(0, 1);
       s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
     });
 
+    // ヒントと陣形名は、配置中は空いている中間地帯に出す（目に入るが、部隊の邪魔にならない）
+    const band = this.bandRows();
+    const hintPos = this.fv.toScreen(field.width / 2, band.top + 0.75);
+    const hint = addText(this, 0, 0, stage.hint, 16, COLOR.cream).setOrigin(0.5, 0.5);
+    const hw = Math.ceil(hint.width / 2) * 2 + 20;
+    const hintBox: Rect = { x: Math.round((hintPos.x - hw / 2) / 2) * 2, y: Math.round(hintPos.y / 2) * 2 - 14, w: hw, h: 28 };
+    const hg = this.add.graphics();
+    drawBox(hg, hintBox);
+    hint.setPosition(Math.round(hintBox.x + hw / 2), hintBox.y + 14);
+    this.children.bringToTop(hint);
+    this.formationBox = this.add.graphics();
+    this.formationText = addText(this, 0, 0, '', 16, COLOR.goldHi).setOrigin(0.5, 0.5).setVisible(false);
+    this.popupLayer = this.add.container(0, 0);
+
     const panel = deployPanel(layout);
-    ROSTER_ORDER.forEach((kind, i) => {
+    new Button(this, panel.back, '戻る', () => this.scene.start('StageSelect'));
+    addText(this, panel.name.x, panel.name.y, `${stage.id} ${stage.name}`, 16, COLOR.goldHi).setOrigin(0, 0.5);
+    addMuteButton(this, panel.mute);
+    // 手持ちは、その面にある兵種だけを並べる（ない兵種のボタンは出さない）
+    ROSTER_ORDER.filter((k) => (stage.roster[k] ?? 0) > 0).forEach((kind, i) => {
       const r = panel.roster[i];
       if (!r) return;
       this.rosterButtons.set(kind, new Button(this, r, KIND_LABEL[kind], () => this.selectKind(kind)));
     });
-    listTemplates().forEach((t, i) => {
-      const r = panel.templates[i];
-      if (!r) return;
-      new Button(this, r, t.name, () => this.useTemplate(t.id));
-    });
+    if (stage.allow?.templates !== false) {
+      listTemplates().forEach((t, i) => {
+        const r = panel.templates[i];
+        if (!r) return;
+        new Button(this, r, t.name, () => this.useTemplate(t.id));
+      });
+    }
     this.startButton = new Button(this, panel.start, '開戦', () => this.startBattle(), { primary: true });
-    addMuteButton(this, panel.mute);
 
     this.input.on(Phaser.Input.Events.POINTER_DOWN, this.onDown, this);
     this.input.on(Phaser.Input.Events.POINTER_MOVE, this.onMove, this);
@@ -118,18 +158,42 @@ export class DeployScene extends Phaser.Scene {
       this.game.events.off(LAYOUT_EVENT, onLayout);
       debug.applyTemplate = null;
       debug.start = null;
+      debug.placeSolution = null;
+      debug.startSolution = null;
     });
     debug.applyTemplate = (id) => this.useTemplate(id);
     debug.start = (viewer) => this.startBattle(viewer);
+    debug.placeSolution = () => {
+      this.closePopup();
+      setPlacements(this.stage.solution.map((p) => ({ ...p })));
+      this.refresh();
+    };
+    debug.startSolution = () => {
+      setPlacements(this.stage.solution.map((p) => ({ ...p })));
+      return this.startBattle(0, this.stage.solutionOrders ?? []);
+    };
 
-    this.refresh();
+    // 開いた時点の陣形名は、音や動きなしで出す
+    this.refresh(false);
+  }
+
+  /** 中間地帯（両軍の配置エリアのあいだ）の行 */
+  private bandRows(): { top: number; bottom: number } {
+    const z = this.stage.field.zones;
+    return { top: z[1].row + z[1].height, bottom: z[0].row };
+  }
+
+  /** その面で方針を切り替えられるか（allow.stances が空の配列なら出さない） */
+  private stancesShown(): boolean {
+    const list = this.stage.allow?.stances;
+    return list === undefined || list.length > 0;
   }
 
   // ---- 配置の操作 ----
 
   private remaining(kind: Kind): number {
     const used = session.placements.filter((p) => p.kind === kind).length;
-    return (ROSTER[kind] ?? 0) - used;
+    return (this.stage.roster[kind] ?? 0) - used;
   }
 
   private indexAt(cell: Cell): number {
@@ -137,7 +201,7 @@ export class DeployScene extends Phaser.Scene {
   }
 
   private inOwnZone(cell: Cell): boolean {
-    const z = session.field.zones[0];
+    const z = this.stage.field.zones[0];
     return cell.col >= z.col && cell.col < z.col + z.width && cell.row >= z.row && cell.row < z.row + z.height;
   }
 
@@ -148,44 +212,52 @@ export class DeployScene extends Phaser.Scene {
   }
 
   private useTemplate(id: TemplateId): void {
+    if (this.stage.allow?.templates === false) return;
     this.closePopup();
     this.selectedKind = null;
-    session.placements = applyTemplate(id, ROSTER, session.field.zones[0], 0);
+    // ひな形の方針のうち、この面で選べないものは兵種の初期設定に直す
+    setPlacements(fitStances(this.stage, applyTemplate(id, this.stage.roster, this.stage.field.zones[0], 0)));
     playPlace();
     this.refresh();
   }
 
   private place(kind: Kind, cell: Cell): void {
-    session.placements.push({ kind, col: cell.col, row: cell.row, stance: defaultStance(kind) });
+    setPlacements([...session.placements, { kind, col: cell.col, row: cell.row, stance: defaultStance(kind) }]);
     playPlace();
   }
 
   /** index の部隊を cell へ。そこに別の部隊がいれば入れ替える */
   private moveTo(index: number, cell: Cell): void {
-    const me = session.placements[index];
+    const list = session.placements.map((p) => ({ ...p }));
+    const me = list[index];
     if (!me) return;
     const other = this.indexAt(cell);
     if (other === index) return;
-    const target = other >= 0 ? session.placements[other] : undefined;
+    const target = other >= 0 ? list[other] : undefined;
     if (target) {
       target.col = me.col;
       target.row = me.row;
     }
     me.col = cell.col;
     me.row = cell.row;
+    setPlacements(list);
     playPlace();
   }
 
   private setStance(index: number, stance: Stance): void {
-    const p = session.placements[index];
-    if (p && stanceAllowed(p.kind, stance)) p.stance = stance;
+    const list = session.placements.map((p) => ({ ...p }));
+    const p = list[index];
+    if (p && stanceOk(this.stage, { kind: p.kind, stance })) {
+      p.stance = stance;
+      setPlacements(list);
+    }
     playStance();
     this.closePopup();
     this.refresh();
   }
 
   private removeAt(index: number): void {
-    session.placements.splice(index, 1);
+    setPlacements(session.placements.filter((_, i) => i !== index));
     playRemove();
     this.closePopup();
     this.refresh();
@@ -194,16 +266,24 @@ export class DeployScene extends Phaser.Scene {
   /**
    * 開戦。1人用の BattleSource はここで作って戦闘の画面へ渡す（戦闘の画面は source の作り方を知らない）。
    * viewer は普段 0。開発用の口からだけ 1 を渡し、陣営1の側から同じ戦いを映して確かめる。
+   * myOrders も開発用で、見本の号令を予定に入れて確かめるためのもの。
    */
-  private startBattle(viewer: Side = 0): boolean {
+  private startBattle(viewer: Side = 0, myOrders: StageEnemyOrder[] = []): boolean {
     if (armyErrors(session.placements).length > 0) return false;
-    const made = LocalBattleSource.create(battleSetup(), viewer);
+    const made = LocalBattleSource.create(battleSetup(myOrders), viewer);
     if (!made.ok) {
       // 配置は検査済みなので起きないはずだが、起きたら配置の画面にとどまる
       console.error('createBattle に失敗', made.error);
       return false;
     }
-    const data: BattleSceneData = { source: made.source, field: session.field, viewer };
+    const data: BattleSceneData = {
+      source: made.source,
+      field: this.stage.field,
+      viewer,
+      orders: this.stage.allow?.orders !== false,
+      quitTo: { scene: 'Deploy', data: { stageId: this.stage.id } },
+      stageId: this.stage.id,
+    };
     playStart();
     this.scene.start('Battle', data);
     return true;
@@ -239,7 +319,7 @@ export class DeployScene extends Phaser.Scene {
     const p = session.placements[press.index];
     const sprite = this.ownSprites[press.index];
     if (!p || !sprite) return;
-    sprite.apply({ x: pointer.x, y: pointer.y, dx: 0, dy: -1, menRatio: 1, morale: 100, rout: 0, highlight: true, stance: p.stance });
+    sprite.apply({ x: pointer.x, y: pointer.y, dx: 0, dy: -1, menRatio: 1, morale: 100, rout: 0, highlight: true, stance: this.stancesShown() ? p.stance : null });
     const cell = this.fv.cellAt(pointer.x, pointer.y);
     this.dropMark.clear();
     if (cell && this.inOwnZone(cell)) this.drawCellFrame(this.dropMark, this.fv.cellRect(cell.col, cell.row));
@@ -273,12 +353,13 @@ export class DeployScene extends Phaser.Scene {
     this.closePopup();
     this.selectedKind = null;
     this.popupIndex = index;
-    const items: { label: string; stance: Stance | null }[] = STANCES.filter((s) => stanceAllowed(p.kind, s)).map(
-      (s) => ({ label: STANCE_LABEL[s], stance: s }),
-    );
+    // 方針の切り替えを出さない面では「外す」だけを出す
+    const stances = this.stancesShown() ? STANCES.filter((s) => stanceOk(this.stage, { kind: p.kind, stance: s })) : [];
+    const items: { label: string; stance: Stance | null }[] = stances.map((s) => ({ label: STANCE_LABEL[s], stance: s }));
     items.push({ label: '外す', stance: null });
-    const w = 80;
-    const h = 24;
+    // 「本陣狙い」が枠に触れないだけの大きさ
+    const w = 88;
+    const h = 28;
     const gap = 2;
     const totalH = items.length * h + (items.length - 1) * gap;
     const f = this.fv.rect;
@@ -315,15 +396,16 @@ export class DeployScene extends Phaser.Scene {
     g.fillRect(r.x + r.w - 2, r.y + 2, 2, r.h - 4);
   }
 
-  private refresh(): void {
+  private refresh(announce = true): void {
     for (const s of this.ownSprites) s.destroy();
     this.ownSprites = session.placements.map((p: Placement, i) => {
       const s = new UnitSprite(this, 0, p.kind, i, this.soldierLayer, this.markLayer);
       const c = this.fv.cellCenter(p.col, p.row);
       const d = this.fv.dirToScreen(0, -1);
       const highlight = i === this.popupIndex || (this.press?.index === i && this.press.dragging);
-      // 自軍には方針の印を付ける（押さなくても方針が分かるように。敵には付けない）
-      s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight, stance: p.stance, bounds: this.fv.rect });
+      // 自軍には方針の印を付ける（押さなくても方針が分かるように。敵と、方針を選べない面には付けない）
+      const stance = this.stancesShown() ? p.stance : null;
+      s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight, stance, bounds: this.fv.rect });
       return s;
     });
     if (this.selectedKind && this.remaining(this.selectedKind) <= 0) this.selectedKind = null;
@@ -332,5 +414,48 @@ export class DeployScene extends Phaser.Scene {
       b.setText(`${KIND_LABEL[kind]}${n}`).setEnabled(n > 0).setSelected(this.selectedKind === kind);
     }
     this.startButton.setEnabled(armyErrors(session.placements).length === 0);
+    this.updateFormation(announce);
+  }
+
+  /**
+   * 陣形名（効果はなく、名前だけ）。配置が変わるたびに調べ、名前が付いたら「鶴翼の陣」のように出す。
+   * 新しく名前が付いた瞬間だけ、短い音と、下から 4px 持ち上がる小さな動きを付ける。
+   */
+  private updateFormation(announce: boolean): void {
+    const found = recognizeFormation(session.placements, this.stage.field.zones[0], 0);
+    // 「横陣」のように名前が「陣」で終わるものはそのまま、それ以外は「鶴翼の陣」のように「の陣」を付ける
+    const name = found ? (found.name.endsWith('陣') ? found.name : `${found.name}の陣`) : null;
+    if (name === this.formationName) return;
+    this.formationName = name;
+    this.formationBox.clear();
+    this.tweens.killTweensOf([this.formationBox, this.formationText]);
+    if (!name) {
+      this.formationText.setVisible(false);
+      return;
+    }
+    const band = this.bandRows();
+    const pos = this.fv.toScreen(this.stage.field.width / 2, band.bottom - 0.75);
+    this.formationText.setText(name);
+    const w = Math.ceil(this.formationText.width / 2) * 2 + 24;
+    const r: Rect = { x: Math.round((pos.x - w / 2) / 2) * 2, y: Math.round(pos.y / 2) * 2 - 14, w, h: 28 };
+    drawBox(this.formationBox, { ...r, x: 0, y: 0 });
+    this.formationBox.setPosition(r.x, r.y);
+    this.formationText.setPosition(Math.round(r.x + w / 2), r.y + 14).setVisible(true);
+    if (!announce) return;
+    playFormation();
+    // 2px ずつ段を付けて持ち上げる（なめらかに動かすとドットの見た目から浮くため）
+    const lift = { v: 4 };
+    this.formationBox.y = r.y + 4;
+    this.formationText.y = r.y + 14 + 4;
+    this.tweens.add({
+      targets: lift,
+      v: 0,
+      duration: 160,
+      onUpdate: () => {
+        const dy = Math.round(lift.v / 2) * 2;
+        this.formationBox.y = r.y + dy;
+        this.formationText.y = r.y + 14 + dy;
+      },
+    });
   }
 }

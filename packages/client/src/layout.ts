@@ -32,14 +32,15 @@ const FIELD_H = CELL * FIELD_ROWS;
 const LANDSCAPE_W = 640;
 const LANDSCAPE_H = 400;
 const PORTRAIT_W = 320;
-const PORTRAIT_MIN_H = 568;
+// S13 の下限は 568 だが、面の名前・戻る・ひな形2列が入るよう 600 にする（これより細長い端末では左右が少し空く）
+const PORTRAIT_MIN_H = 600;
 // 縦に伸ばしすぎると FIT で全体が小さくなるので上限を置く（細長い端末でも 19.5:9 程度まで）
 const PORTRAIT_MAX_H = 720;
 const GAP = 8;
 /** 戦場の枠（4px）のぶんも含めた、戦場と操作の欄のあいだ */
 const PANEL_GAP = 12;
 /** 縦長の操作の欄の高さ（配置と戦闘のどちらのボタンも収まる高さ） */
-const PORTRAIT_PANEL_H = 148;
+const PORTRAIT_PANEL_H = 190;
 
 /** 2px 単位に揃える（ドットの枠がずれないように） */
 function even(n: number): number {
@@ -98,41 +99,39 @@ function row(x: number, y: number, w: number, h: number, n: number, gap: number)
 
 /** 配置の画面の操作の欄 */
 export interface DeployPanel {
+  /** ステージ選択へ戻る */
+  back: Rect;
+  /** 面の名前を書く場所（左端と縦の中央） */
+  name: { x: number; y: number };
+  /** 音を切るボタン */
+  mute: Rect;
   /** 手持ち5種（本陣・歩兵・盾兵・騎兵・弓兵の順） */
   roster: Rect[];
   /** ひな形7つ */
   templates: Rect[];
   start: Rect;
-  /** 音を切るボタン */
-  mute: Rect;
 }
 
 const MUTE_W = 64;
+const BACK_W = 56;
 
 export function deployPanel(l: Layout): DeployPanel {
   const p = l.panel;
+  const head = 32;
+  const back = { x: p.x, y: p.y, w: BACK_W, h: head };
+  const mute = { x: p.x + p.w - MUTE_W, y: p.y, w: MUTE_W, h: head };
+  const name = { x: p.x + BACK_W + 8, y: p.y + head / 2 };
   if (l.mode === 'landscape') {
-    const roster = row(p.x, p.y, p.w, 36, 5, 4);
-    const t1 = row(p.x, p.y + 48, p.w, 32, 4, 4);
-    const t2 = row(p.x, p.y + 84, p.w, 32, 4, 4).slice(0, 3);
-    const by = p.y + p.h - 40;
-    return {
-      roster,
-      templates: [...t1, ...t2],
-      mute: { x: p.x, y: by, w: MUTE_W, h: 40 },
-      start: { x: p.x + MUTE_W + 4, y: by, w: p.w - MUTE_W - 4, h: 40 },
-    };
+    const roster = row(p.x, p.y + 42, p.w, 36, 5, 4);
+    const t1 = row(p.x, p.y + 88, p.w, 32, 4, 4);
+    const t2 = row(p.x, p.y + 124, p.w, 32, 4, 4).slice(0, 3);
+    return { back, name, mute, roster, templates: [...t1, ...t2], start: { x: p.x, y: p.y + p.h - 40, w: p.w, h: 40 } };
   }
   // ひな形は1列に7つ並べると、名前が枠に触れるほど窮屈になるので、4つと3つの2列にする
-  const roster = row(p.x, p.y, p.w, 32, 5, 4);
-  const t1 = row(p.x, p.y + 38, p.w, 32, 4, 4);
-  const t2 = row(p.x, p.y + 74, p.w, 32, 4, 4).slice(0, 3);
-  return {
-    roster,
-    templates: [...t1, ...t2],
-    mute: { x: p.x, y: p.y + 112, w: MUTE_W, h: 36 },
-    start: { x: p.x + MUTE_W + 4, y: p.y + 112, w: p.w - MUTE_W - 4, h: 36 },
-  };
+  const roster = row(p.x, p.y + 38, p.w, 32, 5, 4);
+  const t1 = row(p.x, p.y + 76, p.w, 30, 4, 4);
+  const t2 = row(p.x, p.y + 110, p.w, 30, 4, 4).slice(0, 3);
+  return { back, name, mute, roster, templates: [...t1, ...t2], start: { x: p.x, y: p.y + 148, w: p.w, h: 38 } };
 }
 
 /** 戦闘の画面の操作の欄 */
@@ -140,6 +139,8 @@ export interface BattlePanel {
   time: Rect;
   /** 号令の残りの印（3つ） */
   marks: Rect[];
+  /** やめる（配置へ戻る） */
+  quit: Rect;
   /** 音を切るボタン */
   mute: Rect;
   speed: Rect;
@@ -153,41 +154,94 @@ export function battlePanel(l: Layout): BattlePanel {
   const p = l.panel;
   const top = 32;
   const bh = l.mode === 'landscape' ? 36 : 34;
-  const marks = [0, 1, 2].map((i) => ({ x: p.x + 64 + i * 16, y: p.y + (top - 10) / 2, w: 10, h: 10 }));
+  const marks = [0, 1, 2].map((i) => ({ x: p.x + 44 + i * 16, y: p.y + (top - 10) / 2, w: 10, h: 10 }));
   const speed = { x: p.x + p.w - 56, y: p.y, w: 56, h: top };
   const mute = { x: speed.x - 4 - MUTE_W, y: p.y, w: MUTE_W, h: top };
+  const quit = { x: p.x + 96, y: p.y, w: mute.x - 4 - (p.x + 96), h: top };
   const targets = row(p.x, p.y + top + 8, p.w, bh, 4, 4);
   const orders = row(p.x, p.y + top + 8 + bh + 6, p.w, bh, 3, 4);
-  return { time: { x: p.x, y: p.y, w: 56, h: top }, marks, mute, speed, targets, orders };
+  return { time: { x: p.x, y: p.y, w: 40, h: top }, marks, quit, mute, speed, targets, orders };
 }
 
-/** 結果の画面。画面全体の中央に、枠の箱と「もう一度」を縦に並べる */
+/** 結果の画面。画面全体の中央に、枠の箱とボタンの列を縦に並べる */
 export interface ResultLayout {
   centerX: number;
   box: Rect;
   /** 行ごとの y（上から） */
   title: number;
   reason: number;
-  remaining: number;
+  stars: number;
   review: number;
-  retry: Rect;
+  /** もう一度・次へ・戻る */
+  buttons: Rect[];
 }
 
 export function resultLayout(l: Layout): ResultLayout {
   const cx = l.width / 2;
   const boxW = l.mode === 'landscape' ? 320 : l.width - GAP * 2;
-  const boxH = 264;
-  const retryH = 40;
-  // 箱と「もう一度」をひとまとまりにして、縦の中央に置く
-  const top = even(Math.max(GAP, (l.height - boxH - 20 - retryH) / 2));
+  const boxH = 272;
+  const btnH = 40;
+  // 箱とボタンをひとまとまりにして、縦の中央に置く
+  const top = even(Math.max(GAP, (l.height - boxH - 16 - btnH) / 2));
   const box = { x: even(cx - boxW / 2), y: top, w: boxW, h: boxH };
+  const rowW = l.mode === 'landscape' ? 320 : l.width - GAP * 2;
   return {
     centerX: cx,
     box,
-    title: top + 20,
-    reason: top + 68,
-    remaining: top + 96,
-    review: top + 140,
-    retry: { x: even(cx - 80), y: top + boxH + 20, w: 160, h: retryH },
+    title: top + 16,
+    reason: top + 60,
+    stars: top + 88,
+    review: top + 124,
+    buttons: row(even(cx - rowW / 2), top + boxH + 16, rowW, btnH, 3, 6),
   };
+}
+
+/** タイトルの画面 */
+export interface TitleLayout {
+  centerX: number;
+  title: number;
+  stage: Rect;
+  pvp: Rect;
+  mute: Rect;
+}
+
+export function titleLayout(l: Layout): TitleLayout {
+  const cx = l.width / 2;
+  const top = even(l.height / 2 - 96);
+  const w = 160;
+  return {
+    centerX: cx,
+    title: top,
+    stage: { x: even(cx - w / 2), y: top + 72, w, h: 40 },
+    pvp: { x: even(cx - w / 2), y: top + 124, w, h: 40 },
+    mute: { x: l.width - GAP - MUTE_W, y: l.height - GAP - 32, w: MUTE_W, h: 32 },
+  };
+}
+
+/** ステージ選択の画面。章の見出しと、面のボタンを縦に並べる */
+export interface StageSelectLayout {
+  back: Rect;
+  /** 章の見出し。章が2つ以上あれば、ここに章を切り替えるボタンを並べる */
+  heading: Rect;
+  /** 面のボタン（count 個） */
+  stages: Rect[];
+}
+
+export function stageSelectLayout(l: Layout, count: number): StageSelectLayout {
+  const w = l.mode === 'landscape' ? 320 : l.width - GAP * 2;
+  const x = even(l.width / 2 - w / 2);
+  const rowH = 40;
+  const gap = 6;
+  const listH = count * rowH + (count - 1) * gap;
+  const top = even(Math.max(48, (l.height - listH) / 2 + 16));
+  return {
+    back: { x: GAP, y: GAP, w: BACK_W, h: 32 },
+    heading: { x, y: top - 44, w, h: 32 },
+    stages: Array.from({ length: count }, (_, i) => ({ x, y: top + i * (rowH + gap), w, h: rowH })),
+  };
+}
+
+/** 対戦の画面（準備中） */
+export function lobbyLayout(l: Layout): { centerX: number; text: number; back: Rect } {
+  return { centerX: l.width / 2, text: even(l.height / 2 - 16), back: { x: GAP, y: GAP, w: BACK_W, h: 32 } };
 }

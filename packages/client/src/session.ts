@@ -1,42 +1,26 @@
-// シーンをまたいで持つもの（配置と、直前の戦いの結果）。
+// シーンをまたいで持つもの（いまの面、その面の配置、直前の戦いの結果）。
 // シーンは向きの切り替えで作り直すことがあるので、消えて困るものはシーンの中に持たない。
+// 面ごとの最後の配置と星は save.ts に残す。
 
 import {
-  applyTemplate,
-  MAX_UNITS,
-  plainField,
-  STANDARD_ROSTER,
-  validateArmy,
+  defaultStance,
+  STAGES,
+  stageSetupWith,
+  stanceAllowed,
+  stanceAllowedInStage,
+  validateStageArmy,
   type BattleSetup,
   type BattleSummary,
-  type Field,
   type Placement,
-  type ScriptedOrder,
   type Side,
+  type Stage,
+  type StageEnemyOrder,
   type UnitView,
 } from '@jinkei/engine';
-
-/**
- * 今回の平原1面の決まり。ステージのデータ（design §3.10）は段階2なので、仮にここで持つ。
- * - timeout: decisions §6 のとおり、ふつうの面は時間切れなら負け（side0_loses）。
- *   引き分けなどを確かめるときは、開発用の口（__jg.stage）で timeout と maxTicks を変える。
- * - 敵の号令は1つだけ入れる（20秒で全軍に突撃）。敵の号令の表示を確かめるためで、面のデータができたら差し替える。
- */
-export const PLAIN_STAGE: {
-  timeout: BattleSetup['timeout'];
-  maxTicks: number;
-  enemyTemplate: 'crane';
-  scriptedOrders: ScriptedOrder[];
-} = {
-  timeout: 'side0_loses',
-  maxTicks: 1800,
-  enemyTemplate: 'crane',
-  scriptedOrders: [{ tick: 200, side: 1, target: 'all', kind: 'charge' }],
-};
-
-export const ROSTER = STANDARD_ROSTER;
+import { savedPlacements, savePlacements, starsOf } from './save.ts';
 
 export interface ResultData {
+  stageId: string;
   summary: BattleSummary;
   /** 見ていた陣営（勝ち負けと、自軍・敵軍の振り分けに使う） */
   viewer: Side;
@@ -45,34 +29,92 @@ export interface ResultData {
 }
 
 interface Session {
-  field: Field;
+  stageId: string;
   placements: Placement[];
-  enemy: Placement[];
   result: ResultData | null;
 }
 
-const field = plainField();
+const first = STAGES[0];
 
 export const session: Session = {
-  field,
+  stageId: first ? first.id : '',
   placements: [],
-  enemy: applyTemplate(PLAIN_STAGE.enemyTemplate, ROSTER, field.zones[1], 1),
   result: null,
 };
 
-export function armyErrors(placements: readonly Placement[]): ReturnType<typeof validateArmy> {
-  // 全部隊を置かなくても、本陣と1部隊以上あれば開戦できる（validateArmy の既定の minUnits は 1）
-  return validateArmy(placements, session.field.zones[0], { maxUnits: MAX_UNITS });
+export function stageById(id: string): Stage | undefined {
+  return STAGES.find((s) => s.id === id);
 }
 
-export function battleSetup(): BattleSetup {
-  return {
-    field: session.field,
-    armies: [session.placements.map((p) => ({ ...p })), session.enemy.map((p) => ({ ...p }))],
-    // 種は client が毎回決める（engine は乱数の元を持たない）。同じ配置でも戦いごとに少し違う展開になる
-    seed: (Math.random() * 0x100000000) >>> 0,
-    maxTicks: PLAIN_STAGE.maxTicks,
-    timeout: PLAIN_STAGE.timeout,
-    scriptedOrders: PLAIN_STAGE.scriptedOrders.map((o) => ({ ...o })),
-  };
+export function currentStage(): Stage {
+  // STAGES は engine が必ず1面以上持っている
+  return stageById(session.stageId) ?? STAGES[0]!;
+}
+
+/** STAGES の並びで次の面。最後の面なら null */
+export function nextStage(id: string): Stage | null {
+  const i = STAGES.findIndex((s) => s.id === id);
+  return i >= 0 ? (STAGES[i + 1] ?? null) : null;
+}
+
+/** 前の面（STAGES の並び）を勝っていれば開く。最初の面はいつも開いている */
+export function isUnlocked(stage: Stage): boolean {
+  const i = STAGES.findIndex((s) => s.id === stage.id);
+  if (i <= 0) return true;
+  const prev = STAGES[i - 1];
+  return !!prev && starsOf(prev.id) > 0;
+}
+
+/** STAGES にある章の番号（あとで章が増えたら自動で増える） */
+export function chapters(): number[] {
+  return [...new Set(STAGES.map((s) => s.chapter))].sort((a, b) => a - b);
+}
+
+/** 対戦は、第1章の面をすべて勝ったら開く（decisions §8） */
+export function pvpUnlocked(): boolean {
+  const ch1 = STAGES.filter((s) => s.chapter === 1);
+  return ch1.length > 0 && ch1.every((s) => starsOf(s.id) > 0);
+}
+
+/** その面で選べる方針か（engine の兵種の決まりと、面の決まりの両方） */
+export function stanceOk(stage: Stage, p: Pick<Placement, 'kind' | 'stance'>): boolean {
+  return stanceAllowed(p.kind, p.stance) && stanceAllowedInStage(stage, p.kind, p.stance);
+}
+
+/** 置いた途中の配置として使えるか。本陣がない・部隊が足りないのは途中なのでよい。エリアの外や手持ちを超えるものはだめ */
+function usable(stage: Stage, placements: Placement[]): boolean {
+  const bad = new Set(['invalid_kind', 'invalid_stance', 'invalid_cell', 'out_of_zone', 'overlap', 'over_roster', 'too_many_units']);
+  return !validateStageArmy(stage, placements).some((e) => bad.has(e.code));
+}
+
+/** 面を開く。前にその面で置いた配置があれば戻す（面のデータが変わって合わなくなっていたら捨てる） */
+export function openStage(id: string): Stage {
+  const stage = stageById(id) ?? STAGES[0]!;
+  session.stageId = stage.id;
+  const saved = savedPlacements(stage.id);
+  session.placements = saved && usable(stage, saved) ? saved : [];
+  return stage;
+}
+
+/** 配置を変えたら呼ぶ。面ごとの最後の配置として残す */
+export function setPlacements(list: Placement[]): void {
+  session.placements = list;
+  savePlacements(session.stageId, list);
+}
+
+/** ひな形などで並べた配置の方針を、その面で選べるものに直す（選べない方針は兵種の初期設定へ） */
+export function fitStances(stage: Stage, list: Placement[]): Placement[] {
+  return list.map((p) => (stanceOk(stage, p) ? p : { ...p, stance: defaultStance(p.kind) }));
+}
+
+export function armyErrors(placements: Placement[]): ReturnType<typeof validateStageArmy> {
+  // 全部隊を置かなくても、本陣と1部隊以上あれば開戦できる
+  return validateStageArmy(currentStage(), placements);
+}
+
+/** 開戦の設定。myOrders は開発用（見本の号令を予定に入れて確かめる）で、ふつうは空 */
+export function battleSetup(myOrders: StageEnemyOrder[] = []): BattleSetup {
+  // 種は client が毎回決める（engine は乱数の元を持たない）。同じ配置でも戦いごとに少し違う展開になる
+  const seed = (Math.random() * 0x100000000) >>> 0;
+  return stageSetupWith(currentStage(), session.placements.map((p) => ({ ...p })), seed, myOrders);
 }

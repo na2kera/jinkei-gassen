@@ -2,13 +2,17 @@
 // 画面の向き（横長・縦長）は起動時と、親要素の大きさが変わったときに決め直す（assumptions S13）。
 
 import Phaser from 'phaser';
-import { installAudioUnlock } from './audio/sfx.ts';
+import { installAudioUnlock, setMuted } from './audio/sfx.ts';
+import { savedMuted } from './save.ts';
 import { installDebug } from './debug.ts';
 import { computeLayout, getLayout, LAYOUT_EVENT, sameSize, setLayout } from './layout.ts';
 import { BattleScene } from './scenes/BattleScene.ts';
 import { BootScene } from './scenes/BootScene.ts';
 import { DeployScene } from './scenes/DeployScene.ts';
+import { LobbyScene } from './scenes/LobbyScene.ts';
 import { ResultScene } from './scenes/ResultScene.ts';
+import { StageSelectScene } from './scenes/StageSelectScene.ts';
+import { TitleScene } from './scenes/TitleScene.ts';
 import { FONT_FAMILY } from './ui/text.ts';
 
 function parentSize(): { w: number; h: number } {
@@ -19,6 +23,8 @@ function parentSize(): { w: number; h: number } {
 async function start(): Promise<void> {
   // どの画面でも、最初の操作で音を解禁する（iOS Safari 対策。手本の走れだいごくんと同じ）
   installAudioUnlock();
+  // 前に音を切っていたら、切ったまま始める
+  setMuted(savedMuted());
   await document.fonts.load(`16px "${FONT_FAMILY}"`, '陣形合戦');
   const size = parentSize();
   setLayout(computeLayout(size.w, size.h));
@@ -36,7 +42,7 @@ async function start(): Promise<void> {
     },
     // 音は今回は入れない（入れるときは手本と同じく WebAudio を最初の操作で解禁する）
     audio: { noAudio: true },
-    scene: [BootScene, DeployScene, BattleScene, ResultScene],
+    scene: [BootScene, TitleScene, StageSelectScene, LobbyScene, DeployScene, BattleScene, ResultScene],
   });
 
   // 向きが変わったら内部の大きさを変え、シーンに組み直させる。

@@ -4,7 +4,9 @@
 
 import {
   DT,
+  MAX_ORDERS,
   ORDER_KINDS,
+  ROUT_TICKS,
   ORDER_TARGETS,
   type BattleEvent,
   type BattleSummary,
@@ -42,24 +44,16 @@ import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
 
-/**
- * 敗走してから消えるまでの刻み（assumptions S6 の5秒）。engine の数字は公開されていないので、絵のためだけにここで持つ。
- * ずれても、engine が 'gone' にした時点で絵は消えるので、散らばり方が少し変わるだけで済む。
- */
-const ROUT_VANISH_TICKS = 50;
 /** 号令の表示を出しておく長さ（ミリ秒） */
 const ANNOUNCE_MS = 2000;
 /** 号令がかかった部隊の旗がはためく長さ（ミリ秒） */
 const WAVE_MS = 900;
 /** 決着の表示を出してから結果の画面へ移るまで（ミリ秒） */
 const END_DELAY_MS = 2200;
-/**
- * 近接で戦っているとみなす中心どうしの距離（マス）。engine の近接の距離 1.05（design §3.5）に少し余裕を足す。
- * BattleView には「誰と戦っているか」が入っていないので、見た目のための近似。
- */
-const ENGAGE_DIST = 1.15;
-/** 弓が届く距離（マス。design §3.5 の 4.5）。矢の演出のための近似 */
-const ARROW_RANGE = 4.5;
+/** これより遠い相手への攻撃は弓とみなし、矢を飛ばす（マス）。engine の近接の距離 1.05（design §3.5）に少し余裕を足す */
+const MELEE_DIST = 1.3;
+/** 「やめる」を2回押すまでの猶予（ミリ秒）。押し間違いで戦いが消えないよう、1回目は確かめるだけにする */
+const QUIT_ARM_MS = 2500;
 
 /**
  * 戦闘の画面に渡すもの。BattleSource を作るのは呼ぶ側（1人用は配置の画面、対戦は部屋の画面）。
@@ -69,6 +63,12 @@ export interface BattleSceneData {
   source: BattleSource;
   field: Field;
   viewer: Side;
+  /** 号令の欄を出すか（第1章の前半の面は出さない） */
+  orders: boolean;
+  /** 「やめる」で戻る先 */
+  quitTo: { scene: string; data?: object };
+  /** 結果の画面に渡す面の id（対戦では空） */
+  stageId: string;
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -78,7 +78,12 @@ export class BattleScene extends Phaser.Scene {
   private lastMarksLeft = -1;
   private interp = new FrameInterpolator();
   private speed = 1;
-  private totalOrders = 3;
+  private totalOrders = MAX_ORDERS;
+  private ordersShown = true;
+  private quitTo: BattleSceneData['quitTo'] = { scene: 'Deploy' };
+  private stageId = '';
+  private quitArmedUntil = 0;
+  private quitButton: Button | null = null;
   private selectedTarget: OrderTarget | null = null;
   private routStart = new Map<number, number>();
   private announceQueue: { text: string; until: number }[] = [];
@@ -87,6 +92,7 @@ export class BattleScene extends Phaser.Scene {
   private waveUntil = new Map<number, number>();
   private nextShot = new Map<number, number>();
   private nextSpark = new Map<number, number>();
+  private readonly byId = new Map<number, UnitSample>();
   private ended = false;
   private endShownAt = 0;
   private summary: BattleSummary | null = null;
@@ -118,6 +124,9 @@ export class BattleScene extends Phaser.Scene {
     this.source = data.source ?? null;
     if (data.field) this.field = data.field;
     this.viewer = data.viewer ?? 0;
+    this.ordersShown = data.orders ?? true;
+    this.quitTo = data.quitTo ?? { scene: 'Deploy' };
+    this.stageId = data.stageId ?? '';
   }
 
   create(): void {
@@ -211,23 +220,12 @@ export class BattleScene extends Phaser.Scene {
     this.speedButton = this.source?.setSpeed
       ? new Button(this, panel.speed, '', () => this.setSpeed(this.speed === 1 ? 2 : 1)).addTo(this.root)
       : null;
+    // やめる：1回目は「やめる？」に変わるだけで、猶予のうちにもう一度押すと配置の画面へ戻る
+    this.quitButton = new Button(this, panel.quit, 'やめる', () => this.pressQuit()).addTo(this.root);
     this.targetButtons = new Map();
-    ORDER_TARGETS.forEach((t, i) => {
-      const r = panel.targets[i];
-      if (!r) return;
-      const b = new Button(this, r, TARGET_LABEL[t], () => {
-        this.selectedTarget = this.selectedTarget === t ? null : t;
-        this.refreshControls();
-      }).addTo(this.root);
-      this.targetButtons.set(t, b);
-    });
     this.orderButtons = new Map();
-    ORDER_KINDS.forEach((k, i) => {
-      const r = panel.orders[i];
-      if (!r) return;
-      const b = new Button(this, r, ORDER_LABEL[k], () => this.giveOrder(k)).addTo(this.root);
-      this.orderButtons.set(k, b);
-    });
+    // 号令を教える前の面では、号令の欄を出さない
+    if (this.ordersShown) this.buildOrders(panel);
 
     this.announceBox = this.add.graphics();
     this.announceText = addText(this, 0, 0, '').setOrigin(0, 0.5);
@@ -239,6 +237,37 @@ export class BattleScene extends Phaser.Scene {
 
     this.refreshControls();
     this.render();
+  }
+
+  private buildOrders(panel: ReturnType<typeof battlePanel>): void {
+    ORDER_TARGETS.forEach((t, i) => {
+      const r = panel.targets[i];
+      if (!r) return;
+      const b = new Button(this, r, TARGET_LABEL[t], () => {
+        this.selectedTarget = this.selectedTarget === t ? null : t;
+        this.refreshControls();
+      }).addTo(this.root);
+      this.targetButtons.set(t, b);
+    });
+    ORDER_KINDS.forEach((k, i) => {
+      const r = panel.orders[i];
+      if (!r) return;
+      const b = new Button(this, r, ORDER_LABEL[k], () => this.giveOrder(k)).addTo(this.root);
+      this.orderButtons.set(k, b);
+    });
+  }
+
+  private pressQuit(): void {
+    const now = this.time.now;
+    if (now < this.quitArmedUntil) {
+      this.scene.start(this.quitTo.scene, this.quitTo.data);
+      return;
+    }
+    this.quitArmedUntil = now + QUIT_ARM_MS;
+    this.quitButton?.setText('やめる？').setSelected(true);
+    this.time.delayedCall(QUIT_ARM_MS, () => {
+      if (this.time.now >= this.quitArmedUntil) this.quitButton?.setText('やめる').setSelected(false);
+    });
   }
 
   private rebuild(): void {
@@ -257,7 +286,7 @@ export class BattleScene extends Phaser.Scene {
     const first = !this.interp.latest;
     this.interp.push(frame);
     if (first) {
-      this.totalOrders = frame.view.ordersLeft[this.viewer];
+      this.totalOrders = MAX_ORDERS;
       // build のときは場面がまだないので、ここで部隊の絵を作る
       this.rebuild();
     }
@@ -345,7 +374,7 @@ export class BattleScene extends Phaser.Scene {
     else playLose();
     this.time.delayedCall(END_DELAY_MS, () => {
       const units = this.interp.latest?.view.units ?? [];
-      session.result = { summary: s, viewer: this.viewer, units };
+      session.result = { stageId: this.stageId, summary: s, viewer: this.viewer, units };
       debug.result = session.result;
       this.scene.start('Result');
     });
@@ -399,8 +428,9 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private refreshControls(): void {
-    // まだ build していない（場面が届く前）ときは何もしない
-    if (this.targetButtons.size === 0) return;
+    // まだ build していないときは何もしない
+    if (!this.root) return;
+    this.quitButton?.setEnabled(!this.ended);
     this.speedButton?.setText(`${this.speed}倍`).setEnabled(!this.ended);
     const src = this.source;
     for (const [t, b] of this.targetButtons) {
@@ -443,7 +473,7 @@ export class BattleScene extends Phaser.Scene {
       let rout = 0;
       if (u.status === 'routing') {
         if (!this.routStart.has(u.id)) this.routStart.set(u.id, frame.tick);
-        rout = Math.max(0.01, Math.min(1, (tick - (this.routStart.get(u.id) ?? tick)) / ROUT_VANISH_TICKS));
+        rout = Math.max(0.01, Math.min(1, (tick - (this.routStart.get(u.id) ?? tick)) / ROUT_TICKS));
       }
       const p = this.fv.toScreen(s.x, s.y);
       const d = this.fv.dirToScreen(s.fx, s.fy);
@@ -465,7 +495,7 @@ export class BattleScene extends Phaser.Scene {
       });
       if (this.inspect?.unit === u.id) inspected = s;
     }
-    this.shootArrows(samples, fighting, now);
+    this.shootArrows(samples, now);
     this.effects?.update(now);
     this.drawTime(frame);
     this.drawMarks(frame);
@@ -475,65 +505,61 @@ export class BattleScene extends Phaser.Scene {
   }
 
   /**
-   * 近接で戦っている部隊を探し、ぶつかる所に火花と土煙を出す。
-   * BattleView には戦っている相手が入っていないので、中心どうしが近い敵の組を「戦っている」とみなす（見た目だけの近似）。
+   * 場面の attacking（その刻みに実際に攻撃した相手）から、近接で戦っている部隊を探し、ぶつかる所に火花と土煙を出す。
+   * 相手が近接の距離にいる攻撃を近接とみなす（遠い相手への攻撃は弓なので、shootArrows で矢を飛ばす）。
+   * 攻撃した側と、された側の両方を「戦っている」として、前列を突く動きを付ける。
    */
   private findFights(samples: UnitSample[], now: number): Set<number> {
     const fighting = new Set<number>();
-    const active = samples.filter((s) => s.view.status === 'active');
-    for (let i = 0; i < active.length; i++) {
-      const a = active[i]!;
-      for (let j = i + 1; j < active.length; j++) {
-        const b = active[j]!;
-        if (a.view.side === b.view.side) continue;
-        if (Math.abs(a.x - b.x) > ENGAGE_DIST || Math.abs(a.y - b.y) > ENGAGE_DIST) continue;
-        if (Math.hypot(a.x - b.x, a.y - b.y) > ENGAGE_DIST) continue;
-        fighting.add(a.view.id);
-        fighting.add(b.view.id);
-        if (this.ended) continue;
-        const key = Math.min(a.view.id, b.view.id) * 1000 + Math.max(a.view.id, b.view.id);
-        if (now < (this.nextSpark.get(key) ?? 0)) continue;
-        this.nextSpark.set(key, now + (350 + Math.random() * 500) / this.speed);
-        const pa = this.fv.toScreen(a.x, a.y);
-        const pb = this.fv.toScreen(b.x, b.y);
-        const mx = (pa.x + pb.x) / 2 + (Math.random() - 0.5) * 8;
-        const my = (pa.y + pb.y) / 2 + (Math.random() - 0.5) * 8;
-        if (Math.random() < 0.6) this.effects?.spark(mx, my, now);
-        else this.effects?.dust(mx, my, now);
-        playClash();
-      }
+    const byId = this.sampleIndex(samples);
+    for (const a of samples) {
+      const target = a.view.attacking;
+      if (target === null || a.view.status !== 'active') continue;
+      const b = byId.get(target);
+      if (!b || Math.hypot(a.x - b.x, a.y - b.y) > MELEE_DIST) continue;
+      fighting.add(a.view.id);
+      fighting.add(b.view.id);
+      if (this.ended) continue;
+      const key = Math.min(a.view.id, b.view.id) * 1000 + Math.max(a.view.id, b.view.id);
+      if (now < (this.nextSpark.get(key) ?? 0)) continue;
+      this.nextSpark.set(key, now + (350 + Math.random() * 500) / this.speed);
+      const pa = this.fv.toScreen(a.x, a.y);
+      const pb = this.fv.toScreen(b.x, b.y);
+      const mx = (pa.x + pb.x) / 2 + (Math.random() - 0.5) * 8;
+      const my = (pa.y + pb.y) / 2 + (Math.random() - 0.5) * 8;
+      if (Math.random() < 0.6) this.effects?.spark(mx, my, now);
+      else this.effects?.dust(mx, my, now);
+      playClash();
     }
     return fighting;
   }
 
-  /**
-   * 弓兵から、いちばん近い敵へ矢を飛ばす。BattleView には「誰が誰を撃っているか」が入っていないので、
-   * 止まっていて近接で戦っておらず、届く距離に敵がいる弓兵が撃っているとみなす（見た目だけの近似）。
-   */
-  private shootArrows(samples: UnitSample[], fighting: Set<number>, now: number): void {
+  private sampleIndex(samples: UnitSample[]): Map<number, UnitSample> {
+    this.byId.clear();
+    for (const s of samples) this.byId.set(s.view.id, s);
+    return this.byId;
+  }
+
+  /** 場面の attacking が近接の距離より遠い部隊（弓兵）から、その相手へ矢を飛ばす */
+  private shootArrows(samples: UnitSample[], now: number): void {
     if (this.ended) return;
+    const byId = this.byId;
     for (const s of samples) {
       const u = s.view;
-      if (u.kind !== 'archer' || u.status !== 'active' || u.order === 'retreat') continue;
-      if (s.moving || fighting.has(u.id)) continue;
+      const target = u.attacking;
+      if (target === null || u.status !== 'active') continue;
+      const t = byId.get(target);
+      if (!t) continue;
+      const d = Math.hypot(t.x - s.x, t.y - s.y);
+      if (d <= MELEE_DIST) continue;
       if (now < (this.nextShot.get(u.id) ?? 0)) continue;
-      let best: UnitSample | null = null;
-      let bestD = ARROW_RANGE;
-      for (const t of samples) {
-        if (t.view.side === u.side || t.view.status !== 'active') continue;
-        const d = Math.hypot(t.x - s.x, t.y - s.y);
-        if (d <= bestD) {
-          best = t;
-          bestD = d;
-        }
-      }
-      if (!best) continue;
-      this.nextShot.set(u.id, now + (800 + Math.random() * 400) / this.speed);
+      this.nextShot.set(u.id, now + (700 + Math.random() * 300) / this.speed);
+      pushCapped(debug.arrows, [u.id, target], 50);
       const from = this.fv.toScreen(s.x, s.y);
-      const to = this.fv.toScreen(best.x, best.y);
-      const life = Math.max(160, Math.min(420, bestD * CELL * 3)) / this.speed;
+      const to = this.fv.toScreen(t.x, t.y);
+      const life = Math.max(160, Math.min(420, d * CELL * 3)) / this.speed;
       for (let i = 0; i < 2; i++) {
-        const j = () => (Math.random() - 0.5) * 10;
+        const j = (): number => (Math.random() - 0.5) * 10;
         this.effects?.arrow(from.x + j(), from.y + j(), to.x + j(), to.y + j(), now + i * 60, life);
       }
       playArrow();
@@ -554,6 +580,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private drawMarks(frame: BattleFrame): void {
+    if (!this.ordersShown) return;
     const left = frame.view.ordersLeft[this.viewer];
     // 回数が変わったときだけ描き直す
     if (left === this.lastMarksLeft) return;
