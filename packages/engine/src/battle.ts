@@ -125,6 +125,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
         status: 'active',
         goneReason: null,
         target: null,
+        attacking: null,
         order: null,
         stats: { dealt: 0, taken: 0, flankDealt: 0, routsCaused: 0 },
         flankPhase: 1,
@@ -928,11 +929,14 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   const damages: Damage[] = [];
   const shocks: { defender: number; amount: number }[] = [];
   const bounced: number[] = [];
+  // attacking は「この刻みに実際に攻撃した相手」。狙いに向かっているだけの部隊は null のまま
+  for (const u of state.units) u.attacking = null;
   for (const a of state.units) {
     const d = decisions[a.id] as Decision;
     if ((snap[a.id] as Snap).status !== 'active' || d.attack === null || d.target === null) continue;
     const def = state.units[d.target] as Unit;
     if ((snap[def.id] as Snap).status === 'gone') continue;
+    a.attacking = def.id;
     if (d.attack === 'melee') {
       if (a.kind === 'cavalry' && a.runup >= T.impactRunup && terrainAllowsImpact(state.field, a, def)) {
         const imp = impactDamage(state, snap, a, def);

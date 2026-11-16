@@ -115,6 +115,8 @@ export interface Unit {
   goneReason: null | 'routed' | 'destroyed';
   /** 攻撃し、向く相手（§3.6.1） */
   target: number | null;
+  /** この刻みに実際に攻撃した相手（近接でも弓でも）。攻撃していなければ null */
+  attacking: number | null;
   order: null | UnitOrder;
   stats: UnitStats;
   /** 迂回の進み具合。1: 端の列へ出る、2: 端に沿って進む、3: 敵を狙う */
@@ -198,6 +200,8 @@ export interface UnitView {
   morale: number;
   status: UnitStatus;
   order: OrderKind | null;
+  /** この刻みに実際に攻撃した相手（近接でも弓でも）。攻撃していなければ null。両軍ぶんを渡す（狙いは渡さない） */
+  attacking: number | null;
   /** 自軍の部隊だけ。viewer が 'both' なら全部隊 */
   stance?: Stance;
 }
@@ -245,7 +249,8 @@ export type ArmyErrorCode =
   | 'hq_count'
   | 'over_budget'
   | 'too_many_units'
-  | 'too_few_units';
+  | 'too_few_units'
+  | 'over_roster';
 
 export interface ArmyError {
   code: ArmyErrorCode;

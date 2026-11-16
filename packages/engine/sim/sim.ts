@@ -4,7 +4,8 @@
 //   pnpm --filter @jinkei/engine sim accept [a1 a2 ...]（合格条件の実測値）
 // Node 22 の --experimental-strip-types で TS を直接動かす（新しいパッケージを足さないため）。
 
-import { DT, summarize } from '../src/index.ts';
+import { DT, STAGES, stageLineArmy, starsFor, summarize } from '../src/index.ts';
+import { runStage } from './stagelib.ts';
 import type { TemplateId } from '../src/index.ts';
 import { a1, a2, a3, a4, a5, a8, a11, a13, a14 } from './scenes.ts';
 import { formatMatrix, matchupSetup, matrixStats, renderBoard, runMatrix, runSetup, TEMPLATE_IDS, unitLine } from './lib.ts';
@@ -13,6 +14,7 @@ function usage(): void {
   console.log('使い方:');
   console.log('  sim battle <ひな形A> <ひな形B> [種=1] [何秒おき=3]');
   console.log('  sim matrix');
+  console.log('  sim stage <面の id> [solution|line] [種] [何秒おき]');
   console.log('  sim accept [a1 a2 a3 a4 a5 a8 a11 a13 a14]   合格条件の実測値');
   console.log(`ひな形: ${TEMPLATE_IDS.join(', ')}`);
 }
@@ -65,6 +67,38 @@ function accept(which: string[]): void {
   if (want('a14')) { const r = a14(); console.log(`A14 陣営0の勝ち ${r.side0Wins} そのうち hq ${f(r.hqShare)}`); }
 }
 
+function stage(args: string[]): void {
+  const [id, which, seedArg, everyArg] = args;
+  const st = STAGES.find((x) => x.id === id);
+  if (!st || (which !== undefined && which !== 'solution' && which !== 'line')) {
+    console.log('使い方: sim stage <面の id> [solution|line] [種=5000] [何秒おき=3]');
+    console.log(`面: ${STAGES.map((x) => x.id).join(', ')}`);
+    process.exitCode = 1;
+    return;
+  }
+  const army = which === 'line' ? stageLineArmy(st) : st.solution;
+  const seed = seedArg ? Number(seedArg) : 5000;
+  const every = Math.max(1, Math.round((everyArg ? Number(everyArg) : 3) / DT));
+  console.log(`${st.id} ${st.name}（${which ?? 'solution'}）  種 ${seed}  ヒント「${st.hint}」`);
+  const show = (s: Parameters<typeof renderBoard>[0]): void => {
+    console.log(`--- ${(s.tick * DT).toFixed(1)} 秒`);
+    console.log(renderBoard(s));
+    console.log(`  0: ${unitLine(s, 0)}`);
+    console.log(`  1: ${unitLine(s, 1)}`);
+  };
+  const state = runStage(
+    st,
+    army,
+    seed,
+    (s) => {
+      if (s.tick % every === 0 || s.outcome) show(s);
+    },
+    which === 'line' ? [] : (st.solutionOrders ?? []),
+  );
+  const sum = summarize(state);
+  console.log(`結果: 勝者 ${sum.winner} 理由 ${sum.reason} ${sum.seconds}秒 残り ${(sum.remaining[0] * 100).toFixed(0)}% 星 ${starsFor(sum, 0)}`);
+}
+
 function matrix(): void {
   const t0 = performance.now();
   const games = runMatrix();
@@ -76,4 +110,5 @@ const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === 'battle') battle(rest);
 else if (cmd === 'matrix') matrix();
 else if (cmd === 'accept') accept(rest);
+else if (cmd === 'stage') stage(rest);
 else usage();

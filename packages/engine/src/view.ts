@@ -21,6 +21,7 @@ export function viewFor(state: BattleState, viewer: Side | 'both'): BattleView {
       morale: u.morale,
       status: u.status,
       order: u.order ? u.order.kind : null,
+      attacking: u.attacking,
     };
     if (viewer === 'both' || viewer === u.side) v.stance = u.stance;
     return v;

@@ -448,12 +448,14 @@ interface Stage {
   enemy: Placement[];                         // 敵の配置と方針
   enemyOrders?: { atSec: number; target: OrderTarget; kind: OrderKind }[];
   win: { type: 'defeat' } | { type: 'survive' } | { type: 'gate' };   // gate は段階4
-  allow?: { stances?: Stance[]; orders?: boolean };   // 第1章で、まだ教えていない操作を隠す
+  allow?: { stances?: Stance[]; orders?: boolean; templates?: boolean };   // 第1章で、まだ教えていない操作を隠す
   fog?: { col: number; row: number }[];       // 配置中に見せない敵のマス
   solution: Placement[];                      // 勝てる配置の見本（テスト用。画面には出さない）
+  solutionOrders?: { atSec: number; target: OrderTarget; kind: OrderKind }[];   // 見本で出す号令（号令を使う面のテスト用）
 }
 ```
 
+- `allow.stances` は選べる方針の一覧。兵種の初期設定の方針は、いつでも選べる。空の配列なら方針の切り替えを出さず、初期設定の方針で動く。省略すると、すべて選べる。
 - `win` が `defeat` の面は、時間切れで負け（`side0_loses`）。`survive` の面は、時間切れで勝ち（`side0_wins`）。どちらの面でも、本陣と壊滅の決着はふつうに起きる。
 - **星**：勝ったときだけ付く。残った兵の割合（§3.6.4 と同じ数え方）が 0.8 以上で3つ、0.5 以上で2つ、それ未満で1つ。負けと引き分けは0で、記録は変えない。面ごとに、これまでの最高の星を保存する。
 - すべての面で、`solution` が種20個のうち18個以上で勝ち、平均で星2つ以上を取れることをテストする。
