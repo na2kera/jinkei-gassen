@@ -97,6 +97,11 @@ export class RoomClient {
   private readonly errorListeners = new Set<(m: ErrorMessage) => void>();
 
   /** 状態が変わったら呼ぶ（room・reveal・result・status・failure のどれか） */
+  /** 購読の数（開発用：解放し忘れがないかを確かめるため） */
+  get listenerCounts(): { room: number; snap: number; error: number } {
+    return { room: this.listeners.size, snap: this.snapListeners.size, error: this.errorListeners.size };
+  }
+
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);

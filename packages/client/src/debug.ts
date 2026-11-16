@@ -165,6 +165,8 @@ export function installDebug(game: Phaser.Game): void {
         wantReady: pvpLocal.wantReady,
         local: pvpLocal.placements.map((p) => ({ ...p })),
         failure: client.failure,
+        // 通信の購読の数（解放し忘れがないかを確かめるため）
+        listeners: client.listenerCounts,
       };
     },
     /** いま動いているシーン（2つの画面が同時に動いていないかを確かめるため） */

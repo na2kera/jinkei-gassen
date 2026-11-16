@@ -138,7 +138,7 @@ class PvpFlow {
   requestRestart(scene: Phaser.Scene, data?: object): void {
     if (this.pending && this.pending !== scene.scene.key) return;
     this.pending = scene.scene.key;
-    this.want = { key: scene.scene.key, data };
+    this.setWant({ key: scene.scene.key, data });
   }
 
   // ---- 配置の下書きと確定（まだ届いていない分を持ち、届くまで送り直す） ----
@@ -286,7 +286,21 @@ class PvpFlow {
     const cur = this.current();
     if (cur === key && key !== 'Battle' && !force) return;
     this.pending = key;
-    this.want = { key, data };
+    this.setWant({ key, data });
+  }
+
+  /**
+   * 行き先を覚える。まだ始まっていない前の行き先が戦闘の画面なら、その source を解放する。
+   * source は予約の時点で作って通信を購読するが、上書きされると BattleScene が始まらず、
+   * シーンの終わりの処理による解放も呼ばれないため（予約の時点で作るものは、ほかの画面にはない）
+   */
+  private setWant(next: { key: string; data: object | undefined }): void {
+    const prev = this.want;
+    if (prev && prev.data !== next.data) {
+      const source = (prev.data as { source?: unknown } | undefined)?.source;
+      if (source instanceof RemoteBattleSource) source.dispose();
+    }
+    this.want = next;
   }
 
   /** 覚えておいた行き先へ切り替える（フレームの始め、Phaser がシーンの待ち行列を処理する前に呼ばれる） */
