@@ -322,6 +322,35 @@ describe('門', () => {
     step(s, []);
     expect(s.units[1]!.attacking).toBe(g);
   });
+  it('本陣狙いの弓兵も、門と戦い始めたあとに撃てる敵が現れたら、門を殴らずに撃つ', () => {
+    // レビューの再現：自軍は本陣 (11,15)・弓兵 (5,10,本陣狙い)、敵は本陣 (0,0)・盾兵 (11,0,守備)。敵は刻み 200 に全軍突撃して出てくる
+    const r = createBattle({
+      ...castleSetup('advance', 1),
+      armies: [[p('hq', 11, 15, 'hold'), p('archer', 5, 10, 'hunt')], [p('hq', 0, 0, 'hold'), p('shield', 11, 0, 'hold')]],
+      scriptedOrders: [{ tick: 200, side: 1, target: 'all', kind: 'charge' }],
+    });
+    if (!r.ok) throw new Error(r.error.message);
+    const s = r.value;
+    const g = s.gate!.id;
+    let hitGate = false;
+    let inRange = 0;
+    while (!s.outcome && s.tick < 400) {
+      // 狙いは刻みの初めの位置で決まるので、距離は step の前に測る
+      const a = s.units[1]!;
+      const sh = s.units[3]!;
+      const shootable = a.status === 'active' && sh.status === 'active' && Math.hypot(a.x - sh.x, a.y - sh.y) <= T.archerRange - 0.05;
+      const t = s.tick;
+      step(s, []);
+      if (a.attacking === g) hitGate = true;
+      if (shootable) {
+        inRange++;
+        expect(a.attacking, `刻み ${t}`).toBe(3);
+      }
+    }
+    // 先に門と戦い始め（詰まったときの決まり）、そのあと盾兵が撃てる距離に入る
+    expect(hitGate).toBe(true);
+    expect(inRange).toBeGreaterThan(0);
+  });
   it('残った兵の割合・開戦時の兵数に、門を数えない', () => {
     const s = gateScene();
     const initial1 = s.units.filter((u) => u.side === 1 && u.kind !== 'gate').reduce((a, u) => a + u.men, 0);

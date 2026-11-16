@@ -662,6 +662,17 @@ function decide(ctx: TickCtx, u: Unit): Decision {
       return d;
     };
     if (meleeEnemies.includes(hq)) return fightWith(hq);
+    // 弓兵は、近接の距離にふつうの敵がいなければ、撃てる敵を撃つ（兵種ごとの違いが方針より先）。門と戦っている途中・詰まって戦い始めるときも同じ。
+    // 詰まって戦っている相手（huntStuckOn）は覚えたままにし、撃てる敵がいなくなったら、また戦う
+    if (u.kind === 'archer' && meleeEnemies.length === 0) {
+      const t = pickArrow(ctx, u);
+      if (t !== null) {
+        d.anchor = true;
+        d.target = t;
+        d.attack = 'arrow';
+        return d;
+      }
+    }
     // 詰まって戦っている相手がまだ近接の距離にいれば、戦い続ける。消えたか離れたら、また本陣へ向かう
     // 門の前で止められたときも、詰まったときの決まりで門と戦う
     const stuckCandidates = gateInMelee && ctx.gateUp !== null ? [...meleeEnemies, ctx.gateUp] : meleeEnemies;
