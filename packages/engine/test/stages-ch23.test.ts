@@ -42,11 +42,13 @@ describe('第2章・第3章の面の作り', () => {
     for (const t of ['hill', 'fence']) expect(has('3-4', t), t).toBe(true);
     for (const t of ['hill', 'forest', 'river', 'fence']) expect(has('3-5', t), t).toBe(true);
   });
-  it('兵数の比（本陣を含めた開戦時の兵数の合計）：2-1・2-3 は敵が多い、2-4 は倍、2-5 は 1.5 倍、3-4 は倍以上', () => {
+  it('兵数の比（本陣を含めた開戦時の兵数の合計）：2-1・2-3 は敵が多い、2-4 は 1.8 倍以上、2-5 は 1.5 倍、3-4 は倍以上', () => {
     const ratio = (id: string): number => menOf(byId(id).enemy) / menOf(byId(id).solution);
     expect(ratio('2-1')).toBeGreaterThan(1.1);
     expect(ratio('2-3')).toBeGreaterThan(1.1);
-    expect(ratio('2-4')).toBeGreaterThanOrEqual(2);
+    expect(ratio('2-4')).toBeGreaterThanOrEqual(1.8);
+    // 2-4 は弓兵を2つ以上持つ（後ろから弓で削る面）
+    expect(byId('2-4').roster.archer).toBeGreaterThanOrEqual(2);
     expect(ratio('2-5')).toBeGreaterThanOrEqual(1.5);
     expect(ratio('3-4')).toBeGreaterThanOrEqual(2);
     // 見本は手持ちを使い切る（比が手持ち全体の比になるように）
@@ -131,10 +133,14 @@ describe('星3つは取れる（第2章・第3章）', () => {
     '2-2': { ps: [['hq', 5, 15, 'hold'], ['infantry', 6, 10, 'hold'], ['infantry', 1, 11, 'hold'], ['infantry', 5, 10, 'hold'], ['infantry', 10, 10, 'hold'], ['infantry', 4, 10, 'hold'], ['infantry', 8, 10, 'hunt'], ['shield', 11, 13, 'hold'], ['shield', 0, 13, 'hold'], ['shield', 3, 10, 'hold'], ['archer', 4, 11, 'hold'], ['archer', 6, 11, 'advance'], ['archer', 5, 11, 'advance']], orders: [{ atSec: 10, target: 'left', kind: 'brace' }, { atSec: 23, target: 'all', kind: 'brace' }, { atSec: 26, target: 'right', kind: 'charge' }] },
     // 見本そのまま
     '2-3': { ps: [['hq', 5, 14, 'hold'], ['infantry', 2, 10, 'hold'], ['infantry', 3, 10, 'hold'], ['infantry', 4, 10, 'hold'], ['infantry', 7, 10, 'hold'], ['infantry', 8, 10, 'hold'], ['infantry', 9, 10, 'hold'], ['shield', 5, 10, 'hold'], ['shield', 6, 10, 'hold'], ['archer', 4, 11, 'hold'], ['archer', 5, 11, 'hold'], ['archer', 6, 11, 'hold']], orders: [] },
+    // 盾兵6で谷をふさぎ、弓兵2を1行あけた後ろ（行 12）の列 1・4 に散らす
+    '2-4': { ps: [['hq', 2, 14, 'hold'], ['shield', 0, 10, 'hold'], ['shield', 1, 10, 'hold'], ['shield', 2, 10, 'hold'], ['shield', 3, 10, 'hold'], ['shield', 4, 10, 'hold'], ['shield', 5, 10, 'hold'], ['archer', 1, 12, 'hold'], ['archer', 4, 12, 'hold']], orders: [] },
     // 探索
     '2-5': { ps: [['hq', 8, 10, 'hold'], ['infantry', 7, 10, 'hold'], ['infantry', 11, 10, 'hold'], ['infantry', 4, 11, 'flank'], ['infantry', 0, 10, 'hold'], ['shield', 5, 10, 'hold'], ['shield', 6, 10, 'hold'], ['archer', 3, 12, 'hunt'], ['archer', 4, 13, 'hold'], ['cavalry', 8, 13, 'flank'], ['cavalry', 4, 10, 'hold']], orders: [{ atSec: 10, target: 'all', kind: 'brace' }, { atSec: 16, target: 'center', kind: 'brace' }, { atSec: 23, target: 'all', kind: 'charge' }] },
     // 探索
     '3-1': { ps: [['hq', 3, 10, 'hold'], ['infantry', 9, 10, 'hold'], ['infantry', 9, 12, 'hold'], ['infantry', 5, 10, 'hold'], ['infantry', 7, 10, 'hold'], ['infantry', 8, 10, 'hold'], ['infantry', 2, 10, 'hold'], ['shield', 4, 10, 'hold'], ['shield', 1, 11, 'hold'], ['shield', 6, 10, 'hold'], ['shield', 10, 11, 'hold'], ['archer', 6, 11, 'hold'], ['archer', 5, 11, 'hunt']], orders: [{ atSec: 22, target: 'all', kind: 'brace' }, { atSec: 28, target: 'right', kind: 'charge' }, { atSec: 58, target: 'all', kind: 'brace' }] },
+    // 探索（敵の弓兵を5にしたあと。置く順を変えても星3つ）
+    '3-2': { ps: [['hq', 5, 14, 'hold'], ['shield', 4, 10, 'advance'], ['shield', 6, 15, 'advance'], ['shield', 5, 10, 'advance'], ['shield', 6, 10, 'advance'], ['infantry', 3, 10, 'advance'], ['infantry', 9, 12, 'advance'], ['archer', 4, 11, 'advance'], ['archer', 6, 12, 'advance'], ['archer', 5, 12, 'advance'], ['infantry', 7, 10, 'hold'], ['infantry', 4, 15, 'hold'], ['cavalry', 3, 13, 'flank'], ['cavalry', 9, 14, 'hold']], orders: [{ atSec: 20, target: 'center', kind: 'brace' }, { atSec: 36, target: 'all', kind: 'brace' }, { atSec: 52, target: 'all', kind: 'brace' }] },
     // 探索（鶴翼のひな形から。置く順を変えても星3つ）
     '3-3': { ps: [['hq', 5, 15, 'hold'], ['shield', 5, 12, 'hold'], ['shield', 6, 12, 'hold'], ['shield', 4, 12, 'hold'], ['shield', 8, 11, 'hold'], ['archer', 3, 13, 'hunt'], ['archer', 6, 13, 'advance'], ['infantry', 3, 10, 'advance'], ['infantry', 9, 10, 'advance'], ['infantry', 10, 10, 'advance'], ['cavalry', 0, 10, 'flank'], ['infantry', 1, 10, 'advance'], ['infantry', 2, 11, 'advance'], ['infantry', 8, 12, 'advance'], ['cavalry', 11, 13, 'flank']], orders: [{ atSec: 5, target: 'left', kind: 'retreat' }, { atSec: 38, target: 'right', kind: 'charge' }] },
     // 探索（手持ちを直したあと。置く順を変えても12個以上で星3つ）

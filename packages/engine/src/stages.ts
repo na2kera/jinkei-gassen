@@ -164,13 +164,13 @@ export const STAGES: Stage[] = [
     index: 4,
     name: '谷の狭い道',
     hint: '狭い道なら、数の差は？',
-    // 幅 6 の谷。敵は倍（2.08 倍）の歩兵
+    // 幅 6 の谷。敵は歩兵15で、自軍の 1.88 倍（敵は16部隊が上限なので、弓兵を2つ持たせると倍にはならない）
     field: plainField(6),
-    roster: { hq: 1, shield: 6, archer: 1 },
+    roster: { hq: 1, shield: 6, archer: 2 },
     enemy: [hq(2, 0), ...at('infantry', 'advance', span(0, 5), 4), ...at('infantry', 'advance', span(0, 5), 3), ...at('infantry', 'advance', [1, 2, 3], 2)],
     win: { type: 'defeat' },
     // 盾兵6つで谷の幅いっぱいをふさぎ（守備）、その後ろから弓兵が撃つ。盾の正面からしか当たれないので、数の差が消える
-    solution: [hq(2, 14), ...at('shield', 'hold', span(0, 5), 10), ...at('archer', 'hold', [2], 11)],
+    solution: [hq(2, 14), ...at('shield', 'hold', span(0, 5), 10), ...at('archer', 'hold', [2, 3], 11)],
   },
   {
     id: '2-5',
@@ -217,13 +217,13 @@ export const STAGES: Stage[] = [
     index: 2,
     name: '砦攻め',
     hint: '門へ向かう間、本陣は誰が守る？',
-    // 行 5 が城壁で、門は (5, 5)。城壁の内側に弓兵6・歩兵3と本陣。城壁の外の両端（行 7・8）に、本陣狙いの騎兵4と迂回の騎兵2
+    // 行 5 が城壁で、門は (5, 5)。城壁の内側に弓兵5・歩兵3と本陣。城壁の外の両端（行 7・8）に、本陣狙いの騎兵4と迂回の騎兵2
     field: terrainField(12, [['wall', [...span(0, 4), ...span(6, 11)], [5]]]),
     roster: { hq: 1, shield: 4, infantry: 4, archer: 3, cavalry: 2 },
     enemy: [
       hq(5, 1),
       ...at('archer', 'hold', [3, 4, 6, 7], 4),
-      ...at('archer', 'hold', [4, 6], 3),
+      ...at('archer', 'hold', [5], 3),
       ...at('infantry', 'hold', [3, 7], 2),
       ...at('infantry', 'hold', [5], 2),
       ...at('cavalry', 'hunt', [0, 1, 10, 11], 7),
