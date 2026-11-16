@@ -40,10 +40,27 @@ export interface SaveData {
    * サーバーは新しい配置の段階に入ると下書きを消すので、手元に残しておかないと、読み込み直した人の配置が空になるため
    */
   pvpArmy: Placement[];
+  /** 保存した陣形（design §5.6。8つまで） */
+  formations: SavedFormation[];
+  /** 戦闘の画面の視点（design §5.7） */
+  view: 'top' | 'oblique';
 }
 
+/**
+ * 保存した陣形。配置は、配置エリアの左上を原点にした列と行で持つ（面や陣営が変わっても同じ形で呼び出せるように）。
+ * width は保存したときの配置エリアの幅（幅の違う戦場で呼び出すと、外になる部隊は飛ばす）
+ */
+export interface SavedFormation {
+  name: string;
+  width: number;
+  units: Placement[];
+}
+
+/** 陣形の数の上限 */
+export const MAX_FORMATIONS = 8;
+
 function empty(): SaveData {
-  return { v: 1, stars: {}, placements: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [] };
+  return { v: 1, stars: {}, placements: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], formations: [], view: 'top' };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -80,6 +97,17 @@ function sanitize(raw: unknown): SaveData {
   if (typeof raw.pid === 'string' && /^[0-9a-f]{32}$/.test(raw.pid)) data.pid = raw.pid;
   if (typeof raw.name === 'string' && [...raw.name].length <= 12) data.name = raw.name;
   if (typeof raw.roomCode === 'string' && /^\d{4}$/.test(raw.roomCode)) data.roomCode = raw.roomCode;
+  if (Array.isArray(raw.formations)) {
+    for (const f of raw.formations) {
+      if (!isRecord(f) || typeof f.name !== 'string' || !Number.isInteger(f.width) || !Array.isArray(f.units)) continue;
+      const len = [...f.name].length;
+      if (len < 1 || len > 8 || (f.width as number) < 1 || (f.width as number) > 12) continue;
+      if (f.units.length > 16 || !f.units.every(isPlacement)) continue;
+      if (data.formations.length >= MAX_FORMATIONS) break;
+      data.formations.push({ name: f.name, width: f.width as number, units: (f.units as Placement[]).map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance })) });
+    }
+  }
+  if (raw.view === 'top' || raw.view === 'oblique') data.view = raw.view;
   if (Array.isArray(raw.pvpArmy) && raw.pvpArmy.length <= 16 && raw.pvpArmy.every(isPlacement)) {
     data.pvpArmy = raw.pvpArmy.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
   }
@@ -196,5 +224,40 @@ export function savedPvpArmy(): Placement[] {
 
 export function savePvpArmy(list: readonly Placement[]): void {
   loadSave().pvpArmy = list.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
+  write();
+}
+
+export function savedFormations(): SavedFormation[] {
+  return loadSave().formations.map((f) => ({ ...f, units: f.units.map((p) => ({ ...p })) }));
+}
+
+/**
+ * 陣形を保存する。同じ名前があれば上書きする。8つあって新しい名前なら、replaceIndex の陣形と入れ替える
+ * （replaceIndex がなければ保存せず false を返す。画面が入れ替える相手を選ばせる）
+ */
+export function saveFormation(f: SavedFormation, replaceIndex?: number): boolean {
+  const list = loadSave().formations;
+  const same = list.findIndex((x) => x.name === f.name);
+  const copy = { name: f.name, width: f.width, units: f.units.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance })) };
+  if (same >= 0) list[same] = copy;
+  else if (list.length < MAX_FORMATIONS) list.push(copy);
+  else if (replaceIndex !== undefined && replaceIndex >= 0 && replaceIndex < list.length) list[replaceIndex] = copy;
+  else return false;
+  write();
+  return true;
+}
+
+export function deleteFormation(name: string): void {
+  const data = loadSave();
+  data.formations = data.formations.filter((f) => f.name !== name);
+  write();
+}
+
+export function savedView(): 'top' | 'oblique' {
+  return loadSave().view;
+}
+
+export function saveView(v: 'top' | 'oblique'): void {
+  loadSave().view = v;
   write();
 }

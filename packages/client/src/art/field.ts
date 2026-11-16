@@ -20,11 +20,10 @@ export function addFieldImage(scene: Phaser.Scene, fv: FieldView, field: Field, 
   const tex = scene.textures.createCanvas(key, r.w, r.h);
   if (tex) {
     const ctx = tex.getContext();
-    // 戦場の外側（狭い戦場の左右）は岩壁
+    // 戦場の外側（狭い戦場の左右と、斜めで縦が縮んだときの上下）は岩壁。先に全体に敷き、戦場のマスで上書きする
+    ctx.imageSmoothingEnabled = false;
     for (let y = 0; y < r.h; y += TILE) {
       for (let x = 0; x < r.w; x += TILE) {
-        const inside = r.x + x >= fv.rect.x && r.x + x < fv.rect.x + fv.rect.w;
-        if (inside) continue;
         const v = ((x / TILE) * 5 + (y / TILE) * 3) % 3;
         const src = scene.textures.get(`${ROCK_KEY}-${v}`).getSourceImage() as HTMLCanvasElement;
         ctx.drawImage(src, x, y);
@@ -36,8 +35,9 @@ export function addFieldImage(scene: Phaser.Scene, fv: FieldView, field: Field, 
         // 平地の模様は、マスの位置から決まった順で混ぜる（毎回同じ見た目にする）
         const variant = (col * 7 + row * 13 + ((col * row) % 5)) % PLAIN_VARIANTS;
         const src = scene.textures.get(tileKey(terrain, variant)).getSourceImage() as HTMLCanvasElement;
+        // 斜めのときはマスの高さが縮むので、タイルを同じ比で縮めて敷く（ぼかさずに縮める）
         const c = fv.cellRect(col, row);
-        ctx.drawImage(src, c.x - r.x, c.y - r.y);
+        ctx.drawImage(src, c.x - r.x, c.y - r.y, c.w, c.h);
       }
     }
     tex.refresh();

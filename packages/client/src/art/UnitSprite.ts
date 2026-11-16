@@ -9,7 +9,7 @@ import Phaser from 'phaser';
 import type { Rect } from '../layout.ts';
 import { drawOrderIcon, drawStanceIcon } from './icons.ts';
 import { ART, COLOR, SIDE_COLOR } from './palette.ts';
-import { shapeOf, soldierKey, soldierReach, soldierSize, type Dir4, type SoldierShape } from './textures.ts';
+import { shapeOf, soldierKey, soldierReach, soldierSize, standKey, standSize, type Dir4, type SoldierShape } from './textures.ts';
 
 export interface UnitLook {
   /** 部隊の中心（画面の px） */
@@ -40,6 +40,8 @@ export interface UnitLook {
   wave?: boolean;
   /** 旗がはみ出さないようにする範囲（戦場の矩形） */
   bounds?: Rect;
+  /** 縦の縮み（斜め見下ろしは 0.6。省略すると 1）。兵の並びは戦場の座標で決めてから、縦だけこの比で縮める */
+  yScale?: number;
 }
 
 interface Slot {
@@ -104,11 +106,13 @@ export class UnitSprite {
     seed: number,
     soldierLayer: Phaser.GameObjects.Container,
     markLayer: Phaser.GameObjects.Container,
+    /** 斜め見下ろし（立った兵の絵にし、奥のものから先に描けるよう、兵ごとに縦の位置を depth に入れる） */
+    private readonly oblique = false,
   ) {
     this.seed = seed;
     this.slots = slotsOf(kind);
     for (const s of this.slots) {
-      const key = soldierKey(team, s.shape, 0, 0);
+      const key = this.keyOf(s.shape, 0, 0);
       const img = scene.add.image(0, 0, key).setOrigin(0, 0);
       soldierLayer.add(img);
       this.soldiers.push(img);
@@ -125,7 +129,12 @@ export class UnitSprite {
     return Math.min(this.slots.length, Math.ceil(menRatio * this.slots.length));
   }
 
+  private keyOf(shape: SoldierShape, dir: Dir4, frame: 0 | 1): string {
+    return this.oblique ? standKey(this.team, shape, dir, frame) : soldierKey(this.team, shape, dir, frame);
+  }
+
   apply(look: UnitLook): void {
+    const yScale = look.yScale ?? 1;
     const dir = dirOf(look.dx, look.dy);
     const time = look.time ?? 0;
     // 並びの「右」は前を時計回りに 90° 回した向き
@@ -147,7 +156,7 @@ export class UnitSprite {
       // 歩いている・敗走しているときは、兵ごとに拍をずらして2コマを交互に出す
       const walking = look.moving || look.rout > 0;
       const frame = (walking ? (beat + this.seed + i) % 2 : 0) as 0 | 1;
-      const key = soldierKey(this.team, slot.shape, dir, frame);
+      const key = this.keyOf(slot.shape, dir, frame);
       if (key !== this.keys[i]) {
         this.keys[i] = key;
         img.setTexture(key);
@@ -158,10 +167,17 @@ export class UnitSprite {
       const lx = slot.lx * spread + sc.x * jitter;
       const ly = slot.ly * spread + sc.y * jitter - forward;
       const wx = look.x + lx * rx - ly * look.dx;
-      const wy = look.y + lx * ry - ly * look.dy;
-      const size = soldierSize(slot.shape, dir);
-      // 整数の px に揃えてドットが崩れないようにする
-      img.setPosition(Math.round(wx - size.w / 2), Math.round(wy - size.h / 2));
+      const wy = look.y + (lx * ry - ly * look.dy) * yScale;
+      if (this.oblique) {
+        // 立った兵は、足もとを並びの位置に置く。奥の兵ほど上に描かれ、depth（縦の位置）の順で手前が上に重なる
+        const size = standSize(slot.shape);
+        img.setPosition(Math.round(wx - size.w / 2), Math.round(wy - size.h + 1));
+        img.setDepth(wy + wx * 0.001);
+      } else {
+        const size = soldierSize(slot.shape, dir);
+        // 整数の px に揃えてドットが崩れないようにする
+        img.setPosition(Math.round(wx - size.w / 2), Math.round(wy - size.h / 2));
+      }
       img.setVisible(true);
     });
     this.drawMarks(look, count > 0, time);
@@ -185,8 +201,9 @@ export class UnitSprite {
     const cy = Math.round(look.y);
     const flagW = hq ? 10 : 6;
     const flagH = hq ? 8 : 4;
-    const poleH = hq ? 24 : 20;
-    let poleTop = hq ? -22 : -18;
+    // 斜めのときは、立った兵より高く旗を立てる
+    const poleH = this.oblique ? (hq ? 30 : 26) : hq ? 24 : 20;
+    let poleTop = this.oblique ? (hq ? -34 : -30) : hq ? -22 : -18;
     // 戦場の右端からはみ出すなら、旗を竿の左に付け替える。上端からはみ出すなら、竿ごと下げる
     let mirror = false;
     const b = look.bounds;
@@ -207,11 +224,14 @@ export class UnitSprite {
     g.clear();
     if (!alive) return;
     if (look.highlight) {
+      // 号令の相手の枠。斜めのときは、立った兵（足もとから上へ伸びる）を囲む平たい形にする
+      const top = this.oblique ? -18 : -12;
+      const bottom = this.oblique ? 6 : 12;
       g.fillStyle(COLOR.highlight, 1);
-      g.fillRect(-12, -12, 24, 2);
-      g.fillRect(-12, 10, 24, 2);
-      g.fillRect(-12, -10, 2, 20);
-      g.fillRect(10, -10, 2, 20);
+      g.fillRect(-12, top, 24, 2);
+      g.fillRect(-12, bottom - 2, 24, 2);
+      g.fillRect(-12, top + 2, 2, bottom - top - 4);
+      g.fillRect(10, top + 2, 2, bottom - top - 4);
     }
     if (look.rout > 0) return;
     // 旗竿は画面の上下に立てる（部隊の向きでは回さない）
@@ -242,7 +262,7 @@ export class UnitSprite {
         g.fillRect((mirror ? poleX - w : poleX + 2) + (i > 0 ? shift : 0), fy + i * 2, w, 2);
       }
     }
-    if (look.order) drawOrderIcon(g, look.order, -12, -12);
+    if (look.order) drawOrderIcon(g, look.order, -12, this.oblique ? -26 : -12);
     if (look.stance) drawStanceIcon(g, look.stance, -12, 5);
   }
 

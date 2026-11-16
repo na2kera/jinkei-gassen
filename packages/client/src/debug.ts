@@ -25,7 +25,7 @@ import { LocalBattleSource } from './battle/LocalBattleSource.ts';
 import { unitReach } from './art/UnitSprite.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
 import { client, pvp, pvpLocal } from './net/pvp.ts';
-import { clearSave, loadSave, playerId, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug } from './save.ts';
+import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
 
 interface DebugHooks {
@@ -50,6 +50,10 @@ interface DebugHooks {
   placeSolution: (() => void) | null;
   /** 見本の配置を置き、見本の号令を予定に入れて開戦する */
   startSolution: (() => boolean) | null;
+  /** 配置の画面の陣形の保存と呼び出し（確かめるときに画面の操作を省くため） */
+  /** 戦闘の画面の視点を切り替える */
+  toggleView: (() => void) | null;
+  formationOps: { save: (name: string, replaceIndex?: number) => boolean; recall: (name: string) => boolean } | null;
   /** 矢を飛ばした組（射手の id と、その刻みの attacking）。最後の 50 組 */
   arrows: [number, number][];
 }
@@ -70,6 +74,8 @@ export const debug: DebugHooks = {
   back: null,
   placeSolution: null,
   startSolution: null,
+  formationOps: null,
+  toggleView: null,
   arrows: [],
 };
 
@@ -248,6 +254,24 @@ export function installDebug(game: Phaser.Game): void {
         return f;
       },
       maps: () => PVP_MAPS,
+    },
+    /** 戦闘の画面の視点を切り替える（画面の「視点」と同じ） */
+    toggleView(): boolean {
+      if (!debug.toggleView) return false;
+      debug.toggleView();
+      return true;
+    },
+    /** 保存した陣形の一覧 */
+    get formations(): unknown {
+      return savedFormations().map((f) => ({ name: f.name, width: f.width, units: f.units.length, kinds: f.units.map((u) => u.kind[0]).join('') }));
+    },
+    /** いまの配置を陣形として保存する（配置の画面だけ） */
+    saveFormation(name: string, replaceIndex?: number): boolean {
+      return debug.formationOps ? debug.formationOps.save(name, replaceIndex) : false;
+    },
+    /** 保存した陣形を呼び出す（配置の画面だけ） */
+    recallFormation(name: string): boolean {
+      return debug.formationOps ? debug.formationOps.recall(name) : false;
     },
     /** 部屋を出る（画面の「出る」と同じ） */
     pvpLeave(): void {

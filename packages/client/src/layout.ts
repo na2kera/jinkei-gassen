@@ -20,6 +20,11 @@ export interface Layout {
   field: Rect;
   /** 操作の欄 */
   panel: Rect;
+  /**
+   * 縦長だけ：戦場のすぐ下の1行の帯。中間地帯には地形が置かれるので、戦場の上に文字の箱を重ねず、
+   * 面のヒント・陣形名・対戦の残り時間などはここに出す。横長は操作の欄に空きがあるので null
+   */
+  strip: Rect | null;
 }
 
 /** 1マスの大きさ（px） */
@@ -32,13 +37,17 @@ const FIELD_H = CELL * FIELD_ROWS;
 const LANDSCAPE_W = 640;
 const LANDSCAPE_H = 400;
 const PORTRAIT_W = 320;
-// S13 の下限は 568 だが、面の名前・戻る・ひな形2列が入るよう 600 にする（これより細長い端末では左右が少し空く）
-const PORTRAIT_MIN_H = 600;
+// S13 の下限は 568 だが、面の名前・戻る・ひな形2列と、戦場の下の1行の帯が入るよう 620 にする（これより細長い端末では左右が少し空く）
+const PORTRAIT_MIN_H = 620;
 // 縦に伸ばしすぎると FIT で全体が小さくなるので上限を置く（細長い端末でも 19.5:9 程度まで）
 const PORTRAIT_MAX_H = 720;
 const GAP = 8;
 /** 戦場の枠（4px）のぶんも含めた、戦場と操作の欄のあいだ */
 const PANEL_GAP = 12;
+/** 縦長の、戦場の下の1行の帯（戦場の枠 4px のぶんを空けてから置く） */
+const STRIP_GAP = 8;
+const STRIP_H = 24;
+const PANEL_GAP_PORTRAIT = 6;
 /** 縦長の操作の欄の高さ（配置と戦闘のどちらのボタンも収まる高さ） */
 const PORTRAIT_PANEL_H = 190;
 
@@ -57,20 +66,24 @@ export function computeLayout(parentW: number, parentH: number): Layout {
       height: LANDSCAPE_H,
       field: { x: GAP, y: GAP, w: FIELD_W, h: FIELD_H },
       panel: { x: GAP * 2 + FIELD_W, y: GAP, w: LANDSCAPE_W - FIELD_W - GAP * 3, h: FIELD_H },
+      strip: null,
     };
   }
   // 画面の縦横比に合わせて縦を伸ばす。伸ばした分は、戦場と操作の欄をひとまとまりにして縦の中央に寄せ、
   // 上下に均等に配る（操作の欄の下だけが大きく空かないようにするため）
   const h = Math.min(PORTRAIT_MAX_H, Math.max(PORTRAIT_MIN_H, Math.round((PORTRAIT_W * parentH) / parentW)));
   const fieldX = (PORTRAIT_W - FIELD_W) / 2;
-  const block = FIELD_H + PANEL_GAP + PORTRAIT_PANEL_H;
+  // 戦場・1行の帯・操作の欄を、ひとまとまりにして縦の中央に寄せる
+  const block = FIELD_H + STRIP_GAP + STRIP_H + PANEL_GAP_PORTRAIT + PORTRAIT_PANEL_H;
   const top = even(Math.max(GAP, (h - block) / 2));
+  const stripY = top + FIELD_H + STRIP_GAP;
   return {
     mode: 'portrait',
     width: PORTRAIT_W,
     height: h,
     field: { x: fieldX, y: top, w: FIELD_W, h: FIELD_H },
-    panel: { x: GAP, y: top + FIELD_H + PANEL_GAP, w: PORTRAIT_W - GAP * 2, h: PORTRAIT_PANEL_H },
+    strip: { x: GAP, y: stripY, w: PORTRAIT_W - GAP * 2, h: STRIP_H },
+    panel: { x: GAP, y: stripY + STRIP_H + PANEL_GAP_PORTRAIT, w: PORTRAIT_W - GAP * 2, h: PORTRAIT_PANEL_H },
   };
 }
 
@@ -109,6 +122,8 @@ export interface DeployPanel {
   roster: Rect[];
   /** ひな形7つ */
   templates: Rect[];
+  /** 陣形の保存と呼び出し（ひな形と同じ並びの8つ目） */
+  formations: Rect;
   start: Rect;
 }
 
@@ -124,14 +139,14 @@ export function deployPanel(l: Layout): DeployPanel {
   if (l.mode === 'landscape') {
     const roster = row(p.x, p.y + 42, p.w, 36, 5, 4);
     const t1 = row(p.x, p.y + 88, p.w, 32, 4, 4);
-    const t2 = row(p.x, p.y + 124, p.w, 32, 4, 4).slice(0, 3);
-    return { back, name, mute, roster, templates: [...t1, ...t2], start: { x: p.x, y: p.y + p.h - 40, w: p.w, h: 40 } };
+    const t2 = row(p.x, p.y + 124, p.w, 32, 4, 4);
+    return { back, name, mute, roster, templates: [...t1, ...t2.slice(0, 3)], formations: t2[3]!, start: { x: p.x, y: p.y + p.h - 40, w: p.w, h: 40 } };
   }
   // ひな形は1列に7つ並べると、名前が枠に触れるほど窮屈になるので、4つと3つの2列にする
   const roster = row(p.x, p.y + 38, p.w, 32, 5, 4);
   const t1 = row(p.x, p.y + 76, p.w, 30, 4, 4);
-  const t2 = row(p.x, p.y + 110, p.w, 30, 4, 4).slice(0, 3);
-  return { back, name, mute, roster, templates: [...t1, ...t2], start: { x: p.x, y: p.y + 148, w: p.w, h: 38 } };
+  const t2 = row(p.x, p.y + 110, p.w, 30, 4, 4);
+  return { back, name, mute, roster, templates: [...t1, ...t2.slice(0, 3)], formations: t2[3]!, start: { x: p.x, y: p.y + 148, w: p.w, h: 38 } };
 }
 
 /** 戦闘の画面の操作の欄 */
@@ -148,6 +163,8 @@ export interface BattlePanel {
   targets: Rect[];
   /** 突撃・堅守・後退 */
   orders: Rect[];
+  /** 視点（真上・斜め）の切り替え（design §5.7） */
+  view: Rect;
 }
 
 export function battlePanel(l: Layout): BattlePanel {
@@ -160,7 +177,9 @@ export function battlePanel(l: Layout): BattlePanel {
   const quit = { x: p.x + 96, y: p.y, w: mute.x - 4 - (p.x + 96), h: top };
   const targets = row(p.x, p.y + top + 8, p.w, bh, 4, 4);
   const orders = row(p.x, p.y + top + 8 + bh + 6, p.w, bh, 3, 4);
-  return { time: { x: p.x, y: p.y, w: 40, h: top }, marks, quit, mute, speed, targets, orders };
+  const ordersBottom = p.y + top + 8 + bh + 6 + bh;
+  const view = { x: p.x, y: ordersBottom + 8, w: 104, h: l.mode === 'landscape' ? 32 : 30 };
+  return { time: { x: p.x, y: p.y, w: 40, h: top }, marks, quit, mute, speed, targets, orders, view };
 }
 
 /** 結果の画面。画面全体の中央に、枠の箱とボタンの列を縦に並べる */
@@ -300,6 +319,8 @@ export interface PvpDeployPanel {
   minus: Rect[];
   plus: Rect[];
   templates: Rect[];
+  /** 陣形の保存と呼び出し（ひな形と同じ並びの8つ目） */
+  formations: Rect;
   start: Rect;
 }
 
@@ -326,7 +347,40 @@ export function pvpDeployPanel(l: Layout): PvpDeployPanel {
   const tY = pmY + pmH + (land ? 10 : 4);
   const tH = land ? 32 : 28;
   const t1 = row(p.x, p.y + tY, p.w, tH, 4, 4);
-  const t2 = row(p.x, p.y + tY + tH + 4, p.w, tH, 4, 4).slice(0, 3);
+  const t2all = row(p.x, p.y + tY + tH + 4, p.w, tH, 4, 4);
+  const t2 = t2all.slice(0, 3);
   const start = land ? { x: p.x, y: p.y + p.h - 40, w: p.w, h: 40 } : { x: p.x, y: p.y + tY + 2 * tH + 8, w: p.w, h: 30 };
-  return { back, budget, mute, roster, minus, plus, templates: [...t1, ...t2], start };
+  return { back, budget, mute, roster, minus, plus, templates: [...t1, ...t2], formations: t2all[3]!, start };
+}
+
+/**
+ * 配置の画面で、ヒント・陣形名・対戦の知らせを出す場所。
+ * 横長は操作の欄の空き（ひな形の下）に2行。縦長は戦場の下の帯に1行で、左に知らせ（またはヒントの「？」）、右に陣形名。
+ */
+export interface DeployInfoLayout {
+  mode: 'panel' | 'strip';
+  /** ヒント・対戦の知らせの行（左寄せ） */
+  info: { x: number; y: number; w: number };
+  /** 陣形名（横長は左寄せの2行目、縦長は帯の右寄せ） */
+  formation: { x: number; y: number; w: number };
+  /** 縦長の1人用で、ヒントを出す「？」のボタン */
+  hintButton: Rect | null;
+}
+
+export function deployInfo(l: Layout, pvp: boolean): DeployInfoLayout {
+  const s = l.strip;
+  if (!s) {
+    const p = l.panel;
+    // ひな形の下（1人用はひな形2列の下、対戦は −＋ とひな形2列の下）
+    const y = p.y + (pvp ? 214 : 172);
+    return { mode: 'panel', info: { x: p.x, y, w: p.w }, formation: { x: p.x, y: y + 30, w: p.w }, hintButton: null };
+  }
+  const mid = s.y + s.h / 2;
+  const hintButton = pvp ? null : { x: s.x, y: s.y, w: 32, h: s.h };
+  return {
+    mode: 'strip',
+    info: { x: s.x + (hintButton ? 40 : 0), y: mid, w: s.w - (hintButton ? 40 : 0) },
+    formation: { x: s.x + s.w, y: mid, w: s.w },
+    hintButton,
+  };
 }

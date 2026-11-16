@@ -6,7 +6,7 @@
 import type { Field } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
-import { gateKey, RUBBLE_KEY } from './textures.ts';
+import { gateKey, RUBBLE_KEY, tallGateKey } from './textures.ts';
 
 export class GateSprite {
   private readonly img: Phaser.GameObjects.Image;
@@ -23,7 +23,10 @@ export class GateSprite {
     private readonly layer: Phaser.GameObjects.Container,
   ) {
     const r = fv.cellRect(col, row);
-    this.img = scene.add.image(r.x, r.y, gateKey(0)).setOrigin(0, 0);
+    // 斜めのときは、高さのある門の絵を、マスの手前の端に下の端を合わせて立てる（奥のものから描けるよう depth を付ける）
+    this.img = fv.oblique
+      ? scene.add.image(r.x, r.y + r.h, tallGateKey(0)).setOrigin(0, 1).setDepth(r.y + r.h)
+      : scene.add.image(r.x, r.y, gateKey(0)).setOrigin(0, 0);
     layer.add(this.img);
   }
 
@@ -32,7 +35,7 @@ export class GateSprite {
     const stage: 0 | 1 | 2 = ratio > 2 / 3 ? 0 : ratio > 1 / 3 ? 1 : 2;
     if (stage === this.stage) return;
     this.stage = stage;
-    this.img.setTexture(gateKey(stage));
+    this.img.setTexture(this.fv.oblique ? tallGateKey(stage) : gateKey(stage));
   }
 
   get isBroken(): boolean {
@@ -40,21 +43,22 @@ export class GateSprite {
   }
 
   /** 破れた。門のマスと、両隣の城壁のマスを瓦礫にする。戻り値は瓦礫にしたマスの中心（演出の場所） */
-  breakOpen(): { x: number; y: number }[] {
+  breakOpen(): { x: number; y: number; col: number }[] {
     if (this.broken) return [];
     this.broken = true;
     this.img.setVisible(false);
-    const centers: { x: number; y: number }[] = [];
+    const centers: { x: number; y: number; col: number }[] = [];
     for (const c of [this.col - 1, this.col, this.col + 1]) {
       if (c < 0 || c >= this.field.width) continue;
       const t = this.field.terrain[this.row * this.field.width + c];
       // 門のマスと、両隣のうち城壁のマスだけ（field は開戦時のものなので、崩れる前の城壁が入っている）
       if (c !== this.col && t !== 'wall') continue;
       const r = this.fv.cellRect(c, this.row);
-      const img = this.scene.add.image(r.x, r.y, RUBBLE_KEY).setOrigin(0, 0);
+      // 瓦礫は平たい絵なので、斜めのときも縮めて敷き、どの部隊よりも下に描く
+      const img = this.scene.add.image(r.x, r.y, RUBBLE_KEY).setOrigin(0, 0).setDisplaySize(r.w, r.h).setDepth(-1e6);
       this.layer.add(img);
       this.rubble.push(img);
-      centers.push({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+      centers.push({ x: r.x + r.w / 2, y: r.y + r.h / 2, col: c });
     }
     return centers;
   }

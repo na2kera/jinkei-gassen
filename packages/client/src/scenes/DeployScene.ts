@@ -12,6 +12,7 @@ import {
   applyTemplate,
   defaultStance,
   listTemplates,
+  MAX_UNITS,
   pvpArmyLimits,
   recognizeFormation,
   stageEnemyVisible,
@@ -42,8 +43,8 @@ import { playFormation, playPlace, playRemove, playStance, playStart } from '../
 import { centeredFieldView, FieldView, type Cell } from '../battle/FieldView.ts';
 import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
 import { debug } from '../debug.ts';
-import { savedPvpArmy } from '../save.ts';
-import { CELL, deployPanel, getLayout, LAYOUT_EVENT, pvpDeployPanel, type Rect } from '../layout.ts';
+import { saveFormation as saveFormationTo, savedFormations as savedFormationList, savedPvpArmy } from '../save.ts';
+import { CELL, deployInfo, deployPanel, getLayout, LAYOUT_EVENT, pvpDeployPanel, type DeployInfoLayout, type Rect } from '../layout.ts';
 import { client, pvp, pvpLocal } from '../net/pvp.ts';
 import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
 import { Button } from '../ui/Button.ts';
@@ -51,6 +52,8 @@ import { KIND_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
+import { FormationDialog } from '../ui/FormationDialog.ts';
+import type { SavedFormation } from '../save.ts';
 import type { BattleSceneData } from './BattleScene.ts';
 
 /** 地形の名前と効きめ（配置の画面で、マスを押している間だけ1行で出す）。数字は出さず、何に効くかだけを書く */
@@ -65,6 +68,10 @@ const GATE_TEXT = '門：破れば通れる';
 
 /** これ以上動いたら「押した」ではなく「引きずった」とみなす（px） */
 const DRAG_THRESHOLD = 6;
+/** 縦長で「？」を押したときに、ヒントを出しておく長さ（ミリ秒） */
+const HINT_MS = 3000;
+/** 陣形を呼び出したときなどの1行の知らせを出しておく長さ（ミリ秒） */
+const TOAST_MS = 2500;
 /** 「出る」を2回押すまでの猶予（ミリ秒） */
 const LEAVE_ARM_MS = 2500;
 
@@ -114,16 +121,20 @@ export class DeployScene extends Phaser.Scene {
   private popupIndex: number | null = null;
   private selectedKind: Kind | null = null;
   private press: Press | null = null;
-  private formationBox!: Phaser.GameObjects.Graphics;
+  private infoLayout: DeployInfoLayout | null = null;
+  private hintBox!: Phaser.GameObjects.Graphics;
+  private hintUntil = 0;
+  private hintShown = false;
   private formationText!: Phaser.GameObjects.Text;
   private formationName: string | null = null;
   private terrainBox!: Phaser.GameObjects.Graphics;
   private terrainText!: Phaser.GameObjects.Text;
   private terrainPointer: number | null = null;
+  private dialog: FormationDialog | null = null;
+  private toastUntil = 0;
   private stageIdArg: string | undefined;
   // 対戦だけ
   private budgetText: Phaser.GameObjects.Text | null = null;
-  private infoBox: Phaser.GameObjects.Graphics | null = null;
   private infoText: Phaser.GameObjects.Text | null = null;
   private leaveArmedUntil = 0;
   private unsubscribe: (() => void)[] = [];
@@ -152,8 +163,10 @@ export class DeployScene extends Phaser.Scene {
     this.press = null;
     this.formationName = null;
     this.budgetText = null;
-    this.infoBox = null;
     this.infoText = null;
+    this.dialog = null;
+    this.hintUntil = 0;
+    this.hintShown = false;
     this.unsubscribe = [];
     this.leaveArmedUntil = 0;
 
@@ -207,15 +220,26 @@ export class DeployScene extends Phaser.Scene {
         const d = this.fv.dirToScreen(0, 1);
         s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
       });
-      // ヒントは、配置中は空いている中間地帯に出す（目に入るが、部隊の邪魔にならない）
-      this.bandText(this.stage.hint, 'top');
-    } else {
-      // 対戦では、中間地帯に残り時間と相手の様子を出す（毎フレーム書き換える）
-      this.infoBox = this.add.graphics();
-      this.infoText = addText(this, 0, 0, '', 16, COLOR.cream).setOrigin(0.5, 0.5);
     }
-    this.formationBox = this.add.graphics();
-    this.formationText = addText(this, 0, 0, '', 16, COLOR.goldHi).setOrigin(0.5, 0.5).setVisible(false);
+    // ヒント・対戦の知らせ・陣形名は、戦場の上には重ねない（中間地帯に地形があるため）。
+    // 横長は操作の欄の空き、縦長は戦場の下の帯に出す
+    const info = deployInfo(layout, this.pvpMode);
+    this.infoLayout = info;
+    const strip = info.mode === 'strip';
+    this.hintBox = this.add.graphics();
+    this.infoText = addText(this, info.info.x, info.info.y, '', 16, this.pvpMode ? COLOR.cream : COLOR.muted).setOrigin(0, strip ? 0.5 : 0);
+    this.formationText = addText(this, info.formation.x, info.formation.y, '', 16, COLOR.goldHi)
+      .setOrigin(strip ? 1 : 0, strip ? 0.5 : 0)
+      .setVisible(false);
+    if (!this.pvpMode) {
+      if (!strip) this.infoText.setText(this.stage.hint);
+      else if (info.hintButton) {
+        // 縦長は帯が狭いので、ヒントは「？」を押したときだけ出す
+        new Button(this, info.hintButton, '？', () => {
+          this.hintUntil = this.time.now + HINT_MS;
+        });
+      }
+    }
     this.popupLayer = this.add.container(0, 0);
     this.terrainBox = this.add.graphics();
     this.terrainText = addText(this, 0, 0, '', 16, COLOR.cream).setOrigin(0.5, 0.5).setVisible(false);
@@ -237,14 +261,30 @@ export class DeployScene extends Phaser.Scene {
     this.game.events.on(LAYOUT_EVENT, onLayout);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off(LAYOUT_EVENT, onLayout);
+      // 陣形の窓の名前の入力欄（HTML）を残さない
+      this.dialog?.close();
       for (const u of this.unsubscribe) u();
       debug.applyTemplate = null;
       debug.start = null;
       debug.placeSolution = null;
       debug.startSolution = null;
+      debug.formationOps = null;
     });
     debug.applyTemplate = (id) => this.useTemplate(id);
     debug.start = (viewer) => (this.pvpMode ? this.pressReady() : this.startBattle(viewer));
+    debug.formationOps = {
+      save: (name, replaceIndex) => {
+        const z = this.ownZone;
+        const units = this.list.map((p) => ({ kind: p.kind, stance: p.stance, col: p.col - z.col, row: p.row - z.row }));
+        return saveFormationTo({ name, width: z.width, units }, replaceIndex);
+      },
+      recall: (name) => {
+        const f = savedFormationList().find((x) => x.name === name);
+        if (!f) return false;
+        this.recallFormation(f);
+        return true;
+      },
+    };
     if (!this.pvpMode) {
       debug.placeSolution = () => {
         this.closePopup();
@@ -273,7 +313,11 @@ export class DeployScene extends Phaser.Scene {
       if (!r) return;
       this.rosterButtons.set(kind, new Button(this, r, KIND_LABEL[kind], () => this.selectKind(kind)));
     });
-    if (this.templatesShown()) this.addTemplateButtons(panel.templates);
+    if (this.templatesShown()) {
+      this.addTemplateButtons(panel.templates);
+      // 陣形の保存と呼び出しは、ひな形と同じ並びに置き、ひな形を出さない面では出さない
+      this.templateButtons.push(new Button(this, panel.formations, '陣形', () => this.openFormations()));
+    }
     this.startButton = new Button(this, panel.start, '開戦', () => this.startBattle(), { primary: true });
   }
 
@@ -294,6 +338,7 @@ export class DeployScene extends Phaser.Scene {
       if (p) this.plusButtons.set(kind, new Button(this, p, '＋', () => this.changeCount(kind, 1)));
     });
     this.addTemplateButtons(panel.templates);
+    this.templateButtons.push(new Button(this, panel.formations, '陣形', () => this.openFormations()));
     this.startButton = new Button(this, panel.start, '完了', () => this.pressReady(), { primary: true });
     // 部屋の様子（自分と相手の確定・期限）が変わったら、ボタンと表示を直す
     this.unsubscribe.push(client.subscribe(() => this.refresh(false)));
@@ -553,10 +598,104 @@ export class DeployScene extends Phaser.Scene {
     return true;
   }
 
+  // ---- 陣形の保存と呼び出し（design §5.6） ----
+
+  private openFormations(): void {
+    if (this.dialog || this.locked()) return;
+    this.closePopup();
+    this.selectedKind = null;
+    this.refresh(false);
+    this.dialog = new FormationDialog(this, getLayout(), {
+      current: () => {
+        if (this.list.length === 0) return null;
+        const z = this.ownZone;
+        return this.list.map((p) => ({ kind: p.kind, stance: p.stance, col: p.col - z.col, row: p.row - z.row }));
+      },
+      zoneWidth: () => this.ownZone.width,
+      recall: (f) => this.recallFormation(f),
+      toast: (t) => this.showToast(t),
+    }, () => {
+      this.dialog = null;
+    });
+  }
+
+  /**
+   * 呼び出した陣形を置く。保存した順に置いていき、手持ちを超える兵種・配置エリアの外・置けないマス（城壁）・
+   * 重なるマスの部隊は飛ばす。選べない方針は兵種の初期設定に直す。手持ちが余っても足さない（手で置く）。
+   * 対戦では、陣形の編成をそのまま編成にし、予算を超える場合は後ろの部隊から外して収める。
+   */
+  private recallFormation(f: SavedFormation): void {
+    if (this.locked()) return;
+    const z = this.ownZone;
+    let units = f.units.map((u) => ({ ...u }));
+    let trimmed = false;
+    if (this.pvpMode) {
+      const costs = this.costs();
+      const budget = client.room?.rules.budget ?? pvpArmyLimits().budget ?? 0;
+      const maxUnits = client.room?.rules.maxUnits ?? MAX_UNITS - 1;
+      // 本陣は1つだけ。2つ目からは外す
+      let hq = 0;
+      units = units.filter((u) => (u.kind === 'hq' ? ++hq === 1 : true));
+      const cost = (list: typeof units): number => list.reduce((n, u) => n + (u.kind === 'hq' ? 0 : (costs[u.kind] ?? 0)), 0);
+      while (units.length > 0 && (cost(units) > budget || units.filter((u) => u.kind !== 'hq').length > maxUnits)) {
+        // 後ろの部隊（本陣以外）から外す
+        const i = units.map((u) => u.kind !== 'hq').lastIndexOf(true);
+        if (i < 0) break;
+        units.splice(i, 1);
+        trimmed = true;
+      }
+      const roster = countKinds(units);
+      pvpLocal.roster = { ...roster, hq: 1 };
+    }
+    const roster = this.roster();
+    const used: Roster = {};
+    const placed: Placement[] = [];
+    let skipped = 0;
+    const taken = new Set<string>();
+    for (const u of units) {
+      const col = z.col + u.col;
+      const row = z.row + u.row;
+      const inside = u.col >= 0 && u.row >= 0 && u.col < z.width && u.row < z.height;
+      const terrain = inside ? this.field.terrain[row * this.field.width + col] : undefined;
+      const key = `${col},${row}`;
+      if (!inside || terrain === 'wall' || taken.has(key) || (used[u.kind] ?? 0) >= (roster[u.kind] ?? 0)) {
+        skipped++;
+        continue;
+      }
+      taken.add(key);
+      used[u.kind] = (used[u.kind] ?? 0) + 1;
+      placed.push({ kind: u.kind, col, row, stance: this.stanceOkFor(u.kind, u.stance) ? u.stance : defaultStance(u.kind) });
+    }
+    this.setList(placed);
+    playPlace();
+    this.refresh();
+    if (skipped > 0) this.showToast('置けない部隊を除きました');
+    else if (trimmed) this.showToast('予算に合わせて部隊を外しました');
+  }
+
+  /** 1行の知らせを、戦場の上の端に少しのあいだ出す（地形の説明と同じ場所） */
+  private showToast(text: string): void {
+    this.toastUntil = this.time.now + TOAST_MS;
+    this.terrainPointer = null;
+    this.terrainText.setText(text).setVisible(true);
+    const w = Math.ceil(this.terrainText.width / 2) * 2 + 20;
+    const f = this.fv.rect;
+    const area = getLayout().field;
+    const r: Rect = { x: Math.round((area.x + area.w / 2 - w / 2) / 2) * 2, y: f.y + 8, w, h: 28 };
+    this.terrainBox.clear();
+    drawBox(this.terrainBox, r);
+    this.terrainText.setPosition(Math.round(r.x + w / 2), r.y + 14);
+    this.children.bringToTop(this.terrainBox);
+    this.children.bringToTop(this.terrainText);
+    this.time.delayedCall(TOAST_MS, () => {
+      if (this.time.now >= this.toastUntil && this.terrainPointer === null) this.hideTerrain();
+    });
+  }
+
   // ---- 入力（マウスとタッチを同じに扱う。2本目の指は無視する） ----
 
   private onDown(pointer: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]): void {
-    if (this.press || this.locked()) return;
+    if (this.press || this.locked() || this.dialog) return;
     // ボタンの上は、ボタンが受け持つ
     if (over.length > 0) return;
     const hadPopup = this.popupIndex !== null;
@@ -682,25 +821,6 @@ export class DeployScene extends Phaser.Scene {
 
   // ---- 表示 ----
 
-  /** 中間地帯（両軍の配置エリアのあいだ）の行 */
-  private bandRows(): { top: number; bottom: number } {
-    const upper = this.ownZone.row < this.otherZone.row ? this.ownZone : this.otherZone;
-    const lower = upper === this.ownZone ? this.otherZone : this.ownZone;
-    return { top: upper.row + upper.height, bottom: lower.row };
-  }
-
-  /** 中間地帯に、1行の文字を箱に入れて出す（ヒントなど） */
-  private bandText(text: string, where: 'top' | 'bottom'): void {
-    const band = this.bandRows();
-    const pos = this.fv.toScreen(this.field.width / 2, where === 'top' ? band.top + 0.75 : band.bottom - 0.75);
-    const t = addText(this, 0, 0, text, 16, COLOR.cream).setOrigin(0.5, 0.5);
-    const w = Math.ceil(t.width / 2) * 2 + 20;
-    const r: Rect = { x: Math.round((pos.x - w / 2) / 2) * 2, y: Math.round(pos.y / 2) * 2 - 14, w, h: 28 };
-    drawBox(this.add.graphics(), r);
-    t.setPosition(Math.round(r.x + w / 2), r.y + 14);
-    this.children.bringToTop(t);
-  }
-
   /** 相手の配置エリアを、2px の斜線で隠す（相手の配置は見えないことを示す） */
   private drawFog(g: Phaser.GameObjects.Graphics, zone: Zone): void {
     const a = this.fv.cellRect(zone.col, zone.row);
@@ -760,31 +880,52 @@ export class DeployScene extends Phaser.Scene {
   }
 
   override update(): void {
-    if (!this.pvpMode || !this.infoText || !this.infoBox) return;
-    const room = client.room;
-    if (!room) return;
-    // 残り時間と、相手が確定したかを中間地帯に1行で出す
-    const deadline = room.deadlines.setup;
-    const left = deadline === null ? 0 : Math.max(0, Math.ceil((deadline - client.serverNow()) / 1000));
-    const other = room.seats[room.you === 0 ? 1 : 0];
-    const mark = other ? (other.ready ? '相手 確定' : '相手 配置中') : '';
-    // 戦場の名前も小さく添える（どの戦場で戦うかが分かるように）
-    const mapName = PVP_MAPS.find((m) => m.id === room.map)?.name ?? '';
-    const text = `${mapName}  ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}  ${mark}`;
-    if (this.infoText.text === text) return;
-    this.infoText.setText(text);
-    const band = this.bandRows();
-    const pos = this.fv.toScreen(this.field.width / 2, band.top + 0.75);
-    const w = Math.ceil(this.infoText.width / 2) * 2 + 20;
-    const r: Rect = { x: Math.round((pos.x - w / 2) / 2) * 2, y: Math.round(pos.y / 2) * 2 - 14, w, h: 28 };
-    this.infoBox.clear();
-    drawBox(this.infoBox, r);
-    this.infoText.setPosition(Math.round(r.x + w / 2), r.y + 14);
+    this.dialog?.place();
+    const info = this.infoLayout;
+    if (!info || !this.infoText) return;
+    if (this.pvpMode) {
+      const room = client.room;
+      if (!room) return;
+      // 残り時間と、相手が確定したか（と戦場の名前）を1行で出す
+      const deadline = room.deadlines.setup;
+      const left = deadline === null ? 0 : Math.max(0, Math.ceil((deadline - client.serverNow()) / 1000));
+      const other = room.seats[room.you === 0 ? 1 : 0];
+      const mark = other ? (other.ready ? '相手 確定' : '相手 配置中') : '';
+      const mapName = PVP_MAPS.find((m) => m.id === room.map)?.name ?? '';
+      const time = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+      let text = `${mapName}  ${time}  ${mark}`;
+      // 縦長の帯で陣形名と重なるなら、戦場の名前を省く（公開の画面でも出しているため）
+      if (info.mode === 'strip' && this.formationName) {
+        const room2 = info.info.w - this.formationText.width - 8;
+        if (text.length * 16 > room2) text = `${time}  ${mark}`;
+      }
+      if (this.infoText.text !== text) this.infoText.setText(text);
+      return;
+    }
+    if (info.mode === 'strip') {
+      // 縦長の1人用：「？」を押してから3秒だけ、帯にヒントを出す（陣形名はそのあいだ隠す）
+      const showing = this.time.now < this.hintUntil;
+      if (showing !== this.hintShown) {
+        this.hintShown = showing;
+        this.hintBox.clear();
+        if (showing) {
+          const s = getLayout().strip;
+          if (s) drawBox(this.hintBox, s);
+          this.infoText.setPosition((s?.x ?? 0) + 8, info.info.y).setText(this.stage.hint);
+          this.children.bringToTop(this.hintBox);
+          this.children.bringToTop(this.infoText);
+        } else {
+          this.infoText.setText('');
+        }
+        this.formationText.setVisible(!showing && !!this.formationName);
+      }
+    }
   }
 
   /**
    * 陣形名（効果はなく、名前だけ）。配置が変わるたびに調べ、名前が付いたら「鶴翼の陣」のように出す。
    * 新しく名前が付いた瞬間だけ、短い音と、下から 4px 持ち上がる小さな動きを付ける。
+   * 中間地帯には地形があるので戦場の上には出さず、横長は操作の欄、縦長は戦場の下の帯に出す。
    */
   private updateFormation(announce: boolean): void {
     // 配置エリアは「自分が下」なので、陣営0として調べる（対戦の陣営1でも同じ）
@@ -793,34 +934,25 @@ export class DeployScene extends Phaser.Scene {
     const name = found ? (found.name.endsWith('陣') ? found.name : `${found.name}の陣`) : null;
     if (name === this.formationName) return;
     this.formationName = name;
-    this.formationBox.clear();
-    this.tweens.killTweensOf([this.formationBox, this.formationText]);
+    this.tweens.killTweensOf(this.formationText);
+    const base = this.infoLayout?.formation.y ?? 0;
+    this.formationText.setY(base);
     if (!name) {
       this.formationText.setVisible(false);
       return;
     }
-    const band = this.bandRows();
-    const pos = this.fv.toScreen(this.field.width / 2, band.bottom - 0.75);
-    this.formationText.setText(name);
-    const w = Math.ceil(this.formationText.width / 2) * 2 + 24;
-    const r: Rect = { x: Math.round((pos.x - w / 2) / 2) * 2, y: Math.round(pos.y / 2) * 2 - 14, w, h: 28 };
-    drawBox(this.formationBox, { ...r, x: 0, y: 0 });
-    this.formationBox.setPosition(r.x, r.y);
-    this.formationText.setPosition(Math.round(r.x + w / 2), r.y + 14).setVisible(true);
+    this.formationText.setText(name).setVisible(!this.hintShown);
     if (!announce) return;
     playFormation();
     // 2px ずつ段を付けて持ち上げる（なめらかに動かすとドットの見た目から浮くため）
     const lift = { v: 4 };
-    this.formationBox.y = r.y + 4;
-    this.formationText.y = r.y + 14 + 4;
+    this.formationText.y = base + 4;
     this.tweens.add({
       targets: lift,
       v: 0,
       duration: 160,
       onUpdate: () => {
-        const dy = Math.round(lift.v / 2) * 2;
-        this.formationBox.y = r.y + dy;
-        this.formationText.y = r.y + 14 + dy;
+        this.formationText.y = base + Math.round(lift.v / 2) * 2;
       },
     });
   }
