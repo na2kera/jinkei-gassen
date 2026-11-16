@@ -4,11 +4,15 @@
 //   POST /api/rooms              部屋を作る。本文 { pid } → 201 { code }。コードが取れなければ 503 { error: 'busy' }
 //   GET  /api/rooms/:code/ws     WebSocket（?pid=…&name=…）。部屋がない・満員は、つないだあと error を送って閉じる
 //
+// 送信元（IP）ごとに、部屋の作成は1分に10回、入室の試みは1分に30回まで（wrangler.jsonc の ratelimits）。超えたら 429。
+// 4桁のコードの総当たりで友達より先に空席を取られることと、作成の連打で予約と Durable Object の呼び出しを起こされることを抑える。
+//
 // テストのときだけ（開発サーバーに --var JINKEI_TEST_MODE:1 を渡したとき）:
 //   POST /api/rooms の本文に { timing: {...} } を付けて秒数を差し替え、{ codes: [...] } で試すコードの順を決められる
 //   POST /api/rooms/:code/test/alarm     アラームの処理をいま実行する（2回鳴った場合の確認）
 //   POST /api/rooms/:code/test/abort     Durable Object を作り直させる（再開の確認）
 //   POST /api/rooms/:code/test/state     保存した段階・成績・刻みと、インスタンスの識別子を返す
+//   回数の上限の鍵を、見出し X-Test-Rl-Key か、入室の ?rlkey= で差し替える（テストごとに別の送信元として数えるため）
 
 import { DEFAULT_TIMING, parseTimingOverride, type Timing } from './timing.ts';
 import type { CreateRoomResponse } from './protocol.ts';
@@ -24,6 +28,25 @@ const MAX_BODY_BYTES = 2048;
 /** テスト用の機能を有効にするか。wrangler.jsonc の vars には入れない（デプロイされるため） */
 function isTestMode(env: Env): boolean {
   return (env as unknown as Record<string, unknown>)['JINKEI_TEST_MODE'] === '1';
+}
+
+/** 回数の上限を数える鍵。ふつうは送信元の IP。テストのときだけ差し替えられる */
+function limitKey(request: Request, url: URL, env: Env): string {
+  if (isTestMode(env)) {
+    const k = request.headers.get('X-Test-Rl-Key') ?? url.searchParams.get('rlkey');
+    if (k !== null && k !== '') return `test:${k.slice(0, 64)}`;
+  }
+  return request.headers.get('CF-Connecting-IP') ?? 'unknown';
+}
+
+/** 上限の内か。数える仕組みが失敗したときは通す（遊べなくなるより、制限が一時的に効かないほうがよい） */
+async function withinLimit(limiter: RateLimit, key: string): Promise<boolean> {
+  try {
+    return (await limiter.limit({ key })).success;
+  } catch (e) {
+    console.error('rate limiter failed', e);
+    return true;
+  }
 }
 
 function randomCode(): string {
@@ -114,16 +137,21 @@ export default {
       if (path === '/api/rooms') {
         if (request.method !== 'POST') return json({ error: 'method not allowed' }, 405);
         if (!originAllowed(request.headers.get('Origin'), url)) return json({ error: 'forbidden origin' }, 403);
+        if (!(await withinLimit(env.CREATE_LIMITER, limitKey(request, url, env)))) return json({ error: 'rate_limited' }, 429);
         return await createRoom(request, env);
       }
       const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state)$/.exec(path);
       if (m !== null) {
         const code = m[1] ?? '';
-        if (!isRoomCode(code)) return json({ error: 'room not found' }, 404);
-        const stub = env.ROOM.getByName(code);
         if (m[2] === 'ws') {
           if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
           if (!originAllowed(request.headers.get('Origin'), url)) return json({ error: 'forbidden origin' }, 403);
+          // 形の違うコードの試みも数える（総当たりを抑えるため、コードを調べる前に数える）
+          if (!(await withinLimit(env.JOIN_LIMITER, limitKey(request, url, env)))) return json({ error: 'rate_limited' }, 429);
+        }
+        if (!isRoomCode(code)) return json({ error: 'room not found' }, 404);
+        const stub = env.ROOM.getByName(code);
+        if (m[2] === 'ws') {
           if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'expected websocket' }, 426);
           if (!isPid(url.searchParams.get('pid')) || normalizeName(url.searchParams.get('name')) === null) {
             return json({ error: 'bad pid or name' }, 400);

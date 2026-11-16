@@ -13,8 +13,11 @@ const WRANGLER_JS = join(SERVER_DIR, 'node_modules', 'wrangler', 'bin', 'wrangle
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** 開発サーバーを起動する。persistDir を渡すと、止めて起動し直しても同じ保存領域を使う */
-export async function startServer({ port, persistDir } = {}) {
+/**
+ * 開発サーバーを起動する。persistDir を渡すと、止めて起動し直しても同じ保存領域を使う。
+ * testMode: false なら JINKEI_TEST_MODE を渡さない（本番と同じ設定で起動する）
+ */
+export async function startServer({ port, persistDir, testMode = true } = {}) {
   const dir = persistDir ?? mkdtempSync(join(tmpdir(), 'jinkei-e2e-'));
   const args = [
     WRANGLER_JS,
@@ -28,8 +31,7 @@ export async function startServer({ port, persistDir } = {}) {
     '--persist-to',
     dir,
     '--show-interactive-dev-session=false',
-    '--var',
-    'JINKEI_TEST_MODE:1',
+    ...(testMode ? ['--var', 'JINKEI_TEST_MODE:1'] : []),
   ];
   const child = spawn(process.execPath, args, {
     cwd: SERVER_DIR,
@@ -85,9 +87,18 @@ export function randomPid() {
   return Buffer.from(b).toString('hex');
 }
 
-/** 部屋を作る。{ status, body } を返す */
-export async function postRoom(base, body) {
-  const r = await fetch(`${base}/api/rooms`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+/** 回数の上限の鍵（テストのときだけ効く）。ふだんは呼び出しごとに別の鍵にして、上限に当たらないようにする */
+export function randomKey() {
+  return randomPid().slice(0, 12);
+}
+
+/** 部屋を作る。{ status, body } を返す。rlKey を渡すと、その鍵で回数を数える */
+export async function postRoom(base, body, { rlKey = randomKey() } = {}) {
+  const r = await fetch(`${base}/api/rooms`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Test-Rl-Key': rlKey },
+    body: JSON.stringify(body),
+  });
   return { status: r.status, body: await r.json() };
 }
 
@@ -114,6 +125,7 @@ export class Client {
     this.code = code;
     this.pid = opts.pid ?? randomPid();
     this.name = opts.name ?? 'player';
+    this.rlKey = opts.rlKey ?? randomKey();
     this.messages = [];
     this.raw = [];
     this.closed = null;
@@ -122,7 +134,7 @@ export class Client {
   }
 
   get url() {
-    const q = new URLSearchParams({ pid: this.pid, name: this.name });
+    const q = new URLSearchParams({ pid: this.pid, name: this.name, rlkey: this.rlKey });
     return `${this.base.replace(/^http/, 'ws')}/api/rooms/${this.code}/ws?${q}`;
   }
 
@@ -287,7 +299,14 @@ export function upgradeStatus(base, path, headers = {}) {
       host: u.hostname,
       port: u.port,
       path: u.pathname + u.search,
-      headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', ...headers },
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'websocket',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+        'X-Test-Rl-Key': randomKey(),
+        ...headers,
+      },
     });
     req.on('response', (res) => {
       res.resume();

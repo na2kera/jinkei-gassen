@@ -13,7 +13,11 @@ export type Timing = {
   awayMs: number;
   /** 誰もつながっていない状態がこれだけ続いたら部屋を片付ける（10分） */
   cleanupMs: number;
-  /** 戦闘中の見張りのアラームを、どれだけ先に入れるか（5秒） */
+  /**
+   * 戦闘中の見張りのアラームを、どれだけ先に入れるか（10秒）。design §4.2 の5秒から延ばした。
+   * 入れ直しも書き込み1行になるので回数を半分にする。作り直されてから再開までに止まって見えるのは最長10秒だが、
+   * その間に誰かがつなぎ直せば（メッセージや接続でも再開するので）すぐ動き出す
+   */
   watchdogMs: number;
   /** 1刻みの実時間（100ms。engine の DT = 0.1 秒に合わせる）。テストでは縮めて戦闘を早回しにする */
   tickMs: number;
@@ -32,7 +36,7 @@ export const DEFAULT_TIMING: Readonly<Timing> = Object.freeze({
   reserveMs: 60_000,
   awayMs: 60_000,
   cleanupMs: 10 * 60_000,
-  watchdogMs: 5_000,
+  watchdogMs: 10_000,
   tickMs: 100,
   maxTicks: 1800,
   testAlarmLagMs: 0,
@@ -47,8 +51,12 @@ export const MAX_STEPS_PER_CALL = 5;
 export const LAG_RESET_TICKS = 5;
 /** 場面を送る間隔（2刻みごと = 毎秒5回、assumptions S10） */
 export const SNAP_EVERY_TICKS = 2;
-/** 戦闘の状態を保存する間隔（10刻みごと、design §4.2） */
-export const SAVE_EVERY_TICKS = 10;
+/**
+ * 戦闘の状態を保存する間隔（20刻み = 2秒ごと）。design §4.2 の10刻みから延ばした。
+ * 1戦（最長1800刻み）の書き込みが約180行から約90行に減る。代わりに、作り直されたときに戻る刻みが最大2秒ぶんになる。
+ * 作り直しはまれ（setInterval が動いている間は追い出されない）で、号令を受け付けた刻みは別に必ず書くので、使った回数は巻き戻らない
+ */
+export const SAVE_EVERY_TICKS = 20;
 
 const TIMING_KEYS = Object.keys(DEFAULT_TIMING) as (keyof Timing)[];
 

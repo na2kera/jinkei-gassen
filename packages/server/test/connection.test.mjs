@@ -129,9 +129,11 @@ describe('予約と片付け', () => {
     await sleep(500);
     expect((await testRoute(server.base, code, 'state')).phase).toBe('setup');
     await sleep(1500);
+    // 片付けでは保存領域を全部消し、アラームも消す（記録を何も残さない）
     const st = await testRoute(server.base, code, 'state');
-    expect(st.phase).toBe('empty');
-    expect(st.score).toEqual([0, 0, 0]);
+    expect(st.phase).toBeNull();
+    expect(st.keys).toBe(0);
+    expect(st.alarm).toBeNull();
     const A2 = new Client(server.base, code, { pid: A.pid, name: 'A' });
     await A2.connect();
     expect((await A2.waitMsg((m) => m.type === 'error')).reason).toBe('not_found');

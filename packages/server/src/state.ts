@@ -1,15 +1,18 @@
 // 部屋の状態（design §4.3）。保存領域の "room" に1つの値として書く。
 // ここに置く関数は、時計・保存領域・接続に触れない（呼ぶ側が now を渡す）。
+//
+// 部屋がない（empty）ことは、"room" の記録がないことで表す。片付けでは保存領域をすべて消すので、
+// 使われていないコードの Durable Object には何も残らない。
 
 import type { BattleState, BattleSummary, Placement } from '@jinkei/engine';
 import type { Timing } from './timing.ts';
 
-export type Phase = 'empty' | 'reserved' | 'waiting' | 'setup' | 'reveal' | 'battle' | 'result';
+export type Phase = 'reserved' | 'waiting' | 'setup' | 'reveal' | 'battle' | 'result';
 
 export interface Seat {
   pid: string;
   name: string;
-  /** いま有効な接続の番号。切れていれば null */
+  /** いま有効な接続の番号（乱数）。切れていれば null */
   conn: number | null;
   /** 切れた時刻。つながっていれば null */
   goneSince: number | null;
@@ -21,8 +24,9 @@ export interface Seat {
 }
 
 /**
- * 期限の時刻。いちばん近いものをアラームに入れる。
- * design §4.3 の5つに、不在の判定（away）を足した。idle は「誰もつながっていない状態が10分続いたら片付ける」期限。
+ * 期限の時刻。その段階で扱う期限のうち、いちばん近いものをアラームに入れる（nextDeadline）。
+ * design §4.3 の期限に、不在の判定（away）を足した。idle は「誰もつながっていない状態が10分続いたら片付ける」期限。
+ * 見張り（watchdog）は、戦闘中に数秒ごとに先へ延ばすもので、そのたびに部屋の記録を書かないよう、メモリにだけ持つ（room.ts）。
  */
 export interface Deadlines {
   setup?: number;
@@ -30,14 +34,16 @@ export interface Deadlines {
   reserve?: number;
   idle?: number;
   away?: number;
-  watchdog?: number;
 }
 
 export interface RoomState {
-  v: 1;
+  v: 2;
   /** 部屋のコード（Durable Object の名前と同じ） */
   code: string;
-  /** 部屋の世代。コードが使い回されるたびに増える。接続の添付データにも入れ、前の世代の接続を見分ける */
+  /**
+   * 部屋の世代（32ビットの乱数）。部屋を作るたびに決め直す。接続の添付データにも入れ、前の部屋の接続を見分ける。
+   * 片付けでは記録を残さないので、「前の値 + 1」ではなく乱数にしている（前の部屋と同じ値になる見込みは 2^-32）
+   */
   gen: number;
   phase: Phase;
   /** この部屋で何戦目か。reveal に入るときに増える */
@@ -52,10 +58,6 @@ export interface RoomState {
   lastResult: BattleSummary | null;
   /** 部屋を作ったときの秒数（テストでは縮める） */
   timing: Timing;
-  /** 接続に振る番号の最後の値（世代をまたいでも増え続ける） */
-  connSeq: number;
-  /** 入れてあるアラームの時刻（遅らせる分を含む）。保存領域のアラームと合わせておく */
-  alarmAt: number | null;
 }
 
 /** 戦闘の状態。部屋の状態とは別の鍵 "battle" に書く（毎刻みは書かないため、design §4.2） */
@@ -67,12 +69,12 @@ export interface BattleRecord {
   state: BattleState;
 }
 
-export function newRoom(code: string, gen: number, timing: Timing, connSeq: number): RoomState {
+export function newRoom(code: string, gen: number, timing: Timing): RoomState {
   return {
-    v: 1,
+    v: 2,
     code,
     gen,
-    phase: 'empty',
+    phase: 'reserved',
     battleNo: 0,
     seats: [null, null],
     score: [0, 0, 0],
@@ -81,8 +83,6 @@ export function newRoom(code: string, gen: number, timing: Timing, connSeq: numb
     rematch: [false, false],
     lastResult: null,
     timing,
-    connSeq,
-    alarmAt: null,
   };
 }
 
@@ -90,12 +90,23 @@ export function newSeat(pid: string, name: string): Seat {
   return { pid, name, conn: null, goneSince: null, ready: false, draft: null, lastValid: null };
 }
 
-/** いちばん近い期限。なければ null */
+/**
+ * アラームに入れる候補の期限のうち、いちばん近いもの。なければ null。
+ * その段階でアラームの処理が扱う期限だけを候補にする。扱わない期限が候補に残ると、過ぎたあとも
+ * 「過去の時刻のアラーム」を入れ直し続け、すぐ鳴っては何もしない、をくり返すため。
+ * - reserve は reserved、setup は setup、reveal は reveal、away は result のときだけ
+ * - idle は battle 以外（戦闘中は片付けない。戦闘は見張りが動かし、終われば result で扱う）
+ */
 export function nextDeadline(s: RoomState): number | null {
+  const d = s.deadlines;
+  const list: (number | undefined)[] = [];
+  if (s.phase === 'reserved') list.push(d.reserve);
+  if (s.phase === 'setup') list.push(d.setup);
+  if (s.phase === 'reveal') list.push(d.reveal);
+  if (s.phase === 'result') list.push(d.away);
+  if (s.phase !== 'battle') list.push(d.idle);
   let t: number | null = null;
-  for (const v of Object.values(s.deadlines)) {
-    if (typeof v === 'number' && (t === null || v < t)) t = v;
-  }
+  for (const v of list) if (typeof v === 'number' && (t === null || v < t)) t = v;
   return t;
 }
 
@@ -106,7 +117,7 @@ export function anyConnected(s: RoomState): boolean {
 
 /**
  * 外へ見える内容。これが変わったときだけ、全員に room を送り直す。
- * 見張りの期限・アラームの時刻・接続の番号など、内部の値だけが変わったときは送らない（戦闘中に毎秒送らないため）。
+ * 接続の番号など、内部の値だけが変わったときは送らない。
  */
 export function publicSignature(s: RoomState): string {
   return JSON.stringify([

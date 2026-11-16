@@ -3,8 +3,10 @@
 // 決まり:
 // - 部屋の状態（RoomState）はメモリに持ち、変わるたびに保存領域の "room" へ書く。コンストラクタで読み戻す。
 //   眠ったり作り直されたりするとメモリは消えるが、保存した内容と、接続の添付データ（世代・席・接続の番号）から組み立て直せる。
-// - 戦闘の状態（BattleState）は、戦闘中はメモリに持って setInterval で刻み、"battle" へは10刻みごと・号令を受け付けた
-//   step の直後・決着時にだけ書く。作り直されたら、保存した刻みから続ける（追いかけない）。
+// - 戦闘の状態（BattleState）は、戦闘中はメモリに持って setInterval で刻み、"battle" へは SAVE_EVERY_TICKS 刻みごと・
+//   号令を受け付けた step の直後・決着時にだけ書く。作り直されたら、保存した刻みから続ける（追いかけない）。
+//   保存が要る刻みでは、書いてから snap を送る（送信は書き込みが終わるまで保留されるので、保存できなかった場面は相手に届かない）。
+// - 部屋がないことは、保存領域に何もないことで表す。片付けでは deleteAll で全部消す。
 // - 1つの入力の処理は、計算を終えてから、保存・アラーム・送信を await を挟まずに続けて行う（Tx と commit）。
 //   同期の保存領域（ctx.storage.kv）への書き込みはまとめて反映され、送信はその書き込みが終わるまで保留される。
 // - 期限はアラームで扱う。アラームの処理は「今の時刻・保存した期限・今の段階」だけを見て進めるので、
@@ -34,7 +36,7 @@ import { fieldOf, pickMap } from './maps.ts';
 import type { ClientMessage, CloseCode, ErrorMessage, ErrorReason, RoomMessage, ServerMessage, SnapMessage } from './protocol.ts';
 import { anyConnected, newRoom, newSeat, nextDeadline, publicSignature, type BattleRecord, type RoomState, type Seat } from './state.ts';
 import { LAG_RESET_TICKS, MAX_STEPS_PER_CALL, SAVE_EVERY_TICKS, SNAP_EVERY_TICKS, type Timing } from './timing.ts';
-import { isPid, normalizeName, parseClientMessage } from './validate.ts';
+import { MAX_MESSAGE_LENGTH, isPid, normalizeName, parseClientMessage } from './validate.ts';
 
 const ROOM_KEY = 'room';
 const BATTLE_KEY = 'battle';
@@ -43,6 +45,8 @@ const MAX_SOCKETS = 8;
 /** メッセージの頻度の上限（接続ごと）。下書きは0.5秒に1回、号令は1戦に3回なので、ふつうの操作では届かない */
 const RATE_BURST = 20;
 const RATE_PER_SEC = 10;
+/** 手桶が空のまま、さらにこれだけ届いたら接続を閉じる（ふつうの操作では起きない量） */
+const RATE_OVERFLOW_CLOSE = 20;
 
 const SIDES: readonly Side[] = [0, 1];
 
@@ -61,6 +65,16 @@ function randomId(): string {
   const b = new Uint8Array(6);
   crypto.getRandomValues(b);
   return [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+/** 32ビットの乱数（0 を除く）。部屋の世代と接続の番号に使う */
+function randomU32(): number {
+  for (;;) {
+    const a = new Uint32Array(1);
+    crypto.getRandomValues(a);
+    const v = a[0] ?? 0;
+    if (v !== 0) return v;
+  }
 }
 
 function randomSeed(): number {
@@ -118,7 +132,16 @@ export class Room extends DurableObject<Env> {
   private pendingOrders: OrderInput[] = [];
   /** 前の snap のあとに起きた出来事 */
   private pendingEvents: BattleEvent[] = [];
-  private readonly rates = new WeakMap<WebSocket, { tokens: number; at: number }>();
+  private readonly rates = new WeakMap<WebSocket, { tokens: number; at: number; over: number }>();
+  /**
+   * 見張りのアラームの時刻（戦闘中だけ）。数秒ごとに先へ延ばすので、部屋の記録には書かずメモリにだけ持つ
+   * （延ばすたびに部屋の記録を書くと、書き込みの行数が増えるため）。作り直されたら、再開のときに入れ直す
+   */
+  private watchdogAt: number | null = null;
+  /** 入れてあるアラームの時刻（遅らせる分を含む）。メモリにだけ持つ。作り直された直後は不明なので、最初の commit で入れ直す */
+  private alarmAt: number | null | undefined = undefined;
+  /** テスト用：このインスタンスでの書き込みの回数（保存領域の put・delete と、アラームの設定・削除）と、アラームの処理の回数 */
+  private readonly counts = { put: 0, alarmSet: 0, alarmRuns: 0, skippedPastAlarm: 0 };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -130,7 +153,7 @@ export class Room extends DurableObject<Env> {
     void this.ctx.blockConcurrencyWhile(async () => {
       try {
         const s = this.room;
-        if (s === null || s.phase === 'empty') return;
+        if (s === null) return;
         const tx = new Tx(s, Date.now());
         this.ensureBattle(tx);
         this.settle(tx);
@@ -179,22 +202,19 @@ export class Room extends DurableObject<Env> {
   // ---------- RPC（Worker から） ----------
 
   /**
-   * 部屋を作る（design §4.3）。empty のときだけ、世代を増やして reserved にし、作った人の pid を覚える。
+   * 部屋を作る（design §4.3）。部屋がないときだけ、世代を乱数で決めて reserved にし、作った人の pid を覚える。
    * 空きの確認と予約を、await を挟まない1回の処理で行う（同時に来た2つの作成が両方通ることはない）。
    */
   async create(code: string, pid: string, timing: Timing): Promise<boolean> {
-    const cur = this.room;
-    if (cur !== null && cur.phase !== 'empty') return false;
+    if (this.room !== null) return false;
     if (!isPid(pid)) return false;
     const now = Date.now();
-    const s = newRoom(code, (cur?.gen ?? 0) + 1, timing, cur?.connSeq ?? 0);
-    const tx = new Tx(cur ?? s, now);
-    s.phase = 'reserved';
+    const s = newRoom(code, randomU32(), timing);
+    const tx = new Tx(s, now);
     s.seats = [newSeat(pid, ''), null];
     s.deadlines.reserve = now + timing.reserveMs;
     this.room = s;
     this.battle = null;
-    this.ctx.storage.kv.delete(BATTLE_KEY);
     this.settle(tx);
     this.commit(tx);
     return true;
@@ -224,7 +244,11 @@ export class Room extends DurableObject<Env> {
       savedBattleNo: b?.battleNo ?? null,
       liveTick: this.battle?.state.tick ?? null,
       running: this.timer !== null,
+      gen: s?.gen ?? null,
       alarm: await this.ctx.storage.getAlarm(),
+      watchdogAt: this.watchdogAt,
+      keys: [...this.ctx.storage.kv.list()].length,
+      counts: { ...this.counts },
     };
   }
 
@@ -248,7 +272,7 @@ export class Room extends DurableObject<Env> {
       // 断るときも、いったん受けてから error を送って閉じる（ブラウザは upgrade の失敗の理由を読めないため）
       this.ctx.acceptWebSocket(server);
       const s = this.room;
-      if (s === null || s.phase === 'empty') {
+      if (s === null) {
         // 部屋がない。保存領域には何も書かない（存在しないコードを叩かれるたびに書き込みが増えないように）
         this.reject(server, 'not_found', 4003);
         return new Response(null, { status: 101, webSocket: client });
@@ -301,8 +325,10 @@ export class Room extends DurableObject<Env> {
     for (const o of this.openSockets()) {
       if (o.ws !== ws && o.att.seat === side) tx.closes.push({ ws: o.ws, code: 4001, reason: 'replaced by a newer connection' });
     }
-    s.connSeq += 1;
-    seat.conn = s.connSeq;
+    // 接続の番号は乱数（片付けで記録を残さないので、通し番号にはできない）。前の接続と同じ値は避ける
+    let conn = randomU32();
+    while (conn === seat.conn) conn = randomU32();
+    seat.conn = conn;
     seat.goneSince = null;
     seat.name = name;
     const att: Attachment = { gen: s.gen, seat: side, conn: seat.conn };
@@ -324,10 +350,24 @@ export class Room extends DurableObject<Env> {
         this.safeSend(ws, 'pong');
         return;
       }
-      if (!this.takeToken(ws)) return;
+      // 大きさの超過とバイナリは、すぐ閉じる。頻度の超過は、続いたら閉じる。閉じた席は「切れた」として扱う（同じ pid で入り直せる）
+      if (typeof raw !== 'string') {
+        this.kick(ws, 1003, 'binary messages are not accepted');
+        return;
+      }
+      if (raw.length > MAX_MESSAGE_LENGTH) {
+        this.kick(ws, 1009, 'message too large');
+        return;
+      }
+      const rate = this.takeToken(ws);
+      if (rate === 'close') {
+        this.kick(ws, 1008, 'too many messages');
+        return;
+      }
+      if (rate === 'drop') return;
       const s = this.room;
       const att = this.attachment(ws);
-      if (s === null || s.phase === 'empty' || att === null || att.gen !== s.gen) {
+      if (s === null || att === null || att.gen !== s.gen) {
         this.safeClose(ws, 4003, 'room closed');
         return;
       }
@@ -348,16 +388,44 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  /** 頻度の上限（接続ごとの手桶）。メモリにだけ持つ（眠ると満タンに戻るが、それで困ることはない） */
-  private takeToken(ws: WebSocket): boolean {
+  /**
+   * 頻度の上限（接続ごとの手桶）。メモリにだけ持つ（眠ると満タンに戻るが、それで困ることはない）。
+   * 手桶が空なら捨て、空のままさらに RATE_OVERFLOW_CLOSE 通届いたら閉じる
+   */
+  private takeToken(ws: WebSocket): 'ok' | 'drop' | 'close' {
     const now = Date.now();
-    const r = this.rates.get(ws) ?? { tokens: RATE_BURST, at: now };
+    const r = this.rates.get(ws) ?? { tokens: RATE_BURST, at: now, over: 0 };
     r.tokens = Math.min(RATE_BURST, r.tokens + ((now - r.at) / 1000) * RATE_PER_SEC);
     r.at = now;
     this.rates.set(ws, r);
-    if (r.tokens < 1) return false;
+    if (r.tokens < 1) {
+      r.over += 1;
+      return r.over >= RATE_OVERFLOW_CLOSE ? 'close' : 'drop';
+    }
     r.tokens -= 1;
-    return true;
+    r.over = 0;
+    return 'ok';
+  }
+
+  /** 決まりを破った接続を閉じる。いま有効な接続なら、その席を「切れた」にする */
+  private kick(ws: WebSocket, code: CloseCode, reason: string): void {
+    const s = this.room;
+    if (s === null) {
+      this.safeClose(ws, code, reason);
+      return;
+    }
+    const att = this.attachment(ws);
+    const tx = new Tx(s, Date.now());
+    if (att !== null && this.isCurrent(s, att)) {
+      const seat = s.seats[att.seat];
+      if (seat !== null) {
+        seat.conn = null;
+        seat.goneSince = tx.now;
+      }
+    }
+    tx.closes.push({ ws, code, reason });
+    this.settle(tx);
+    this.commit(tx);
   }
 
   /**
@@ -445,7 +513,7 @@ export class Room extends DurableObject<Env> {
   private onSocketGone(ws: WebSocket): void {
     try {
       const s = this.room;
-      if (s === null || s.phase === 'empty') return;
+      if (s === null) return;
       const att = this.attachment(ws);
       const tx = new Tx(s, Date.now());
       this.ensureBattle(tx);
@@ -468,43 +536,57 @@ export class Room extends DurableObject<Env> {
   // ---------- アラーム ----------
 
   override async alarm(): Promise<void> {
+    this.counts.alarmRuns += 1;
+    // アラームは鳴ると消える
+    this.alarmAt = null;
     const s = this.room;
-    if (s === null || s.phase === 'empty') {
+    if (s === null) {
       await this.ctx.storage.deleteAlarm();
       return;
     }
     const now = Date.now();
-    const tx = new Tx(s, now);
-    tx.alarmFired = true;
     const d = s.deadlines;
     // 段階を移す前に、いまの段階と期限を確かめる（2回呼ばれても、2回目は条件に合わず何もしない）
-    if (s.phase === 'reserved' && d.reserve !== undefined && now >= d.reserve) {
-      this.wipe(tx);
-    } else if (s.phase !== 'battle' && d.idle !== undefined && now >= d.idle && !anyConnected(s)) {
-      this.wipe(tx);
-    } else if (s.phase === 'setup' && d.setup !== undefined && now >= d.setup) {
+    if (
+      (s.phase === 'reserved' && d.reserve !== undefined && now >= d.reserve) ||
+      (s.phase !== 'battle' && d.idle !== undefined && now >= d.idle && !anyConnected(s))
+    ) {
+      await this.wipe();
+      return;
+    }
+    const tx = new Tx(s, now);
+    tx.alarmFired = true;
+    if (s.phase === 'setup' && d.setup !== undefined && now >= d.setup) {
       this.toReveal(tx);
     } else if (s.phase === 'reveal' && d.reveal !== undefined && now >= d.reveal) {
       this.toBattle(tx);
     } else if (s.phase === 'battle') {
-      // 見張り：作り直された直後なら、ここで戦闘を再開する（誰もつながっていなくても最後まで進める）
+      // 見張り：作り直された直後なら、ここで戦闘を再開する（誰もつながっていなくても最後まで進める）。
+      // 動いていれば、次の見張りを入れ直すだけ
       this.ensureBattle(tx);
+      if (this.room?.phase === 'battle') this.watchdogAt = now + s.timing.watchdogMs;
     }
     this.settle(tx);
     this.commit(tx);
   }
 
-  /** 部屋を片付けて empty に戻す。世代と接続の番号だけは残す（コードを使い回したときに、前の世代の接続を見分けるため） */
-  private wipe(tx: Tx): void {
-    const s = this.room;
-    if (s === null) return;
+  /**
+   * 部屋を片付ける（design §4.3）。保存領域を全部消し、アラームも消す。何も残さないので、次にこのコードで作る部屋は
+   * 世代を乱数で決め直す（前の部屋の接続が残っていても、添付データの世代が合わず効かない）
+   */
+  private async wipe(): Promise<void> {
     this.stopTimer();
-    for (const ws of this.ctx.getWebSockets()) tx.closes.push({ ws, code: 4003, reason: 'room closed' });
+    for (const ws of this.ctx.getWebSockets()) this.safeClose(ws, 4003, 'room closed');
+    this.room = null;
     this.battle = null;
+    this.watchdogAt = null;
     this.pendingOrders = [];
     this.pendingEvents = [];
-    this.ctx.storage.kv.delete(BATTLE_KEY);
-    this.room = newRoom(s.code, s.gen, s.timing, s.connSeq);
+    this.alarmAt = null;
+    this.counts.alarmSet += 1;
+    this.counts.put += 1;
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
   }
 
   // ---------- 段階の移り変わり ----------
@@ -555,7 +637,7 @@ export class Room extends DurableObject<Env> {
     for (const seat of s.seats) if (seat !== null) seat.ready = false;
     const rec: BattleRecord = { battleNo: s.battleNo, armies, startsAt: s.deadlines.reveal, state: created.value };
     this.battle = rec;
-    this.ctx.storage.kv.put(BATTLE_KEY, rec);
+    this.put(BATTLE_KEY, rec);
     tx.sends.push({ all: (side) => this.revealMsg(side, rec, field) });
   }
 
@@ -569,7 +651,7 @@ export class Room extends DurableObject<Env> {
     }
     s.phase = 'battle';
     delete s.deadlines.reveal;
-    s.deadlines.watchdog = tx.now + s.timing.watchdogMs;
+    this.watchdogAt = tx.now + s.timing.watchdogMs;
     this.startTimer(rec, tx.now);
   }
 
@@ -590,8 +672,9 @@ export class Room extends DurableObject<Env> {
   private ensureBattle(tx: Tx): void {
     const s = this.room;
     if (s === null || s.phase !== 'battle') return;
-    s.deadlines.watchdog = tx.now + s.timing.watchdogMs;
     if (this.timer !== null) return;
+    // 作り直された直後。見張りを入れ直してから再開する
+    this.watchdogAt = tx.now + s.timing.watchdogMs;
     const rec = this.loadBattle();
     if (rec === null) {
       console.error('battle phase without a battle record');
@@ -657,17 +740,18 @@ export class Room extends DurableObject<Env> {
       }
       // それでも大きく遅れていたら追いかけず、止まっていたことにする（design §4.2）
       if (Math.floor((now - this.clockBase) / tickMs) - st.tick > LAG_RESET_TICKS) this.clockBase = now - st.tick * tickMs;
-      if (snap) this.broadcastSnap(rec);
+      // 保存が要る刻みでは、保存してから送る（相手に見せた号令が、作り直されたあとに巻き戻らないように）
       if (save) {
-        this.ctx.storage.kv.put(BATTLE_KEY, rec);
-        // 見張りの期限を先へ延ばす。毎回アラームを入れ直さないよう、残りが半分を切ったときだけ
-        const w = s.deadlines.watchdog;
-        if (w === undefined || w - now < s.timing.watchdogMs / 2) {
+        this.put(BATTLE_KEY, rec);
+        // 見張りの期限を先へ延ばす。アラームの入れ直しも1行の書き込みになるので、保存と同じ機会に、残りが半分を切ったときだけ
+        const w = this.watchdogAt;
+        if (w === null || w - now < s.timing.watchdogMs / 2) {
           const tx = new Tx(s, now);
-          s.deadlines.watchdog = now + s.timing.watchdogMs;
+          this.watchdogAt = now + s.timing.watchdogMs;
           this.commit(tx);
         }
       }
+      if (snap) this.broadcastSnap(rec);
     } catch (e) {
       console.error('tick failed', e);
     }
@@ -678,7 +762,7 @@ export class Room extends DurableObject<Env> {
     const s = this.room;
     if (s === null || s.phase !== 'battle' || rec.state.outcome === null) return;
     this.stopTimer();
-    this.ctx.storage.kv.put(BATTLE_KEY, rec);
+    this.put(BATTLE_KEY, rec);
     // 決着した刻みは、2刻みを待たずにすぐ送る
     this.broadcastSnap(rec);
     const o = rec.state.outcome;
@@ -688,7 +772,7 @@ export class Room extends DurableObject<Env> {
     s.phase = 'result';
     s.lastResult = summarize(rec.state);
     s.rematch = [false, false];
-    delete s.deadlines.watchdog;
+    this.watchdogAt = null;
     this.pendingOrders = [];
     tx.early.push(this.resultMsg(s));
   }
@@ -699,7 +783,7 @@ export class Room extends DurableObject<Env> {
    */
   private settle(tx: Tx): void {
     const s = this.room;
-    if (s === null || s.phase === 'empty') return;
+    if (s === null) return;
     const now = tx.now;
     // つながっているはずなのに接続がない席（開発サーバーの再起動などで「切れた」の知らせが来なかった）
     const open = this.openSockets().filter((o) => !tx.closing(o.ws));
@@ -733,12 +817,14 @@ export class Room extends DurableObject<Env> {
         }
       }
     }
+    // 次の不在の期限は、まだ来ていないものだけ。2人とも過ぎていたら（片付けに任せる場合）、away は残さない
+    // （過ぎた期限を残すと、過去の時刻のアラームを入れ直し続けるため）
     let awayAt: number | null = null;
     if (s.phase === 'result') {
       for (const seat of s.seats) {
         if (seat === null || seat.conn !== null || seat.goneSince === null) continue;
         const t = seat.goneSince + s.timing.awayMs;
-        if (awayAt === null || t < awayAt) awayAt = t;
+        if (t > now && (awayAt === null || t < awayAt)) awayAt = t;
       }
     }
     if (awayAt === null) delete s.deadlines.away;
@@ -748,17 +834,42 @@ export class Room extends DurableObject<Env> {
     else if (s.deadlines.idle === undefined) s.deadlines.idle = now + s.timing.cleanupMs;
   }
 
+  /** 保存領域へ書く（テスト用に回数を数える） */
+  private put(key: string, value: unknown): void {
+    this.counts.put += 1;
+    this.ctx.storage.kv.put(key, value);
+  }
+
+  /** 次に入れるアラームの時刻（期限）。その段階で扱う期限と、戦闘中の見張り */
+  private nextAlarm(s: RoomState): number | null {
+    let t = nextDeadline(s);
+    if (s.phase === 'battle' && this.watchdogAt !== null && (t === null || this.watchdogAt < t)) t = this.watchdogAt;
+    return t;
+  }
+
   /** 保存・アラーム・送信。間に await を挟まない */
   private commit(tx: Tx): void {
     const s = this.room;
     if (s === null) return;
-    const deadline = nextDeadline(s);
+    let deadline = this.nextAlarm(s);
+    // 安全弁：アラームの処理を終えたあとに、次の期限が今以前のままなら、その期限は処理されないまま残っている。
+    // 入れるとすぐ鳴って何もしない、をくり返すので入れずに記録を残す（次の入力の commit でもう一度選び直す）
+    if (tx.alarmFired && deadline !== null && deadline <= tx.now) {
+      console.error('alarm: a deadline at or before now is still pending after processing; not re-arming', {
+        phase: s.phase,
+        deadlines: s.deadlines,
+        watchdogAt: this.watchdogAt,
+      });
+      this.counts.skippedPastAlarm += 1;
+      deadline = null;
+    }
     const want = deadline === null ? null : deadline + s.timing.testAlarmLagMs;
     // 期限が過去なら、覚えている時刻と同じでも入れ直す（アラームの処理が失敗して、やり直しが尽きた場合など）
-    const alarmChanged = want !== s.alarmAt || tx.alarmFired || (want !== null && want <= tx.now);
-    s.alarmAt = want;
-    if (JSON.stringify(s) !== tx.beforeJson) this.ctx.storage.kv.put(ROOM_KEY, s);
+    const alarmChanged = want !== this.alarmAt || (want !== null && want <= tx.now);
+    if (JSON.stringify(s) !== tx.beforeJson) this.put(ROOM_KEY, s);
     if (alarmChanged) {
+      this.alarmAt = want;
+      this.counts.alarmSet += 1;
       if (want === null) void this.ctx.storage.deleteAlarm();
       else void this.ctx.storage.setAlarm(want);
     }
@@ -793,7 +904,7 @@ export class Room extends DurableObject<Env> {
       type: 'room',
       code: s.code,
       // reserved の部屋には、席に着いた接続がない（作った人がつないだ時点で waiting になる）
-      phase: s.phase === 'empty' || s.phase === 'reserved' ? 'waiting' : s.phase,
+      phase: s.phase === 'reserved' ? 'waiting' : s.phase,
       battleNo: s.battleNo,
       you: side,
       seats: [this.seatView(s.seats[0]), this.seatView(s.seats[1])],

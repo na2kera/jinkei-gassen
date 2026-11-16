@@ -90,7 +90,7 @@ describe('再開', () => {
     expect(room.phase).toBe('battle');
     expect(room.seats.map((s) => s.name)).toEqual(['A', 'B']);
     const first = await A2.waitMsg((m) => m.type === 'snap');
-    // 保存は10刻みごとなので、少し前の刻みから続く。止まっていた間は追いかけない
+    // 保存は20刻みごとなので、少し前の刻みから続く。止まっていた間は追いかけない
     expect(first.tick).toBeGreaterThanOrEqual(lastTickBefore - SAVE_SLACK);
     expect(first.tick).toBeLessThanOrEqual(lastTickBefore + 30);
     const r = await A2.waitMsg((m) => m.type === 'result', { ms: 30_000 });
@@ -102,5 +102,5 @@ describe('再開', () => {
   });
 });
 
-/** 保存は10刻みごと。最後に届いた snap より、最大でこれだけ前の刻みから続くことがある */
-const SAVE_SLACK = 12;
+/** 保存は20刻みごと（timing.ts の SAVE_EVERY_TICKS）。最後に届いた snap より、最大でこれだけ前の刻みから続くことがある */
+const SAVE_SLACK = 22;

@@ -14,6 +14,7 @@
 //      つながると、まず `room` が届く。続けて段階に応じて、reveal なら `reveal`、battle なら `snap`、result なら `result` が届く。
 //      入れないとき（部屋がない・満員）は `error` が届き、server が接続を閉じる（4003 / 4002）。
 //   3. 部屋の様子（段階・席・成績・期限など）が変わるたびに `room` が届く。
+//      決まりを破った接続は閉じる：バイナリ 1003、大きすぎる 1009、多すぎる 1008。同じ pid で入り直せる。
 //   4. 文字列 "ping" を送ると "pong" が返る（JSON ではない。任意）。
 
 import type {
@@ -196,6 +197,9 @@ export type ServerMessage = RoomMessage | RevealMessage | SnapMessage | ResultMe
 
 /** WebSocket を server が閉じるときのコード */
 export type CloseCode =
+  | 1003 // バイナリのメッセージを送った
+  | 1008 // メッセージが多すぎる（頻度の上限を超え続けた）
+  | 1009 // メッセージが大きすぎる
   | 4001 // 同じ pid で新しい接続が来た
   | 4002 // 満員
   | 4003 // 部屋がない・片付けられた
@@ -207,5 +211,8 @@ export type CloseCode =
 export type CreateRoomRequest = { pid: string };
 /** POST /api/rooms の応答（201） */
 export type CreateRoomResponse = { code: string };
-/** HTTP のエラーの応答。部屋のコードが取れないときは 503 { error: 'busy' }（「混み合っています」） */
+/**
+ * HTTP のエラーの応答。部屋のコードが取れないときは 503 { error: 'busy' }（「混み合っています」）。
+ * 部屋の作成・入室の試みが多すぎるときは 429 { error: 'rate_limited' }（送信元ごと。作成は1分に10回、入室は1分に30回）
+ */
 export type HttpErrorResponse = { error: string };
