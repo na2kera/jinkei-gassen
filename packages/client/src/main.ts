@@ -10,6 +10,10 @@ import { BattleScene } from './scenes/BattleScene.ts';
 import { BootScene } from './scenes/BootScene.ts';
 import { DeployScene } from './scenes/DeployScene.ts';
 import { LobbyScene } from './scenes/LobbyScene.ts';
+import { NetOverlayScene } from './scenes/NetOverlayScene.ts';
+import { PvpResultScene } from './scenes/PvpResultScene.ts';
+import { RevealScene } from './scenes/RevealScene.ts';
+import { pvp } from './net/pvp.ts';
 import { ResultScene } from './scenes/ResultScene.ts';
 import { StageSelectScene } from './scenes/StageSelectScene.ts';
 import { TitleScene } from './scenes/TitleScene.ts';
@@ -42,8 +46,11 @@ async function start(): Promise<void> {
     },
     // 音は今回は入れない（入れるときは手本と同じく WebAudio を最初の操作で解禁する）
     audio: { noAudio: true },
-    scene: [BootScene, TitleScene, StageSelectScene, LobbyScene, DeployScene, BattleScene, ResultScene],
+    // NetOverlay は対戦の間ほかの画面の上に重ねるので、いちばん最後に置く（並びの順に描かれる）
+    scene: [BootScene, TitleScene, StageSelectScene, LobbyScene, DeployScene, RevealScene, BattleScene, ResultScene, PvpResultScene, NetOverlayScene],
   });
+
+  pvp.attach(game);
 
   // 向きが変わったら内部の大きさを変え、シーンに組み直させる。
   // setGameSize は window の resize を起こさないので、ここが二重に走ることはない。

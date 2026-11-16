@@ -241,7 +241,92 @@ export function stageSelectLayout(l: Layout, count: number): StageSelectLayout {
   };
 }
 
-/** 対戦の画面（準備中） */
-export function lobbyLayout(l: Layout): { centerX: number; text: number; back: Rect } {
-  return { centerX: l.width / 2, text: even(l.height / 2 - 16), back: { x: GAP, y: GAP, w: BACK_W, h: 32 } };
+/** 部屋の画面。画面の中央に縦に並べる。入力欄は HTML の input をこの矩形に重ねる */
+export interface LobbyLayout {
+  back: Rect;
+  centerX: number;
+  title: number;
+  /** 名前の見出しと入力欄 */
+  nameLabel: { x: number; y: number };
+  nameInput: Rect;
+  create: Rect;
+  codeInput: Rect;
+  join: Rect;
+  resume: Rect;
+  /** 失敗などの1行 */
+  status: number;
+  /** 部屋に入ったあと：コード・写す・相手を待っています・出る */
+  codeLabel: number;
+  codeBox: Rect;
+  copy: Rect;
+  waiting: number;
+  leave: Rect;
+  /** 部屋に入ったあとの1行（「出る」の下） */
+  waitStatus: number;
+}
+
+export function lobbyLayout(l: Layout): LobbyLayout {
+  const w = l.mode === 'landscape' ? 288 : l.width - GAP * 2 - 16;
+  const x = even(l.width / 2 - w / 2);
+  const top = even(Math.max(48, l.height / 2 - 150));
+  const codeW = 112;
+  return {
+    back: { x: GAP, y: GAP, w: BACK_W, h: 32 },
+    centerX: l.width / 2,
+    title: top,
+    nameLabel: { x, y: top + 70 },
+    nameInput: { x: x + 56, y: top + 54, w: w - 56, h: 32 },
+    create: { x, y: top + 100, w, h: 40 },
+    codeInput: { x, y: top + 156, w: codeW, h: 40 },
+    join: { x: x + codeW + 8, y: top + 156, w: w - codeW - 8, h: 40 },
+    resume: { x, y: top + 210, w, h: 36 },
+    status: top + 262,
+    codeLabel: top + 48,
+    codeBox: { x: even(l.width / 2 - 80), y: top + 72, w: 160, h: 56 },
+    copy: { x: even(l.width / 2 - 56), y: top + 140, w: 112, h: 32 },
+    waiting: top + 192,
+    leave: { x: even(l.width / 2 - 80), y: top + 228, w: 160, h: 40 },
+    waitStatus: top + 284,
+  };
+}
+
+/** 対戦の配置の操作の欄（編成の足す・減らすが増える） */
+export interface PvpDeployPanel {
+  back: Rect;
+  /** 予算の残りを書く場所（左端と縦の中央） */
+  budget: { x: number; y: number };
+  mute: Rect;
+  roster: Rect[];
+  minus: Rect[];
+  plus: Rect[];
+  templates: Rect[];
+  start: Rect;
+}
+
+export function pvpDeployPanel(l: Layout): PvpDeployPanel {
+  const p = l.panel;
+  const land = l.mode === 'landscape';
+  const head = land ? 32 : 30;
+  const back = { x: p.x, y: p.y, w: BACK_W, h: head };
+  const mute = { x: p.x + p.w - MUTE_W, y: p.y, w: MUTE_W, h: head };
+  const budget = { x: p.x + BACK_W + 8, y: p.y + head / 2 };
+  const rosterY = land ? 42 : 34;
+  const rosterH = land ? 36 : 30;
+  const pmY = rosterY + rosterH + 4;
+  const pmH = land ? 28 : 24;
+  const roster = row(p.x, p.y + rosterY, p.w, rosterH, 5, 4);
+  // 足す・減らすは、兵種のボタンの下に2つ並べる
+  const minus: Rect[] = [];
+  const plus: Rect[] = [];
+  for (const r of roster) {
+    const half = Math.floor((r.w - 2) / 2);
+    minus.push({ x: r.x, y: p.y + pmY, w: half, h: pmH });
+    plus.push({ x: r.x + r.w - half, y: p.y + pmY, w: half, h: pmH });
+  }
+  const tY = pmY + pmH + (land ? 10 : 4);
+  const tH = land ? 32 : 28;
+  const t1 = row(p.x, p.y + tY, p.w, tH, 4, 4);
+  const t2 = row(p.x, p.y + tY + tH + 4, p.w, tH, 4, 4).slice(0, 3);
+  const start = land ? { x: p.x, y: p.y + p.h - 40, w: p.w, h: 40 } : { x: p.x, y: p.y + tY + 2 * tH + 8, w: p.w, h: 30 };
+  return { back, budget, mute, roster, minus, plus, templates: [...t1, ...t2], start };
 }

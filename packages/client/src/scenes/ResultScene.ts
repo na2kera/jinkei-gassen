@@ -18,12 +18,12 @@ import { addText } from '../ui/text.ts';
 /** 星を1つずつ出す間（ミリ秒） */
 const STAR_STEP_MS = 350;
 
-function titleOf(s: BattleSummary, viewer: Side): string {
+export function titleOf(s: BattleSummary, viewer: Side): string {
   if (s.winner === 'draw') return '引き分け';
   return s.winner === viewer ? '勝ち' : '負け';
 }
 
-function reasonOf(s: BattleSummary, viewer: Side): string {
+export function reasonOf(s: BattleSummary, viewer: Side): string {
   const won = s.winner === viewer;
   switch (s.reason) {
     case 'hq':
@@ -38,12 +38,12 @@ function reasonOf(s: BattleSummary, viewer: Side): string {
 }
 
 /** 画面に出す百分率。時間切れの比べ方と同じく、小数点以下を四捨五入する（assumptions S7） */
-function percent(ratio: number): string {
+export function percent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
 /** 部隊の呼び名（「左翼の騎兵」）。翼は見ている人から見た左右（敵の翼は左右を入れ替える） */
-function unitName(id: number | null, units: UnitView[], viewer: Side): string {
+export function unitName(id: number | null, units: UnitView[], viewer: Side): string {
   if (id === null) return 'なし';
   const u = units.find((v) => v.id === id);
   if (!u) return 'なし';

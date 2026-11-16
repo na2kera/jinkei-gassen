@@ -16,7 +16,8 @@ import type Phaser from 'phaser';
 import { effectCounts } from './art/effects.ts';
 import { unitReach } from './art/UnitSprite.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
-import { clearSave, loadSave, setStarsForDebug } from './save.ts';
+import { client, pvp, pvpLocal } from './net/pvp.ts';
+import { clearSave, loadSave, playerId, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
 
 interface DebugHooks {
@@ -121,6 +122,48 @@ export function installDebug(game: Phaser.Game): void {
     /** 開戦。viewer に 1 を渡すと、陣営1の側から同じ戦いを映す（対戦の陣営1の人の見え方を確かめるため） */
     start(viewer: Side = 0): boolean {
       return debug.start ? debug.start(viewer) : false;
+    },
+    /** 対戦の状態（段階・成績・自分の陣営・つながり・最後に届いたメッセージの種類と数・送ったメッセージの記録） */
+    get pvp(): unknown {
+      const r = client.room;
+      return {
+        active: pvp.active,
+        status: client.status,
+        code: client.code,
+        phase: r?.phase ?? null,
+        battleNo: r?.battleNo ?? null,
+        you: r?.you ?? null,
+        score: r?.score ?? null,
+        seats: r?.seats ?? null,
+        rematch: r?.rematch ?? null,
+        lastType: client.lastType,
+        received: { ...client.received },
+        sent: [...client.sentLog],
+        placements: pvpLocal.placements.length,
+        roster: { ...pvpLocal.roster },
+        result: client.result ? { winner: client.result.winner, reason: client.result.reason, score: client.result.score } : null,
+        snapTick: client.snap?.tick ?? null,
+      };
+    },
+    /** 前の部屋（または指定したコードの部屋）に、保存した名前で入る（確かめるときに画面の操作を省くため） */
+    pvpJoin(code?: string): boolean {
+      const c = code ?? savedRoomCode();
+      if (!c) return false;
+      pvp.begin();
+      client.join(c, playerId(), savedName() || '試し');
+      return true;
+    },
+    /** 対戦のつながりを切る（自動でつなぎ直すかを確かめるため） */
+    pvpDrop(): void {
+      client.dropForDebug();
+    },
+    /** すぐにつなぎ直す */
+    pvpReconnect(): void {
+      client.reconnectForDebug();
+    },
+    /** pid を作り直す（同じ保存の2枚のタブで、別の人として入るため） */
+    newPid(): string {
+      return resetPlayerIdForDebug();
     },
     /** 面ごとの星と、保存の中身 */
     get save(): unknown {

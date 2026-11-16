@@ -4,7 +4,22 @@
 
 import { KINDS, STANCES, type Placement } from '@jinkei/engine';
 
-export const SAVE_KEY = 'jinkei-gassen/v1';
+/**
+ * 保存の鍵。開発時だけ、URL に ?save=b のように付けると別の鍵（jinkei-gassen/v1:b）を使う。
+ * 同じブラウザの2枚のタブで対戦を確かめるとき、pid と名前を別にするため（本番では使わない）。
+ */
+export const SAVE_KEY = saveKey();
+
+function saveKey(): string {
+  const base = 'jinkei-gassen/v1';
+  if (!import.meta.env.DEV) return base;
+  try {
+    const slot = new URLSearchParams(window.location.search).get('save');
+    return slot && /^[a-z0-9]{1,8}$/.test(slot) ? `${base}:${slot}` : base;
+  } catch {
+    return base;
+  }
+}
 
 export interface SaveData {
   v: 1;
@@ -14,10 +29,16 @@ export interface SaveData {
   placements: Record<string, Placement[]>;
   /** 音を切っているか */
   muted: boolean;
+  /** 対戦の席に戻るための合言葉（16進の小文字32文字）。相手には送られない */
+  pid: string | null;
+  /** 対戦で使う名前（1〜12文字） */
+  name: string;
+  /** 最後に入っていた部屋のコード（読み込み直したときに「前の部屋に戻る」を出すため） */
+  roomCode: string | null;
 }
 
 function empty(): SaveData {
-  return { v: 1, stars: {}, placements: {}, muted: false };
+  return { v: 1, stars: {}, placements: {}, muted: false, pid: null, name: '', roomCode: null };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -51,6 +72,9 @@ function sanitize(raw: unknown): SaveData {
     }
   }
   if (typeof raw.muted === 'boolean') data.muted = raw.muted;
+  if (typeof raw.pid === 'string' && /^[0-9a-f]{32}$/.test(raw.pid)) data.pid = raw.pid;
+  if (typeof raw.name === 'string' && [...raw.name].length <= 12) data.name = raw.name;
+  if (typeof raw.roomCode === 'string' && /^\d{4}$/.test(raw.roomCode)) data.roomCode = raw.roomCode;
   return data;
 }
 
@@ -121,4 +145,39 @@ export function clearSave(): void {
   } catch {
     // 消せなくても、手元の記録は空になっている
   }
+}
+
+/** 対戦の pid。なければ作って保存する（128ビットの乱数を16進の小文字で） */
+export function playerId(): string {
+  const data = loadSave();
+  if (data.pid) return data.pid;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  data.pid = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  write();
+  return data.pid;
+}
+
+export function savedName(): string {
+  return loadSave().name;
+}
+
+export function saveName(name: string): void {
+  loadSave().name = name;
+  write();
+}
+
+export function savedRoomCode(): string | null {
+  return loadSave().roomCode;
+}
+
+export function saveRoomCode(code: string | null): void {
+  loadSave().roomCode = code;
+  write();
+}
+
+/** 開発用：pid を作り直す（同じ鍵の2枚のタブで別の人として入るため） */
+export function resetPlayerIdForDebug(): string {
+  loadSave().pid = null;
+  return playerId();
 }

@@ -65,8 +65,20 @@ export interface BattleSceneData {
   viewer: Side;
   /** 号令の欄を出すか（第1章の前半の面は出さない） */
   orders: boolean;
-  /** 「やめる」で戻る先 */
-  quitTo: { scene: string; data?: object };
+  /**
+   * 「やめる」を確かめたあとに呼ぶ（1人用は配置の画面へ、対戦は部屋を出る）。
+   * 呼ぶ側のシーンはもう止まっているので、戦闘の画面自身を渡して、そこから次の画面を始めてもらう。
+   */
+  onQuit: (battle: Phaser.Scene) => void;
+  /** 「やめる」のボタンの文字（対戦では「出る」） */
+  quitLabel?: string;
+  /** 決着の表示を出し終えたら呼ぶ。省略すると結果の画面（Result）へ移る */
+  onFinished?: (battle: Phaser.Scene) => void;
+  /**
+   * 戦場を上下左右に返して描くか。省略すると viewer が 1 のとき返す（1人用で陣営1から見るとき）。
+   * 対戦の場面はサーバーが「自分が下」に返し済みなので false を渡す（二重に返さない）。
+   */
+  flip?: boolean;
   /** 結果の画面に渡す面の id（対戦では空） */
   stageId: string;
 }
@@ -80,7 +92,10 @@ export class BattleScene extends Phaser.Scene {
   private speed = 1;
   private totalOrders = MAX_ORDERS;
   private ordersShown = true;
-  private quitTo: BattleSceneData['quitTo'] = { scene: 'Deploy' };
+  private onQuit: BattleSceneData['onQuit'] = (b) => b.scene.start('Deploy');
+  private quitLabel = 'やめる';
+  private onFinished: BattleSceneData['onFinished'] | null = null;
+  private flip = false;
   private stageId = '';
   private quitArmedUntil = 0;
   private quitButton: Button | null = null;
@@ -125,7 +140,10 @@ export class BattleScene extends Phaser.Scene {
     if (data.field) this.field = data.field;
     this.viewer = data.viewer ?? 0;
     this.ordersShown = data.orders ?? true;
-    this.quitTo = data.quitTo ?? { scene: 'Deploy' };
+    this.onQuit = data.onQuit ?? ((b) => b.scene.start('Deploy'));
+    this.quitLabel = data.quitLabel ?? 'やめる';
+    this.onFinished = data.onFinished ?? null;
+    this.flip = data.flip ?? this.viewer === 1;
     this.stageId = data.stageId ?? '';
   }
 
@@ -191,7 +209,7 @@ export class BattleScene extends Phaser.Scene {
     this.cameras.main.setSize(layout.width, layout.height);
     const field = this.field;
     // 陣営1の人が見るときは上下左右を返し、自軍がいつも下に映るようにする
-    this.fv = new FieldView(layout.field, field.width, field.height, this.viewer === 1);
+    this.fv = new FieldView(layout.field, field.width, field.height, this.flip);
     this.root = this.add.container(0, 0);
     const frame = this.add.graphics();
     drawFieldFrame(frame, this.fv);
@@ -220,8 +238,8 @@ export class BattleScene extends Phaser.Scene {
     this.speedButton = this.source?.setSpeed
       ? new Button(this, panel.speed, '', () => this.setSpeed(this.speed === 1 ? 2 : 1)).addTo(this.root)
       : null;
-    // やめる：1回目は「やめる？」に変わるだけで、猶予のうちにもう一度押すと配置の画面へ戻る
-    this.quitButton = new Button(this, panel.quit, 'やめる', () => this.pressQuit()).addTo(this.root);
+    // やめる：1回目は「やめる？」に変わるだけで、猶予のうちにもう一度押すと抜ける
+    this.quitButton = new Button(this, panel.quit, this.quitLabel, () => this.pressQuit()).addTo(this.root);
     this.targetButtons = new Map();
     this.orderButtons = new Map();
     // 号令を教える前の面では、号令の欄を出さない
@@ -260,13 +278,13 @@ export class BattleScene extends Phaser.Scene {
   private pressQuit(): void {
     const now = this.time.now;
     if (now < this.quitArmedUntil) {
-      this.scene.start(this.quitTo.scene, this.quitTo.data);
+      this.onQuit(this);
       return;
     }
     this.quitArmedUntil = now + QUIT_ARM_MS;
-    this.quitButton?.setText('やめる？').setSelected(true);
+    this.quitButton?.setText(`${this.quitLabel}？`).setSelected(true);
     this.time.delayedCall(QUIT_ARM_MS, () => {
-      if (this.time.now >= this.quitArmedUntil) this.quitButton?.setText('やめる').setSelected(false);
+      if (this.time.now >= this.quitArmedUntil) this.quitButton?.setText(this.quitLabel).setSelected(false);
     });
   }
 
@@ -376,7 +394,8 @@ export class BattleScene extends Phaser.Scene {
       const units = this.interp.latest?.view.units ?? [];
       session.result = { stageId: this.stageId, summary: s, viewer: this.viewer, units };
       debug.result = session.result;
-      this.scene.start('Result');
+      if (this.onFinished) this.onFinished(this);
+      else this.scene.start('Result');
     });
   }
 
