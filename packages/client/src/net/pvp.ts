@@ -17,8 +17,11 @@ export const client = new RoomClient();
 
 /** 対戦の配置を、画面を作り直しても失わないよう、ここに持つ */
 export const pvpLocal: {
-  /** どの戦いの前の配置か（room.battleNo）。変わったら、room.myArmy か前の戦いの配置から始め直す */
-  setupFor: number | null;
+  /**
+   * どの部屋の、どの戦いの前の配置か（setupKey）。変わったら、room.myArmy か前の戦いの配置から始め直す。
+   * battleNo だけだと、別の部屋の1戦目と見分けられないので、部屋のコードと組にする
+   */
+  setupFor: string | null;
   placements: Placement[];
   /** 編成（兵種ごとの数） */
   roster: Roster;
@@ -29,6 +32,11 @@ export const pvpLocal: {
 } = { setupFor: null, placements: [], roster: {}, draftDirty: false, wantReady: null };
 
 /** 部屋の画面の入力途中の値（向きを変えてシーンを作り直しても消えないよう、ここに持つ） */
+/** 配置の段階を見分ける鍵（部屋のコードと battleNo の組） */
+export function setupKey(room: { code: string; battleNo: number }): string {
+  return `${room.code}#${room.battleNo}`;
+}
+
 export const lobbyInput = { code: '' };
 
 /** 画面に短く出す知らせ（NetOverlay と部屋の画面が出す） */
@@ -42,6 +50,11 @@ export function notify(text: string, ms = 2500, error = true): void {
 }
 
 const OVERLAY = 'NetOverlay';
+/** Phaser のフレームの始めの出来事の名前（Phaser.Core.Events.PRE_STEP）と、シーンの状態の番号（Phaser.Scenes の START・SLEEPING）。
+ * 型だけを読み込んでいるので、値をここに書く */
+const PRE_STEP = 'prestep';
+const SCENE_START = 2;
+const SCENE_SLEEPING = 7;
 /** 下書きを送る間隔の下限（ミリ秒。design §4.3） */
 const DRAFT_GAP_MS = 500;
 
@@ -53,12 +66,15 @@ class PvpFlow {
   private battleShown = -1;
   /** 開始を予約したが、まだ create されていない画面 */
   private pending: string | null = null;
+  /** 次のフレームの始めに切り替える行き先（go が覚え、apply が使う） */
+  private want: { key: string; data: object | undefined } | null = null;
   private unsubscribe: (() => void) | null = null;
   private lastDraftAt = 0;
   private draftTimer = 0;
 
   attach(game: Phaser.Game): void {
     this.game = game;
+    game.events.on(PRE_STEP, () => this.apply());
     if (!this.unsubscribe) {
       this.unsubscribe = client.subscribe(() => this.route());
       client.onError((m) => {
@@ -76,6 +92,8 @@ class PvpFlow {
     this.active = true;
     this.battleDone = -1;
     this.battleShown = -1;
+    // 前の部屋の「届いていない分」（下書き・確定の望み）を、新しい部屋へ持ち越さない
+    this.resetLocal();
     if (this.game && !this.game.scene.isActive(OVERLAY)) this.game.scene.start(OVERLAY);
   }
 
@@ -90,11 +108,16 @@ class PvpFlow {
     this.active = false;
     client.leave();
     saveRoomCode(null);
+    this.resetLocal();
+    this.go('Lobby', undefined, true);
+  }
+
+  /** まだ届けていない下書き・確定の望みと、どの配置の段階かの印を消す（部屋を出た・入り直す・入れなかったとき） */
+  private resetLocal(): void {
     pvpLocal.setupFor = null;
     pvpLocal.draftDirty = false;
     pvpLocal.wantReady = null;
     window.clearTimeout(this.draftTimer);
-    this.go('Lobby', undefined, true);
   }
 
   /** 戦闘の画面が決着の表示を出し終えた */
@@ -115,7 +138,7 @@ class PvpFlow {
   requestRestart(scene: Phaser.Scene, data?: object): void {
     if (this.pending && this.pending !== scene.scene.key) return;
     this.pending = scene.scene.key;
-    scene.scene.restart(data);
+    this.want = { key: scene.scene.key, data };
   }
 
   // ---- 配置の下書きと確定（まだ届いていない分を持ち、届くまで送り直す） ----
@@ -187,6 +210,7 @@ class PvpFlow {
       if (client.creating) return;
       // 入れなかった・つなぎ直せなかった・別の画面で開かれた。部屋の画面へ戻して知らせる
       this.active = false;
+      this.resetLocal();
       if (client.failure) {
         notify(failureText(client.failure));
         // 部屋がない・満員・別の画面で開かれたときは、保存したコードを消す（「前の部屋に戻る」を出さない）。
@@ -204,7 +228,7 @@ class PvpFlow {
         this.go('Lobby');
         return;
       case 'setup':
-        if (pvpLocal.setupFor !== r.battleNo) {
+        if (pvpLocal.setupFor !== setupKey(r)) {
           // 新しい配置の段階に入った。前の戦いの「届いていない分」は持ち越さない
           pvpLocal.wantReady = null;
         }
@@ -250,17 +274,36 @@ class PvpFlow {
 
   /**
    * 画面を移す。同じ画面のままなら作り直さない（Lobby・Deploy などは、届いた room を見て自分で描き直す）。
-   * force は、同じ画面でも始め直すとき（部屋を出て、部屋の画面を入る前の表示に戻すとき）
+   * force は、同じ画面でも始め直すとき（部屋を出て、部屋の画面を入る前の表示に戻すとき）。
+   *
+   * ここではすぐに切り替えず、行き先を1つだけ覚えておき、次のフレームの始め（apply）で切り替える。
+   * Phaser の scene.start は「自分を止めて先を始める」を待ち行列に積むだけなので、
+   * タブを裏にしている間（フレームが進まない間）に段階が2つ以上進むと、行き先が両方とも始まってしまうため。
+   * 覚えておく行き先は上書きするので、いつでも対戦の画面は1つだけになる
    */
   private go(key: string, data?: object, force = false): void {
-    const game = this.game;
-    if (!game) return;
+    if (!this.game) return;
     const cur = this.current();
     if (cur === key && key !== 'Battle' && !force) return;
     this.pending = key;
-    const s = game.scene.getScenes(true).find((x) => x.scene.key !== OVERLAY);
-    if (s) s.scene.start(key, data);
-    else game.scene.start(key, data);
+    this.want = { key, data };
+  }
+
+  /** 覚えておいた行き先へ切り替える（フレームの始め、Phaser がシーンの待ち行列を処理する前に呼ばれる） */
+  private apply(): void {
+    const game = this.game;
+    const want = this.want;
+    if (!game || !want) return;
+    this.want = null;
+    // 重ねる表示（NetOverlay）以外で、動いている・始まりかけの画面をすべて止めてから、行き先を1回だけ始める。
+    // フレームの外なので、stop と start は待ち行列に積まれず、その場で行われる
+    for (const s of game.scene.getScenes(false)) {
+      const key = s.scene.key;
+      if (key === OVERLAY) continue;
+      const status = s.sys.settings.status;
+      if (status >= SCENE_START && status <= SCENE_SLEEPING) game.scene.stop(key);
+    }
+    game.scene.start(want.key, want.data);
   }
 }
 

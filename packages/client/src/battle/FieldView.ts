@@ -101,14 +101,16 @@ export class FieldView {
 
 /**
  * 戦場の幅が面で変わる（6〜12）ので、狭い戦場は、決まった描き場所（12列ぶん）の中央に寄せて描く。
- * 1マスの大きさは変えない。外側には岩壁の絵を置く（art/field.ts）。
+ * 1マスの大きさは変えない。外側には岩壁の絵を置く（art/field.ts）。幅が奇数なら半マスずらして中央に置く。
  * 斜めのときは縦が縮むので、縦も中央に寄せる。
  * 配置の操作・枠・文字の位置は、どれもここで作った FieldView を通すので、幅や視点に合わせて動く。
  */
 export function centeredFieldView(area: Rect, field: { width: number; height: number }, flipped = false, oblique = false): FieldView {
   const w = field.width * CELL;
   const h = Math.round(field.height * CELL * (oblique ? OBLIQUE_Y : 1));
-  const x = area.x + Math.round((area.w - w) / 2 / CELL) * CELL;
+  // 幅が奇数の戦場は、半マスずらしてちょうど中央に置く（2px 単位に揃える）。外側の岩壁は描き場所の格子で先に全体に敷き、
+  // その上に戦場のマスを重ねるので、半マスずれても切れ目は出ない（art/field.ts）
+  const x = area.x + Math.round((area.w - w) / 4) * 2;
   const y = area.y + Math.round((area.h - h) / 4) * 2;
   return new FieldView({ x, y, w, h }, field.width, field.height, flipped, oblique);
 }

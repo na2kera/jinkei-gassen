@@ -12,6 +12,7 @@ import {
   type GateSetup,
   type PvpMapId,
   type Stage,
+  type BattleEvent,
   type BattleView,
   type OrderKind,
   type OrderTarget,
@@ -24,6 +25,7 @@ import { effectCounts } from './art/effects.ts';
 import { LocalBattleSource } from './battle/LocalBattleSource.ts';
 import { unitReach } from './art/UnitSprite.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
+import { runEventDedup } from './net/eventDedup.ts';
 import { client, pvp, pvpLocal } from './net/pvp.ts';
 import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
@@ -254,6 +256,17 @@ export function installDebug(game: Phaser.Game): void {
         return f;
       },
       maps: () => PVP_MAPS,
+    },
+    /** フレームを止める・再開する（タブを裏にしてフレームが進まない状態を作り、その間に段階を進めて確かめるため） */
+    pauseLoop(): void {
+      game.loop.sleep();
+    },
+    resumeLoop(): void {
+      game.loop.wake();
+    },
+    /** 出来事の重複の見分け方を、snap の並び（tick と出来事）で試す。渡された出来事の列を返す */
+    dedupEvents(snaps: { tick: number; events: BattleEvent[] }[]): BattleEvent[] {
+      return runEventDedup(snaps);
     },
     /** 戦闘の画面の視点を切り替える（画面の「視点」と同じ） */
     toggleView(): boolean {

@@ -114,6 +114,8 @@ export class BattleScene extends Phaser.Scene {
   /** 斜め見下ろしか（design §5.7）。選んだ視点は保存し、次の戦いでも使う */
   private oblique = false;
   private soldierLayer!: Phaser.GameObjects.Container;
+  /** 戦場の描き場所（12列×16行ぶん。斜めのときは戦場より縦に広い） */
+  private area: Rect = { x: 0, y: 0, w: 0, h: 0 };
   /** 斜めのときの、高さのある城壁の絵（門が破れたら、両隣を消すため。列ごと） */
   private wallImages = new Map<number, Phaser.GameObjects.Image>();
   private viewButton: Button | null = null;
@@ -242,6 +244,7 @@ export class BattleScene extends Phaser.Scene {
     const field = this.field;
     // 陣営1の人が見るときは上下左右を返し、自軍がいつも下に映るようにする
     this.fv = centeredFieldView(layout.field, field, this.flip, this.oblique);
+    this.area = layout.field;
     this.root = this.add.container(0, 0);
     const frame = this.add.graphics();
     drawFieldFrame(frame, this.fv, layout.field);
@@ -255,7 +258,9 @@ export class BattleScene extends Phaser.Scene {
     this.root.add([frame, bg, this.gateLayer, soldierLayer, effectLayer, this.fogLayer, markLayer]);
     this.buildTallTerrain();
     this.buildGate();
-    this.buildFog();
+    // 霧は、最初の場面が届いて部隊の絵を作ったあと（作り直し）に出す。最初の build で出すと、
+    // 直後の作り直しで霧ごと壊れて、晴れる絵が見えずに音だけ鳴るため。晴れたあとの作り直しでは出さない（fogCleared）
+    if (this.interp.latest) this.buildFog();
     this.effects = new Effects(this, effectLayer);
 
     this.sprites = new Map();
@@ -479,7 +484,7 @@ export class BattleScene extends Phaser.Scene {
 
   /** 部隊を押している間だけ、その部隊の兵数と士気を出す */
   private onDown(pointer: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]): void {
-    if (this.inspect || over.length > 0 || !this.fv.contains(pointer.x, pointer.y)) return;
+    if (this.inspect || over.length > 0 || !inRect(this.clipRect(), pointer.x, pointer.y)) return;
     // 押した位置を戦場の座標に戻して、いちばん近い部隊を選ぶ（真上でも斜めでも、FieldView の逆の変換を通す）。
     // 斜めのときは、立った兵の体（足もとより少し上）を押すことが多いので、その分だけ下にずらしてから戻す
     const at = this.fv.toField(pointer.x, pointer.y + (this.fv.oblique ? 6 : 0));
@@ -561,7 +566,7 @@ export class BattleScene extends Phaser.Scene {
         time: now,
         order: u.status === 'active' ? u.order : null,
         wave: (this.waveUntil.get(u.id) ?? 0) > now,
-        bounds: this.fv.rect,
+        bounds: this.clipRect(),
         yScale: this.fv.yScale,
       });
       if (this.inspect?.unit === u.id) inspected = s;
@@ -710,7 +715,7 @@ export class BattleScene extends Phaser.Scene {
     if (this.infoText.text !== text) this.infoText.setText(text);
     const w = Math.ceil(this.infoText.width / 2) * 2 + 16;
     const h = Math.ceil(this.infoText.height / 2) * 2 + 12;
-    const f = this.fv.rect;
+    const f = this.clipRect();
     const p = this.fv.toScreen(s.x, s.y);
     // 指で隠れないよう部隊の上に出し、戦場の中に収める
     const x = Math.round(Math.max(f.x, Math.min(f.x + f.w - w, p.x - w / 2)) / 2) * 2;
@@ -779,6 +784,17 @@ export class BattleScene extends Phaser.Scene {
   }
   // ---- 視点（design §5.7） ----
 
+  /**
+   * 旗・数字の箱・押せる範囲を止める矩形。真上は戦場の矩形。
+   * 斜めは戦場が縦に縮んで、奥の行の兵や旗が戦場の矩形より上に伸びるので、縦は描き場所（12列×16行ぶん）まで広げる。
+   * 横は真上と同じく戦場の幅（狭い戦場の外の岩壁には出さない）
+   */
+  private clipRect(): Rect {
+    const f = this.fv.rect;
+    if (!this.fv.oblique) return f;
+    return { x: f.x, y: this.area.y, w: f.w, h: this.area.h };
+  }
+
   /** 真上と斜めを切り替える。表示物だけを作り直すので、戦いの途中でも位置は飛ばない */
   private toggleView(): void {
     this.oblique = !this.oblique;
@@ -812,4 +828,8 @@ export class BattleScene extends Phaser.Scene {
       }
     }
   }
+}
+
+function inRect(r: Rect, x: number, y: number): boolean {
+  return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 }

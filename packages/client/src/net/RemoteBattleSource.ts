@@ -1,15 +1,16 @@
 // 対戦の BattleSource（design §5.2）。サーバーの snap を場面に直して流す。号令はサーバーへ送る。
 // 場面はサーバーが「自分が下」に返し済みなので、ここでも戦闘の画面でも、座標は返さない。
 //
-// 出来事は、snap の evBase（その戦いの最初からの通し番号）で重複を除く。
-// サーバーが作り直されると tick が少し戻り、同じ出来事がもう一度届くことがあるが、番号が同じなので落とせる。
-// 中身がたまたま同じ正しい出来事は、番号が違うので落とさない。
+// 出来事の重複は、「刻みと中身が同じ出来事を、何回渡したか」で除く（eventDedup.ts）。
+// サーバーが作り直されると tick が少し戻り、同じ出来事がもう一度届くが、渡した回数を超えた分だけを渡す。
+// snap の evBase（通し番号）は、重複の判断には使わない（やり直しの区間に新しい号令が入ると番号がずれるため）。
 // 「受け取った」と「渡した」は分ける。onFrame を登録する前に届いた出来事・決着は、登録した時点で渡す。
 
 import { canOrderView, type BattleEvent, type BattleSummary, type BattleView, type OrderKind, type OrderTarget, type Side, type UnitView } from '@jinkei/engine';
 import type { PackedUnit, SnapMessage } from '@jinkei/server/protocol';
 import type { BattleFrame, BattleSource } from '../battle/BattleSource.ts';
 import type { RoomClient } from './RoomClient.ts';
+import { acceptEvents, createEventDedup } from './eventDedup.ts';
 
 /**
  * 詰めた配列を UnitView に戻す（並びは protocol の PackedUnit のとおり）。
@@ -35,8 +36,8 @@ export function viewOfSnap(m: SnapMessage): BattleView {
 export class RemoteBattleSource implements BattleSource {
   private readonly frameListeners: ((f: BattleFrame) => void)[] = [];
   private readonly endListeners: ((s: BattleSummary) => void)[] = [];
-  /** 次に受け取る出来事の通し番号（これより小さい番号は、もう受け取っている） */
-  private nextEvent = 0;
+  /** 出来事の重複を除くための、渡した回数の記録 */
+  private readonly dedup = createEventDedup();
   /** 受け取ったが、まだ画面に渡していない出来事（onFrame の登録前に届いた分） */
   private undelivered: BattleEvent[] = [];
   private view: BattleView | null = null;
@@ -113,15 +114,8 @@ export class RemoteBattleSource implements BattleSource {
     }
     this.view = view;
     this.tick = m.tick;
-    // 通し番号が、すでに受け取った番号より小さい出来事は捨てる。入り直して最初の snap は events が空で、
-    // evBase が「いままでに出た数」なので、その間の出来事は演出しない
-    m.events.forEach((e, i) => {
-      const n = m.evBase + i;
-      if (n < this.nextEvent) return;
-      this.undelivered.push(e);
-      this.nextEvent = n + 1;
-    });
-    if (m.evBase > this.nextEvent) this.nextEvent = m.evBase;
+    // 入り直して最初の snap は events が空なので、その間の出来事は演出しない
+    this.undelivered.push(...acceptEvents(this.dedup, m.tick, m.events));
     if (this.frameListeners.length > 0) this.emit();
   }
 

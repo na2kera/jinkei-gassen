@@ -3,6 +3,8 @@
 // 8つあって新しい名前で保存しようとしたら、一覧が「入れ替える相手を選ぶ」形に変わる。
 // 名前の入力欄は、部屋の画面と同じ作りの HTML の入力欄。
 // 窓の後ろ全体に押せる板を敷き、窓が開いている間は戦場を押せないようにする。
+// 保存の知らせは、窓の下の端の1行に出す（窓の外に出すと、窓に隠れるため）。
+// 名前の入力欄は、一覧を作り直しても作り直さない（打っている途中で焦点が外れないように）。
 
 import type { Kind } from '@jinkei/engine';
 import Phaser from 'phaser';
@@ -19,6 +21,10 @@ const NAME_MAX = 8;
 const ROW_H = 30;
 /** 「消す」を2回押すまでの猶予（ミリ秒） */
 const DELETE_ARM_MS = 2500;
+/** 窓の中の知らせを出しておく時間（ミリ秒） */
+const MESSAGE_MS = 2500;
+/** 窓の下の端の、知らせの行の高さ */
+const MESSAGE_H = 26;
 
 /** 小さな配置の絵の、兵種ごとの点の色 */
 const DOT: Record<Kind, number> = {
@@ -36,8 +42,6 @@ export interface FormationDialogHost {
   zoneWidth(): number;
   /** 呼び出した陣形を置く */
   recall(f: SavedFormation): void;
-  /** 1行の知らせ */
-  toast(text: string): void;
 }
 
 export class FormationDialog {
@@ -47,7 +51,7 @@ export class FormationDialog {
   /** 8つあって新しい名前を保存しようとしているとき、その陣形（入れ替える相手を選ぶ） */
   private pending: SavedFormation | null = null;
   private deleteArmed: { name: string; until: number } | null = null;
-  private nameDraft = '';
+  private message: { text: string; until: number } | null = null;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -62,7 +66,7 @@ export class FormationDialog {
   private rect(): Rect {
     const l = this.layout;
     const w = Math.min(l.width - 16, 360);
-    const h = 36 + 40 + MAX_FORMATIONS * ROW_H + 16;
+    const h = 36 + 40 + MAX_FORMATIONS * ROW_H + 8 + MESSAGE_H;
     return { x: Math.round((l.width - w) / 4) * 2, y: Math.round((l.height - h) / 4) * 2, w, h };
   }
 
@@ -77,10 +81,12 @@ export class FormationDialog {
     return b;
   }
 
-  private clear(): void {
-    if (this.input) this.nameDraft = this.input.value;
-    this.input?.destroy();
-    this.input = null;
+  /** 窓の中身を消す。keepInput なら、名前の入力欄は残す（焦点と打ちかけの文字を保つ） */
+  private clear(keepInput = false): void {
+    if (!keepInput) {
+      this.input?.destroy();
+      this.input = null;
+    }
     for (const b of this.buttons) b.destroy();
     this.buttons.length = 0;
     for (const o of this.objects) o.destroy();
@@ -88,7 +94,8 @@ export class FormationDialog {
   }
 
   private build(): void {
-    this.clear();
+    // 入れ替える相手を選ぶ間は入力欄を出さない。それ以外は、あれば残す
+    this.clear(!this.pending);
     const s = this.scene;
     const l = this.layout;
     // 後ろ全体に押せる板を敷き、戦場や配置のボタンに届かないようにする
@@ -104,7 +111,7 @@ export class FormationDialog {
     // 保存の行：名前と「保存」
     const rowY = r.y + 40;
     if (!this.pending) {
-      this.input = new HtmlInput(s, { x, y: rowY, w: w - 72, h: 30 }, { value: this.nameDraft, maxLength: 16, placeholder: '名前' });
+      this.input ??= new HtmlInput(s, { x, y: rowY, w: w - 72, h: 30 }, { maxLength: 16, placeholder: '名前' });
       this.button({ x: x + w - 64, y: rowY, w: 64, h: 30 }, '保存', () => this.save(), true);
     } else {
       this.button({ x: x + w - 64, y: rowY, w: 64, h: 30 }, 'やめる', () => {
@@ -132,6 +139,12 @@ export class FormationDialog {
       this.button({ x: x + w - 52, y: y + 2, w: 52, h: ROW_H - 4 }, armed ? '消す？' : '消す', () => this.pressDelete(f.name)).setSelected(!!armed);
     });
     if (list.length === 0) this.add(addText(s, x, top + 6, 'まだありません', 16, COLOR.dim));
+
+    // 知らせの行（窓の下の端）
+    const msg = this.message;
+    if (msg && msg.until > s.time.now) {
+      this.add(addText(s, x, r.y + r.h - MESSAGE_H / 2 - 4, msg.text, 16, COLOR.goldHi).setOrigin(0, 0.5));
+    }
   }
 
   /** 小さな配置の絵（1マスを2px の点にし、兵種で色を変える） */
@@ -154,19 +167,18 @@ export class FormationDialog {
     const name = (this.input?.value ?? '').normalize('NFC').trim();
     const len = [...name].length;
     if (len < 1 || len > NAME_MAX) {
-      this.host.toast('名前を1〜8文字で入れてください');
+      this.say('名前を1〜8文字で入れてください');
       return;
     }
     const units = this.host.current();
     if (!units || units.length === 0) {
-      this.host.toast('部隊を置いてから保存してください');
+      this.say('部隊を置いてから保存してください');
       return;
     }
     const f: SavedFormation = { name, width: this.host.zoneWidth(), units };
     if (saveFormation(f)) {
       if (this.input) this.input.el.value = '';
-      this.nameDraft = '';
-      this.host.toast(`「${name}」を保存しました`);
+      this.say(`「${name}」を保存しました`);
       this.build();
       return;
     }
@@ -180,10 +192,21 @@ export class FormationDialog {
     if (!f) return;
     saveFormation(f, i);
     this.pending = null;
-    this.nameDraft = '';
-    if (this.input) this.input.el.value = '';
-    this.host.toast(`「${f.name}」を保存しました`);
+    this.say(`「${f.name}」を保存しました`);
     this.build();
+  }
+
+  /** 窓の下の端に知らせを出す（少したったら消す） */
+  private say(text: string): void {
+    const until = this.scene.time.now + MESSAGE_MS;
+    this.message = { text, until };
+    this.build();
+    this.scene.time.delayedCall(MESSAGE_MS, () => {
+      if (this.message && this.message.until <= this.scene.time.now && this.objects.length > 0) {
+        this.message = null;
+        this.build();
+      }
+    });
   }
 
   private pressDelete(name: string): void {

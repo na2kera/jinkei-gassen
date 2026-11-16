@@ -45,7 +45,7 @@ import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
 import { debug } from '../debug.ts';
 import { saveFormation as saveFormationTo, savedFormations as savedFormationList, savedPvpArmy } from '../save.ts';
 import { CELL, deployInfo, deployPanel, getLayout, LAYOUT_EVENT, pvpDeployPanel, type DeployInfoLayout, type Rect } from '../layout.ts';
-import { client, pvp, pvpLocal } from '../net/pvp.ts';
+import { client, pvp, pvpLocal, setupKey } from '../net/pvp.ts';
 import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { KIND_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
@@ -372,6 +372,8 @@ export class DeployScene extends Phaser.Scene {
   }
 
   private stanceOkFor(kind: Kind, stance: Stance): boolean {
+    // 知らない方針（壊れた保存など）は、どの兵種にも許さない。読み込みの検査でも捨てているが、二重の守りとして見る
+    if (!STANCES.includes(stance)) return false;
     return this.pvpMode ? stanceAllowed(kind, stance) : stanceOk(this.stage, { kind, stance });
   }
 
@@ -411,8 +413,8 @@ export class DeployScene extends Phaser.Scene {
    */
   private beginPvpSetup(): void {
     const room = client.room;
-    if (!room || pvpLocal.setupFor === room.battleNo) return;
-    pvpLocal.setupFor = room.battleNo;
+    if (!room || pvpLocal.setupFor === setupKey(room)) return;
+    pvpLocal.setupFor = setupKey(room);
     const fromServer = room.myArmy !== null && room.myArmy.length > 0;
     const local = pvpLocal.placements.length > 0 ? pvpLocal.placements : savedPvpArmy();
     const base = fromServer && room.myArmy ? room.myArmy : local;
@@ -613,7 +615,6 @@ export class DeployScene extends Phaser.Scene {
       },
       zoneWidth: () => this.ownZone.width,
       recall: (f) => this.recallFormation(f),
-      toast: (t) => this.showToast(t),
     }, () => {
       this.dialog = null;
     });
