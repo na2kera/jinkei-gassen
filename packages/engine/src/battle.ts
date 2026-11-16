@@ -16,6 +16,7 @@ import {
   type AttackKind,
 } from './terrain.ts';
 import { DT, KIND_STATS, T } from './tuning.ts';
+import { isDenseArray, isInt, isObject, isOrderKind, isOrderTarget, isSide, isTerrain, MAX_FIELD_SIDE, MAX_ORDERS_PER_STEP, MAX_SCRIPTED_ORDERS } from './input.ts';
 import { wingOf } from './army.ts';
 import {
   ORDER_KINDS,
@@ -27,28 +28,35 @@ import {
   type Facing,
   type Field,
   type OrderInput,
+  type Placement,
   type Result,
+  type ScriptedOrder,
   type Side,
   type Unit,
+  type Zone,
 } from './types.ts';
 
 // ---------------------------------------------------------------- 作成
 
-function validateField(field: Field): string | null {
-  if (!field || typeof field !== 'object') return '戦場がない';
-  const { width, height } = field;
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 3 || height < 3) return '戦場の大きさが正しくない';
-  if (!Array.isArray(field.terrain) || field.terrain.length !== width * height) return '地形の長さが width × height と違う';
-  if (!Array.isArray(field.zones) || field.zones.length !== 2) return '配置エリアは陣営ごとに1つ';
-  for (const z of field.zones) {
-    if (!Number.isInteger(z.col) || !Number.isInteger(z.row) || !Number.isInteger(z.width) || !Number.isInteger(z.height)) {
-      return '配置エリアの値は整数で書く';
-    }
-    if (z.width < 1 || z.height < 1 || z.col < 0 || z.row < 0 || z.col + z.width > width || z.row + z.height > height) {
-      return '配置エリアが戦場からはみ出している';
-    }
+/** 戦場を調べ、正しければ、決まった鍵だけを取り出した複製を返す（JSON にして戻しても変わらない形にする） */
+function cleanField(field: unknown): Field | string {
+  if (!isObject(field)) return '戦場がない';
+  const { width, height, terrain, zones } = field;
+  if (!isInt(width) || !isInt(height) || width < 3 || height < 3 || width > MAX_FIELD_SIDE || height > MAX_FIELD_SIDE) return '戦場の大きさが正しくない';
+  if (!isDenseArray(terrain) || terrain.length !== width * height) return '地形の長さが width × height と違う';
+  if (!terrain.every(isTerrain)) return '知らない地形がある';
+  if (!isDenseArray(zones) || zones.length !== 2) return '配置エリアは陣営ごとに1つ';
+  const out: Zone[] = [];
+  for (const z of zones) {
+    if (!isObject(z)) return '配置エリアが正しくない';
+    const { col, row } = z;
+    const zw = z['width'];
+    const zh = z['height'];
+    if (!isInt(col) || !isInt(row) || !isInt(zw) || !isInt(zh)) return '配置エリアの値は整数で書く';
+    if (zw < 1 || zh < 1 || col < 0 || row < 0 || col + zw > width || row + zh > height) return '配置エリアが戦場からはみ出している';
+    out.push({ col, row, width: zw, height: zh });
   }
-  return null;
+  return { width, height, terrain: terrain.slice(), zones: [out[0] as Zone, out[1] as Zone] };
 }
 
 /** 陣営の「前」の向き（陣営0は y が減る向き） */
@@ -61,30 +69,33 @@ function leftSignX(side: Side): number {
   return side === 0 ? -1 : 1;
 }
 
+/**
+ * 戦闘を作る。setup はどんな値でもよく、正しくなければ例外を投げずにエラーを返す。
+ * 作った状態は、決まった鍵だけでできていて、JSON にして戻しても同じになる。
+ */
 export function createBattle(setup: BattleSetup): Result<BattleState> {
-  if (!setup || typeof setup !== 'object') return { ok: false, error: { code: 'invalid_setup', message: '設定がない' } };
-  const fieldError = validateField(setup.field);
-  if (fieldError) return { ok: false, error: { code: 'invalid_field', message: fieldError } };
-  if (!Number.isFinite(setup.seed)) return { ok: false, error: { code: 'invalid_setup', message: '種が正しくない' } };
-  if (!Number.isInteger(setup.maxTicks) || setup.maxTicks < 1) {
-    return { ok: false, error: { code: 'invalid_setup', message: 'maxTicks は1以上の整数' } };
-  }
-  if (!['compare', 'side0_wins', 'side0_loses'].includes(setup.timeout)) {
-    return { ok: false, error: { code: 'invalid_setup', message: 'timeout が正しくない' } };
-  }
-  const scripted = setup.scriptedOrders ?? [];
-  for (const o of scripted) {
-    if (!Number.isInteger(o.tick) || o.tick < 0 || (o.side !== 0 && o.side !== 1) || !ORDER_TARGETS.includes(o.target) || !ORDER_KINDS.includes(o.kind)) {
-      return { ok: false, error: { code: 'invalid_setup', message: '予定された号令が正しくない' } };
+  const bad = (message: string): Result<BattleState> => ({ ok: false, error: { code: 'invalid_setup', message } });
+  if (!isObject(setup)) return bad('設定がない');
+  const field = cleanField(setup.field);
+  if (typeof field === 'string') return { ok: false, error: { code: 'invalid_field', message: field } };
+  if (typeof setup.seed !== 'number' || !Number.isFinite(setup.seed)) return bad('種が正しくない');
+  if (!isInt(setup.maxTicks) || setup.maxTicks < 1) return bad('maxTicks は1以上の整数');
+  if (!['compare', 'side0_wins', 'side0_loses'].includes(setup.timeout as string)) return bad('timeout が正しくない');
+  if (setup.requireHq !== undefined && typeof setup.requireHq !== 'boolean') return bad('requireHq が正しくない');
+  const rawScripted: unknown = setup.scriptedOrders ?? [];
+  if (!isDenseArray(rawScripted)) return bad('予定された号令は配列で書く');
+  if (rawScripted.length > MAX_SCRIPTED_ORDERS) return bad(`予定された号令は ${MAX_SCRIPTED_ORDERS} 件まで`);
+  const scripted: ScriptedOrder[] = [];
+  for (const o of rawScripted) {
+    if (!isObject(o) || !isInt(o.tick) || o.tick < 0 || !isSide(o.side) || !isOrderTarget(o.target) || !isOrderKind(o.kind)) {
+      return bad('予定された号令が正しくない');
     }
+    scripted.push({ tick: o.tick, side: o.side, target: o.target, kind: o.kind });
   }
   const requireHq = setup.requireHq ?? true;
-  const field = setup.field;
-  if (!Array.isArray(setup.armies) || setup.armies.length !== 2) {
-    return { ok: false, error: { code: 'invalid_setup', message: '軍は2つ' } };
-  }
+  if (!isDenseArray(setup.armies) || setup.armies.length !== 2) return bad('軍は2つ');
   for (const side of [0, 1] as const) {
-    const errors = validateArmy(setup.armies[side], field.zones[side], { maxUnits: MAX_UNITS, requireHq });
+    const errors = validateArmy(setup.armies[side] as Placement[], field.zones[side], { maxUnits: MAX_UNITS, requireHq });
     if (errors.length > 0) {
       return { ok: false, error: { code: 'invalid_army', message: `陣営${side}の配置が正しくない`, side, armyErrors: errors } };
     }
@@ -119,6 +130,9 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
         flankPhase: 1,
         flankEdgeX: 0,
         runup: 0,
+        huntMoves: [],
+        huntStuckOn: null,
+        slideSign: 0,
         lastHitTick: null,
         routTick: null,
       });
@@ -163,7 +177,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
   const state: BattleState = {
     tick: 0,
     rng: rngFromSeed(setup.seed),
-    field: structuredCloneField(field),
+    field,
     units,
     ordersUsed: [0, 0],
     maxTicks: setup.maxTicks,
@@ -172,20 +186,12 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
     requireHq,
     initialMen,
     firstBroken: [null, null],
-    scriptedOrders: scripted.map((o) => ({ tick: o.tick, side: o.side, target: o.target, kind: o.kind })).sort((a, b) => a.tick - b.tick),
+    scriptedOrders: scripted.sort((a, b) => a.tick - b.tick),
+    scriptedNext: 0,
     brokenLastTick: [],
     flankY,
   };
   return { ok: true, value: state };
-}
-
-function structuredCloneField(f: Field): Field {
-  return {
-    width: f.width,
-    height: f.height,
-    terrain: f.terrain.slice(),
-    zones: [{ ...f.zones[0] }, { ...f.zones[1] }],
-  };
 }
 
 // ---------------------------------------------------------------- 1刻み
@@ -220,6 +226,8 @@ interface Decision {
   faceMove: boolean;
   /** 敗走中（すり抜け、端に収めない） */
   routing: boolean;
+  /** 本陣狙いで本陣へ向かって動く（詰まりの判定に、この刻みに動いた距離を数える） */
+  huntMove: boolean;
 }
 
 interface Damage {
@@ -342,6 +350,7 @@ function emptyDecision(): Decision {
     hadMeleeEnemy: false,
     faceMove: false,
     routing: false,
+    huntMove: false,
   };
 }
 
@@ -377,7 +386,8 @@ function pickAdvance(ctx: TickCtx, u: Unit): number | null {
   const cur = s.target;
   if (cur !== null && best !== null && cur !== best) {
     const c = ctx.state.units[cur] as Unit;
-    if (isEnemy(u, c) && (ctx.snap[cur] as Snap).status === 'active' && !(bestScore < score(cur) - T.advanceSwitchMargin)) {
+    // ほかの敵の値が 1.0 以上小さければ切り替える（ちょうど 1.0 小さいときも切り替える）
+    if (isEnemy(u, c) && (ctx.snap[cur] as Snap).status === 'active' && !(bestScore <= score(cur) - T.advanceSwitchMargin + 1e-9)) {
       return cur;
     }
   }
@@ -393,6 +403,8 @@ interface Plan {
   passing: boolean;
   /** 守備で持ち場にいる（錨になる） */
   atHome: boolean;
+  /** 本陣狙いで、敵の本陣へ向かっている */
+  hunt?: boolean;
 }
 
 function planAdvance(ctx: TickCtx, u: Unit): Plan {
@@ -440,28 +452,11 @@ function planMove(ctx: TickCtx, u: Unit, stance: Unit['stance']): Plan {
       return { target, vx: e.x - s.x, vy: e.y - s.y, limit: Infinity, passing: false, atHome: false };
     }
     case 'hunt': {
+      // 敵の本陣へまっすぐ向かう。途中の敵にぶつかったら、④の決まり（手前で止まり、接線に回る）で列に沿って滑る。
       const hq = enemyHq(ctx, u);
       if (hq === null) return planAdvance(ctx, u);
       const h = ctx.snap[hq] as Snap;
-      const toHq = normalize(h.x - s.x, h.y - s.y);
-      if (!toHq) return { target: hq, vx: 0, vy: 0, limit: Infinity, passing: true, atHome: false };
-      // 2.5 マス以内の敵（本陣以外）から離れる向きの力を足す。力は近いほど強い。
-      let vx = toHq.x;
-      let vy = toHq.y;
-      for (const e of ctx.state.units) {
-        if (!isEnemy(u, e) || e.kind === 'hq' || (ctx.snap[e.id] as Snap).status !== 'active') continue;
-        const es = ctx.snap[e.id] as Snap;
-        const d = dist(s.x, s.y, es.x, es.y);
-        if (d >= T.huntAvoidRange || d < 1e-9) continue;
-        const w = (T.huntAvoidStrength * (T.huntAvoidRange - d)) / T.huntAvoidRange;
-        vx += ((s.x - es.x) / d) * w;
-        vy += ((s.y - es.y) / d) * w;
-      }
-      if (!normalize(vx, vy)) {
-        vx = toHq.x;
-        vy = toHq.y;
-      }
-      return { target: hq, vx, vy, limit: Infinity, passing: true, atHome: false };
+      return { target: hq, vx: h.x - s.x, vy: h.y - s.y, limit: Infinity, passing: false, atHome: false, hunt: true };
     }
   }
 }
@@ -527,10 +522,48 @@ function decide(ctx: TickCtx, u: Unit): Decision {
   if (order === 'charge') d.speedMult = T.chargeSpeedMult;
   const plan = planMove(ctx, u, stance);
 
-  if (hasMelee) {
+  if (plan.hunt && plan.target !== null) {
+    // 本陣狙い：本陣以外の敵とは、正面にいても戦わない。戦うのは、狙い（敵の本陣）が近接の距離に入ったときだけ。
+    const hq = plan.target;
+    const fightWith = (id: number): Decision => {
+      d.anchor = true;
+      d.target = id;
+      d.attack = 'melee';
+      return d;
+    };
+    if (meleeEnemies.includes(hq)) return fightWith(hq);
+    // 詰まって戦っている相手がまだ近接の距離にいれば、戦い続ける。消えたか離れたら、また本陣へ向かう
+    if (u.huntStuckOn !== null) {
+      if (meleeEnemies.includes(u.huntStuckOn)) return fightWith(u.huntStuckOn);
+      u.huntStuckOn = null;
+      u.huntMoves = [];
+    }
+    // 続けて2秒のあいだ、動いた距離が 0.3 マスに満たなければ「詰まった」として、近接の距離のいちばん近い敵と戦う。
+    // 動いた距離は、2秒のあいだの差し引き（いまの位置と2秒前の位置の距離）で見る。押し合いで小刻みに揺れる分を数えると、
+    // その場から進めていないのに「動いている」ことになり、詰まりを見落とすため。
+    let mx = 0;
+    let my = 0;
+    for (const m of u.huntMoves) {
+      mx += m[0];
+      my += m[1];
+    }
+    const moved = Math.hypot(mx, my);
+    if (u.huntMoves.length >= T.huntStuckTicks && moved < T.huntStuckDist && meleeEnemies.length > 0) {
+      let best = meleeEnemies[0] as number;
+      for (const id of meleeEnemies) {
+        const dd = sd(ctx, u.id, id);
+        const db = sd(ctx, u.id, best);
+        if (dd < db - 1e-9 || (Math.abs(dd - db) <= 1e-9 && id < best)) best = id;
+      }
+      u.huntStuckOn = best;
+      u.huntMoves = [];
+      return fightWith(best);
+    }
+    d.huntMove = true;
+  } else if (hasMelee) {
     let fight = true;
     if (plan.passing) {
-      // 本陣狙いと迂回の①②は、進む向きの正面（±60°）に近接の敵がいなければ戦わずに進む
+      // 迂回の①②は、進む向きの正面（±50°）に近接の敵がいなければ戦わずに進む
       fight = meleeEnemies.some((id) => {
         const e = ctx.snap[id] as Snap;
         return angleBetween(plan.vx, plan.vy, e.x - s.x, e.y - s.y) <= T.passFrontAngle;
@@ -566,7 +599,7 @@ function decide(ctx: TickCtx, u: Unit): Decision {
  * 動きたい分 (mx, my) を、刻みの初めの位置にいるほかの active な部隊にぶつからないように直す。
  * 0.9 以内に入るなら手前で止まり、残りの分の半分を、相手のまわりを回る向き（接線）に進む。
  */
-function resolveMove(ctx: TickCtx, u: Unit, mx: number, my: number, target: number | null): { x: number; y: number } {
+function resolveMove(ctx: TickCtx, u: Unit, mx: number, my: number, target: number | null, keepSlide = false): { x: number; y: number } {
   const s = ctx.snap[u.id] as Snap;
   const L = Math.hypot(mx, my);
   if (L < 1e-12) return { x: s.x, y: s.y };
@@ -602,7 +635,11 @@ function resolveMove(ctx: TickCtx, u: Unit, mx: number, my: number, target: numb
       hitId = o.id;
     }
   }
-  if (hitId < 0) return { x: s.x + mx, y: s.y + my };
+  if (hitId < 0) {
+    // 何にもぶつからずに動けたら、回る向きの記憶を消す
+    if (keepSlide) u.slideSign = 0;
+    return { x: s.x + mx, y: s.y + my };
+  }
   const cx = s.x + mx * hitS;
   const cy = s.y + my * hitS;
   const rest = (1 - hitS) * L * 0.5;
@@ -614,7 +651,15 @@ function resolveMove(ctx: TickCtx, u: Unit, mx: number, my: number, target: numb
   const dot = (t1.x * mx + t1.y * my) / L;
   let tx: number;
   let ty: number;
-  if (Math.abs(dot) > 1e-6) {
+  if (keepSlide && u.slideSign !== 0) {
+    // 本陣狙い：ぶつかり続けている間は、最初に決めた回る側（動きたい向きの左か右か）を保つ。
+    // 敵の列にぶつかると、相手が隣の部隊へ次々に変わる。相手ごとに向きを決め直すと、隣どうしのすき間で
+    // 左右に行き来して挟まるため、同じ側へ滑り続けて列の端か穴まで進ませる
+    const left = sideSign(mx, my, t1.x, t1.y) >= 0;
+    const sign = left === (u.slideSign > 0) ? 1 : -1;
+    tx = t1.x * sign;
+    ty = t1.y * sign;
+  } else if (Math.abs(dot) > 1e-6) {
     const sign = dot > 0 ? 1 : -1;
     tx = t1.x * sign;
     ty = t1.y * sign;
@@ -629,6 +674,7 @@ function resolveMove(ctx: TickCtx, u: Unit, mx: number, my: number, target: numb
     tx = goLeft ? l.x : -l.x;
     ty = goLeft ? l.y : -l.y;
   }
+  if (keepSlide) u.slideSign = sideSign(mx, my, tx, ty) >= 0 ? 1 : -1;
   return { x: cx + tx * rest, y: cy + ty * rest };
 }
 
@@ -766,7 +812,12 @@ function pushEvent(events: BattleEvent[], e: BattleEvent): void {
   events.push(e);
 }
 
-/** 1刻み進める。決着後は何もしない。渡された状態を書き換え、この刻みの出来事を返す。 */
+/**
+ * 1刻み進める。決着後は何もしない。渡された状態を書き換え、この刻みの出来事を返す。
+ * state は「createBattle が作り、step だけが書き換え、JSON にして戻しただけのもの」を前提とし、中身の全検査はしない
+ * （サーバーは利用者から状態を受け取らない）。orders は利用者の入力なので、配列でない・先頭の
+ * MAX_ORDERS_PER_STEP 件より後ろ・形や名前が正しくない号令は無視し、状態を変えない。
+ */
 export function step(state: BattleState, orders: readonly OrderInput[]): BattleEvent[] {
   const events: BattleEvent[] = [];
   if (state.outcome) return events;
@@ -776,8 +827,20 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
 
   // ① 号令を受け付ける（予定された号令を先に、続けて渡された号令を配列の順に）
   const incoming: OrderInput[] = [];
-  for (const o of state.scriptedOrders) if (o.tick === t) incoming.push({ side: o.side, target: o.target, kind: o.kind });
-  if (Array.isArray(orders)) for (const o of orders) if (o && typeof o === 'object') incoming.push(o);
+  const sc = state.scriptedOrders;
+  while (state.scriptedNext < sc.length && (sc[state.scriptedNext] as ScriptedOrder).tick < t) state.scriptedNext++;
+  while (state.scriptedNext < sc.length && (sc[state.scriptedNext] as ScriptedOrder).tick === t) {
+    const o = sc[state.scriptedNext] as ScriptedOrder;
+    incoming.push({ side: o.side, target: o.target, kind: o.kind });
+    state.scriptedNext++;
+  }
+  if (Array.isArray(orders)) {
+    const n = Math.min(orders.length, MAX_ORDERS_PER_STEP);
+    for (let i = 0; i < n; i++) {
+      const o: unknown = orders[i];
+      if (isObject(o) && isSide(o.side) && isOrderTarget(o.target) && isOrderKind(o.kind)) incoming.push({ side: o.side, target: o.target, kind: o.kind });
+    }
+  }
   for (const o of incoming) {
     if (applyOrder(state, o.side, o.target, o.kind, moraleDelta)) {
       pushEvent(events, { type: 'order', tick: t, side: o.side, target: o.target, kind: o.kind });
@@ -808,7 +871,7 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
     const mx = d.dx * step;
     const my = d.dy * step;
     if (d.routing) newPos[u.id] = { x: u.x + mx, y: u.y + my };
-    else newPos[u.id] = resolveMove(ctx, u, mx, my, d.target);
+    else newPos[u.id] = resolveMove(ctx, u, mx, my, d.target, d.huntMove);
   }
   for (const u of state.units) {
     const p = newPos[u.id] as { x: number; y: number };
@@ -819,9 +882,18 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   for (const u of state.units) if (u.status === 'active') clampInside(state, u);
   for (const u of state.units) {
     const d = decisions[u.id] as Decision;
+    const s = snap[u.id] as Snap;
     if (u.kind === 'cavalry' && u.status === 'active' && !d.hadMeleeEnemy) {
-      const s = snap[u.id] as Snap;
-      u.runup += dist(s.x, s.y, u.x, u.y);
+      // 助走は「続けて動いた距離」。この刻みに動かなかったら 0 に戻す（止まって待ってから突入しないように）
+      const moved = dist(s.x, s.y, u.x, u.y);
+      u.runup = moved < T.runupStillDist ? 0 : u.runup + moved;
+    }
+    // 本陣狙いの詰まりの判定：本陣へ向かって動いた刻みの距離を、直近の huntStuckTicks 刻みぶん持つ
+    if (u.status === 'active' && d.huntMove && !d.anchor) {
+      u.huntMoves.push([u.x - s.x, u.y - s.y]);
+      if (u.huntMoves.length > T.huntStuckTicks) u.huntMoves.shift();
+    } else if (u.huntMoves.length > 0) {
+      u.huntMoves = [];
     }
   }
 

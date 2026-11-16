@@ -2,6 +2,7 @@
 
 import { ORDER_KINDS, ORDER_TARGETS, type BattleState, type BattleView, type OrderKind, type OrderTarget, type Result, type Side, type Unit } from './types.ts';
 import { T } from './tuning.ts';
+import { isObject } from './input.ts';
 
 /** その部隊が号令の対象になるか（翼と、突撃は本陣にかからないこと） */
 export function orderApplies(u: Unit, side: Side, target: OrderTarget, kind: OrderKind): boolean {
@@ -13,6 +14,9 @@ export function orderApplies(u: Unit, side: Side, target: OrderTarget, kind: Ord
 
 /** 号令を受け付けられるか。受け付けられないときは理由を返す（状態は変えない） */
 export function canOrder(state: BattleState, side: Side, target: OrderTarget, kind: OrderKind): Result<true> {
+  if (!isObject(state) || !Array.isArray(state.units) || !Array.isArray(state.ordersUsed)) {
+    return { ok: false, error: { code: 'invalid_order', message: '状態が正しくない' } };
+  }
   if (side !== 0 && side !== 1) return { ok: false, error: { code: 'invalid_order', message: '陣営が正しくない' } };
   if (!ORDER_TARGETS.includes(target)) return { ok: false, error: { code: 'invalid_order', message: '号令の相手が正しくない' } };
   if (!ORDER_KINDS.includes(kind)) return { ok: false, error: { code: 'invalid_order', message: '号令の種類が正しくない' } };
@@ -76,11 +80,13 @@ export function applyOrder(
  * 条件は canOrder と同じ：決着していない、残り回数がある、対象の翼にその号令がかかる active な部隊がいる（突撃は本陣にかからない）。
  */
 export function canOrderView(view: BattleView, side: Side, target: OrderTarget, kind: OrderKind): boolean {
+  if (!isObject(view) || !Array.isArray(view.units) || !Array.isArray(view.ordersLeft)) return false;
   if (side !== 0 && side !== 1) return false;
   if (!ORDER_TARGETS.includes(target) || !ORDER_KINDS.includes(kind)) return false;
   if (view.outcome) return false;
-  if ((view.ordersLeft[side] ?? 0) <= 0) return false;
+  const left = view.ordersLeft[side];
+  if (typeof left !== 'number' || !(left > 0)) return false;
   return view.units.some(
-    (u) => u.side === side && u.status === 'active' && (target === 'all' || u.wing === target) && !(kind === 'charge' && u.kind === 'hq'),
+    (u) => isObject(u) && u.side === side && u.status === 'active' && (target === 'all' || u.wing === target) && !(kind === 'charge' && u.kind === 'hq'),
   );
 }

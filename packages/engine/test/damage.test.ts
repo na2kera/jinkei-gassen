@@ -187,3 +187,17 @@ describe('騎兵の突入', () => {
     throw new Error('突入が起きない');
   });
 });
+
+describe('助走は「続けて動いた距離」', () => {
+  it('助走のあと堅守して止まって待つと、助走は 0 に戻り、敵が来ても突入しない（レビューの指摘 4 の再現）', () => {
+    // 騎兵 (5,12)、敵の歩兵 (5,4) が前進してくる。10刻み動いたあと（助走 2.2）、騎兵に堅守をかけて待つ
+    const s = battle([p('cavalry', 5, 12, 'advance')], [p('infantry', 5, 4, 'advance')]);
+    for (let i = 0; i < 10; i++) step(s, []);
+    expect(s.units[0]!.runup).toBeGreaterThanOrEqual(T.impactRunup);
+    step(s, [{ side: 0, target: 'all', kind: 'brace' }]);
+    expect(s.units[0]!.runup).toBe(0);
+    let impacts = 0;
+    for (let i = 0; i < 80; i++) for (const e of step(s, [])) if (e.type === 'impact') impacts++;
+    expect(impacts).toBe(0);
+  });
+});

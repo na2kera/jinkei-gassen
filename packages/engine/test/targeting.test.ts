@@ -34,16 +34,19 @@ describe('近接の距離に敵がいないとき', () => {
     // 右前：距離 √(9+9)=4.24 + 3 = 7.24、正面：5 + 0 = 5
     expect(s.units[0]!.target).toBe(2);
   });
-  it('前進：いまの狙いは、ほかの敵の値が 1.0 以上小さくならない限り変えない', () => {
-    const s = battle([p('infantry', 5, 12, 'hold')], [p('infantry', 5, 4, 'hold'), p('infantry', 5, 5, 'hold')]);
-    // いまの狙いを、少し遠いほう（値 8）にしておく。近いほうは値 7（差 1.0 ちょうどは変えない）
-    s.units[0]!.stance = 'advance';
-    s.units[0]!.target = 1;
-    step(s, []);
-    expect(s.units[0]!.target).toBe(1);
-    place(s, 2, 5.5, 6.0); // 差が 1.0 を超える
-    step(s, []);
-    expect(s.units[0]!.target).toBe(2);
+  it('前進：いまの狙いは、ほかの敵の値が 1.0 以上小さくならない限り変えない（直前・ちょうど・直後）', () => {
+    // 陣営0の歩兵（5.5, 12.5）は、この刻みの初めの位置で値を比べる。いまの狙い（1）は真上 8 マス先で値 8
+    const run = (otherY: number): number | null => {
+      const s2 = battle([p('infantry', 5, 12, 'hold')], [p('infantry', 5, 4, 'hold'), p('infantry', 0, 0, 'hold')]);
+      s2.units[0]!.stance = 'advance';
+      s2.units[0]!.target = 1;
+      place(s2, 2, 5.5, otherY); // 真上なので、値は距離そのもの
+      step(s2, []);
+      return s2.units[0]!.target;
+    };
+    expect(run(12.5 - 7.01)).toBe(1); // 0.99 小さい：変えない
+    expect(run(12.5 - 7.0)).toBe(2); // ちょうど 1.0 小さい：変える
+    expect(run(12.5 - 6.99)).toBe(2); // 1.01 小さい：変える
   });
   it('守備：4マス以内のいちばん近い敵を狙い（向くだけで近づかない）、遠ければ狙わない', () => {
     const s = battle([p('infantry', 5, 12, 'hold')], [p('infantry', 7, 9, 'hold')]);

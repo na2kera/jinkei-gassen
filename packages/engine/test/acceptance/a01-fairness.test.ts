@@ -40,7 +40,8 @@ describe('A1 陣営と順番で有利不利がない', () => {
           const H = s.field.height;
           // 陣営0の i 番目と、陣営1の i 番目が鏡写しの組。狙いの id も n だけずれて対応する
           const mirrorId = (id2: number | null): number | null => (id2 === null ? null : (id2 + n) % (2 * n));
-          while (!s.outcome) {
+          // 初期状態と、各 step のあと（決着した最後の刻みを含む）で調べる
+          const check = (): void => {
             for (let i = 0; i < n; i++) {
               const u = s.units[i]!;
               const v = s.units[i + n]!;
@@ -53,8 +54,13 @@ describe('A1 陣営と順番で有利不利がない', () => {
               expect(u.status, msg).toBe(v.status);
               expect(mirrorId(u.target), msg).toBe(v.target);
             }
+          };
+          check();
+          while (!s.outcome) {
             step(s, []);
+            check();
           }
+          if (!s.outcome) return;
           expect(s.outcome.winner).toBe('draw');
         }
       }

@@ -149,26 +149,81 @@ describe('迂回', () => {
 });
 
 describe('本陣狙い', () => {
-  it('進む向きの正面にいない近接の敵とは戦わずに進み続ける', () => {
-    const s = battle([p('cavalry', 5, 10, 'hunt')], [p('hq', 5, 0, 'hold'), p('infantry', 6, 10, 'hold')]);
-    const y0 = s.units[0]!.y;
+  // 陣営0の騎兵（本陣狙い）を (5,12) に、陣営1の本陣を (5,1) に、そのあいだの行 6 に守備の歩兵の列を置く
+  const huntScene = (wallCols: number[]) =>
+    battle([p('cavalry', 5, 12, 'hunt'), p('infantry', 0, 15, 'hold')], [p('hq', 5, 1, 'hold'), ...wallCols.map((c) => p('infantry', c, 6, 'hold'))]);
+  const run = (s: ReturnType<typeof battle>, n: number, each?: () => void): void => {
+    for (let i = 0; i < n && !s.outcome; i++) {
+      step(s, []);
+      each?.();
+    }
+  };
+
+  it('敵の列にぶつかると、戦わずに列に沿って滑る', () => {
+    const s = huntScene([2, 3, 4, 5, 6, 7, 8, 9]);
+    run(s, 25); // 列に着く
+    const x0 = s.units[0]!.x;
+    run(s, 15);
+    expect(Math.abs(s.units[0]!.x - x0)).toBeGreaterThan(0.8); // 横へ滑っている
+    expect(s.units[0]!.y).toBeGreaterThan(6.5); // まだ列の手前
+    expect(s.units[0]!.stats.dealt).toBe(0); // 列の部隊とは戦っていない
+    expect(s.units[0]!.target).toBe(2);
+  });
+  it('列の端から抜けて本陣へ向かい、本陣とだけ戦う（すれ違う敵からは打たれる）', () => {
+    const s = huntScene([2, 3, 4, 5, 6, 7, 8, 9]);
+    let passed = false;
+    run(s, 200, () => {
+      if (s.units[0]!.y < 6) passed = true;
+    });
+    expect(passed).toBe(true);
+    expect(s.units[2]!.stats.taken).toBeGreaterThan(0);
+    expect(s.units[0]!.stats.dealt).toBeCloseTo(s.units[2]!.stats.taken, 9);
+    expect(s.units[0]!.stats.taken).toBeGreaterThan(0);
+  });
+  it('列の穴から抜ける', () => {
+    const s = huntScene([2, 3, 4, 7, 8, 9]);
+    let passedAt = -1;
+    run(s, 80, () => {
+      if (passedAt < 0 && s.units[0]!.y < 6) passedAt = s.tick;
+    });
+    expect(passedAt).toBeGreaterThan(0);
+    expect(Math.abs(s.units[0]!.x - 6.0)).toBeLessThan(1.5);
+    expect(s.units[0]!.stats.dealt).toBeCloseTo(s.units[2]!.stats.taken, 9);
+  });
+  it('正面に本陣以外の敵がいても戦わない。狙い（本陣）が近接の距離に入れば戦う', () => {
+    const s = battle([p('cavalry', 5, 10, 'hunt')], [p('hq', 5, 0, 'hold'), p('infantry', 5, 9, 'hold')]);
     step(s, []);
     expect(s.units[0]!.target).toBe(1);
-    expect(s.units[0]!.y).toBeLessThan(y0);
     expect(s.units[2]!.men).toBe(100);
+    const t = battle([p('cavalry', 5, 10, 'hunt')], [p('hq', 5, 9, 'hold'), p('infantry', 0, 0, 'hold')]);
+    step(t, []);
+    expect(t.units[0]!.target).toBe(1);
+    expect(t.units[1]!.men).toBeLessThan(80);
   });
-  it('進む向きの正面にいれば、ふつうに戦う（本陣は避ける力の対象でないので、真正面の本陣で確かめる）', () => {
-    const s = battle([p('cavalry', 5, 10, 'hunt')], [p('hq', 5, 9, 'hold'), p('infantry', 0, 0, 'hold')]);
-    step(s, []);
-    expect(s.units[0]!.target).toBe(1);
-    expect(s.units[0]!.y).toBe(10.5);
-    expect(s.units[1]!.men).toBeLessThan(80);
+  it('続けて2秒のあいだ 0.3 マスも進めなければ「詰まった」として、近接の距離のいちばん近い敵と戦う', () => {
+    // 列が戦場の幅いっぱいで抜けられない。端まで滑って詰まる
+    const s = huntScene([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    let stuckAt = -1;
+    run(s, 200, () => {
+      if (stuckAt < 0 && s.units[0]!.huntStuckOn !== null) stuckAt = s.tick;
+    });
+    expect(stuckAt).toBeGreaterThan(0);
+    expect(s.units[0]!.stats.dealt).toBeGreaterThan(0);
+    expect(s.units[2]!.stats.taken).toBe(0);
   });
-  it('2.5 マス以内の敵（本陣以外）から離れる向きに曲がる', () => {
-    const s = battle([p('cavalry', 5, 12, 'hunt')], [p('hq', 5, 0, 'hold'), p('infantry', 6, 10, 'hold')]);
+  it('詰まって戦っていた相手が消えたら、また本陣へ向かう', () => {
+    const s = huntScene([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    const u = s.units[0]!;
+    for (let i = 0; i < 200 && u.huntStuckOn === null; i++) step(s, []);
+    expect(u.status).toBe('active');
+    const foe = u.huntStuckOn;
+    expect(foe).not.toBeNull();
+    if (foe === null) return;
+    s.units[foe]!.status = 'gone';
+    s.units[foe]!.goneReason = 'destroyed';
     step(s, []);
-    // 右前の歩兵から離れて、左へ曲がる
-    expect(s.units[0]!.x).toBeLessThan(5.5);
+    expect(u.huntStuckOn).toBeNull();
+    expect(u.target).toBe(2);
   });
   it('敵の本陣がなければ、前進と同じ', () => {
     const s = battle([p('cavalry', 5, 12, 'hunt')], [p('infantry', 8, 2, 'hold')]);

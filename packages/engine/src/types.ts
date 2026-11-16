@@ -123,6 +123,12 @@ export interface Unit {
   flankEdgeX: number;
   /** 騎兵の助走距離（近接の距離に敵がいない状態で続けて動いた距離） */
   runup: number;
+  /** 本陣狙い：直近の刻みに本陣へ向かって動いた分 [dx, dy]（詰まりの判定に使う。最大 huntStuckTicks 個） */
+  huntMoves: [number, number][];
+  /** 本陣狙い：詰まって戦っている相手。なければ null */
+  huntStuckOn: number | null;
+  /** 本陣狙い：ぶつかり続けている間に回る側。動きたい向きの左が 1、右が -1、未定は 0 */
+  slideSign: 1 | -1 | 0;
   /** 最後に損害を受けた刻み。まだなら null */
   lastHitTick: number | null;
   /** 敗走を始めた刻み。敗走していなければ null */
@@ -164,6 +170,8 @@ export interface BattleState {
   firstBroken: [number | null, number | null];
   /** 予定された号令（tick の昇順） */
   scriptedOrders: ScriptedOrder[];
+  /** 予定された号令のうち、次に見る位置（毎刻み全件を走査しないため） */
+  scriptedNext: number;
   /** 前の刻みに敗走・全滅した部隊 */
   brokenLastTick: BrokenRecord[];
   /** 陣営ごとの、迂回の②で進む先の y（開戦時の敵軍の重心から決める） */

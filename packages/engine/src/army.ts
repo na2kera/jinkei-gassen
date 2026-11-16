@@ -14,6 +14,7 @@ import {
   type Zone,
 } from './types.ts';
 import { DEFAULT_COSTS } from './tuning.ts';
+import { isDenseArray, isInt, isKind, isObject, isStance } from './input.ts';
 
 /** 標準の戦場の大きさ（自軍6 + 中間4 + 敵軍6） */
 export const STANDARD_WIDTH = 12;
@@ -80,7 +81,10 @@ export function stanceAllowed(kind: Kind, stance: Stance): boolean {
 /** 配置の値段の合計。costs を省略すると DEFAULT_COSTS（assumptions S1）を使う */
 export function armyCost(placements: readonly Placement[], costs: Partial<Record<Kind, number>> = DEFAULT_COSTS): number {
   let sum = 0;
-  for (const p of placements) sum += costs[p.kind] ?? DEFAULT_COSTS[p.kind] ?? 0;
+  for (const p of placements) {
+    const v = costs[p.kind] ?? DEFAULT_COSTS[p.kind] ?? 0;
+    sum += typeof v === 'number' && Number.isFinite(v) ? v : 0;
+  }
   return sum;
 }
 
@@ -93,25 +97,33 @@ export function inZone(col: number, row: number, zone: Zone): boolean {
  * 見るもの：兵種・方針・マスの値が正しいか、エリアの内か、マスの重なり、本陣の数、予算、部隊数。
  */
 export function validateArmy(placements: readonly Placement[], zone: Zone, limits: ArmyLimits): ArmyError[] {
+  // どんな値が来ても例外を投げない。配列の形と数の上限を、要素を走査する前に調べる
+  if (!isDenseArray(placements)) return [{ code: 'invalid_cell', message: '配置は穴のない配列で書く' }];
+  const lim: Partial<ArmyLimits> = isObject(limits) ? limits : {};
+  const maxUnits = isInt(lim.maxUnits) && lim.maxUnits >= 0 ? lim.maxUnits : MAX_UNITS;
+  if (placements.length > maxUnits) return [{ code: 'too_many_units', message: `部隊が多すぎる: ${placements.length} > ${maxUnits}` }];
+  const z: Zone | null =
+    isObject(zone) && isInt(zone.col) && isInt(zone.row) && isInt(zone.width) && isInt(zone.height) ? zone : null;
   const errors: ArmyError[] = [];
-  const requireHq = limits.requireHq ?? true;
-  const minUnits = limits.minUnits ?? 1;
+  const requireHq = lim.requireHq ?? true;
+  const minUnits = isInt(lim.minUnits) ? lim.minUnits : 1;
   const seen = new Set<string>();
   let hqCount = 0;
   let others = 0;
-  placements.forEach((p, index) => {
-    if (!KINDS.includes(p.kind)) {
-      errors.push({ code: 'invalid_kind', index, message: `兵種が正しくない: ${String(p.kind)}` });
-      return;
+  for (let index = 0; index < placements.length; index++) {
+    const p: unknown = placements[index];
+    if (!isObject(p) || !isKind(p.kind)) {
+      errors.push({ code: 'invalid_kind', index, message: '兵種が正しくない' });
+      continue;
     }
-    if (!STANCES.includes(p.stance) || !stanceAllowed(p.kind, p.stance)) {
-      errors.push({ code: 'invalid_stance', index, message: `${p.kind} には方針 ${String(p.stance)} を選べない` });
+    if (!isStance(p.stance) || !stanceAllowed(p.kind, p.stance)) {
+      errors.push({ code: 'invalid_stance', index, message: `${p.kind} には、その方針を選べない` });
     }
-    if (!Number.isInteger(p.col) || !Number.isInteger(p.row)) {
+    if (!isInt(p.col) || !isInt(p.row)) {
       errors.push({ code: 'invalid_cell', index, message: 'マスの位置は整数で書く' });
-      return;
+      continue;
     }
-    if (!inZone(p.col, p.row, zone)) {
+    if (!z || !inZone(p.col, p.row, z)) {
       errors.push({ code: 'out_of_zone', index, message: `配置エリアの外: (${p.col}, ${p.row})` });
     }
     const key = `${p.col},${p.row}`;
@@ -119,19 +131,17 @@ export function validateArmy(placements: readonly Placement[], zone: Zone, limit
     seen.add(key);
     if (p.kind === 'hq') hqCount++;
     else others++;
-  });
+  }
   if (requireHq ? hqCount !== 1 : hqCount > 1) {
     errors.push({ code: 'hq_count', message: `本陣の数が正しくない: ${hqCount}` });
-  }
-  if (placements.length > limits.maxUnits) {
-    errors.push({ code: 'too_many_units', message: `部隊が多すぎる: ${placements.length} > ${limits.maxUnits}` });
   }
   if (others < minUnits) {
     errors.push({ code: 'too_few_units', message: `本陣以外の部隊が少なすぎる: ${others} < ${minUnits}` });
   }
-  if (limits.budget !== undefined) {
-    const cost = armyCost(placements, limits.costs ?? DEFAULT_COSTS);
-    if (cost > limits.budget) errors.push({ code: 'over_budget', message: `予算を超えている: ${cost} > ${limits.budget}` });
+  if (lim.budget !== undefined && errors.length === 0) {
+    const costs = isObject(lim.costs) ? lim.costs : DEFAULT_COSTS;
+    const cost = armyCost(placements, costs);
+    if (!(typeof lim.budget === 'number' && cost <= lim.budget)) errors.push({ code: 'over_budget', message: `予算を超えている: ${cost} > ${String(lim.budget)}` });
   }
   return errors;
 }

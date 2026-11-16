@@ -18,8 +18,8 @@ export interface KindStats {
 
 export const KIND_STATS: Record<Kind, KindStats> = {
   infantry: { men: 100, speed: 1.0, melee: 3.0, turn: 180 },
-  shield: { men: 100, speed: 0.7, melee: 2.5, turn: 120 },
-  cavalry: { men: 60, speed: 2.2, melee: 3.6, turn: 240 },
+  shield: { men: 100, speed: 0.7, melee: 2.36, turn: 120 },
+  cavalry: { men: 60, speed: 2.2, melee: 3.43, turn: 240 },
   archer: { men: 80, speed: 0.9, melee: 1.2, turn: 180 },
   hq: { men: 80, speed: 0.6, melee: 2.6, turn: 120 },
 };
@@ -34,14 +34,16 @@ export const T = {
 
   /** 弓 */
   archerRange: 5.6,
-  arrowDamage: 3.1,
+  arrowDamage: 3.46,
 
   /** 騎兵の突入 */
-  impactDamage: 10,
+  impactDamage: 9.36,
   impactRunup: 2.0,
+  /** この刻みに動いた距離がこれより小さければ「動かなかった」として、助走を 0 に戻す */
+  runupStillDist: 0.001,
   impactShock: { front: 8, side: 14, rear: 20 },
   /** 盾兵の正面に当たった騎兵が失う兵数と士気 */
-  impactBouncedMen: 9,
+  impactBouncedMen: 9.21,
   impactBouncedMorale: 8,
 
   /** ばらつき（0.9〜1.1） */
@@ -53,9 +55,9 @@ export const T = {
   rearAngle: 120,
 
   /** 受ける側：向き */
-  facingMult: { front: 1.0, side: 1.4, rear: 1.9 },
+  facingMult: { front: 1.0, side: 1.36, rear: 1.7 },
   /** 盾兵の正面（向きの代わり） */
-  shieldFrontMelee: 0.35,
+  shieldFrontMelee: 0.3,
   shieldFrontArrow: 0.4,
   shieldFrontImpact: 0.2,
   /** 受ける側：兵種 */
@@ -89,21 +91,22 @@ export const T = {
   holdWatchRange: 4,
   advanceSwitchMargin: 1.0,
   flankEdgeOffset: 0.5,
-  flankDepth: 1.8,
+  flankDepth: 1.7,
   /** 迂回の①②で、着いたとみなす距離 */
   waypointTolerance: 0.1,
-  huntAvoidRange: 2.5,
-  huntAvoidStrength: 2.0,
+  /** 本陣狙いの「詰まった」の判定：この刻み数のあいだに動いた距離の合計が huntStuckDist に満たない */
+  huntStuckTicks: 20,
+  huntStuckDist: 0.3,
   /** 本陣狙い・迂回①②が戦う「進む向きの正面」（度） */
   passFrontAngle: 50,
 
   /** 士気 */
   moraleMax: 100,
-  moraleLossScale: 175,
-  moraleFacing: { front: 1.0, side: 1.35, rear: 2.1 },
+  moraleLossScale: 170.75,
+  moraleFacing: { front: 1.0, side: 1.5, rear: 2.18 },
   moraleArrowMult: 0.6,
   supportRange: 1.6,
-  supportPerAlly: 0.23,
+  supportPerAlly: 0.26,
   supportMaxAllies: 2,
   hqSupportRange: 3.5,
   hqSupportMult: 0.7,

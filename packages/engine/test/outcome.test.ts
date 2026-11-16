@@ -1,14 +1,14 @@
-// A9 決着の判定（design §3.6.4）
+// 決着の規則の単体テスト（design §3.6.4）。合格条件の A9 は test/acceptance/a06-a07-a09-a12-matrix.test.ts
 import { describe, expect, it } from 'vitest';
-import { step, type BattleState } from '../../src/index.ts';
-import { battle, p } from '../helpers.ts';
+import { step, type BattleState } from '../src/index.ts';
+import { battle, p } from './helpers.ts';
 
 /** 次の損害で敗走させる（決まりの確認のための仕込み） */
 function brink(s: BattleState, id: number): void {
   s.units[id]!.morale = 0.001;
 }
 
-describe('A9 決着の判定', () => {
+describe('決着の規則', () => {
   it('本陣が敗走した刻みに決着する（消えるのを待たない）', () => {
     const s = battle([p('hq', 5, 10, 'hold'), p('infantry', 0, 15, 'hold')], [p('infantry', 5, 9, 'hold'), p('hq', 11, 0, 'hold')], { requireHq: true });
     brink(s, 0);

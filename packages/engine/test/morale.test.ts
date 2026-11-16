@@ -129,3 +129,29 @@ describe('そのほかの増減', () => {
     expect(s.units[0]!.morale).toBe(100);
   });
 });
+
+describe('敗走した部隊がそのあと全滅しても、まわりへの影響は敗走のときの1回だけ', () => {
+  it('敗走中に全滅した刻みの次の刻みには、味方の −allyDestroyedLoss も、敵の上乗せも入らない', () => {
+    // U(0) が敗走し、敗走中に兵が尽きる。隣の N(1) と、敵 E(3) の士気を見る
+    const s = battle([p('infantry', 5, 10, 'hold'), p('infantry', 6, 10, 'hold'), p('infantry', 0, 15, 'hold')], [p('infantry', 5, 9, 'hold')]);
+    place(s, 1, 6.6, 10.5);
+    step(s, []); // 組み合う
+    s.units[0]!.morale = 0.001;
+    step(s, []); // 敗走（記録はこの1回）
+    expect(s.units[0]!.status).toBe('routing');
+    expect(s.brokenLastTick.map((r) => r.unit)).toEqual([0]);
+    // 刻み2：U はまだ E の近接の距離にいる（敗走で動くのはこの刻みから）。兵を尽きさせて、敗走中に全滅させる（決まりの確認のための仕込み）
+    s.units[0]!.men = 0.001;
+    const ev = step(s, []);
+    expect(ev).toContainEqual({ type: 'destroyed', tick: 2, unit: 0 });
+    expect(s.brokenLastTick).toEqual([]);
+    s.units[1]!.morale = 50;
+    s.units[3]!.morale = 50;
+    const n = s.units[1]!.morale;
+    const e = s.units[3]!.morale;
+    step(s, []);
+    // N は敵が近いので回復もなく、損害も受けていない：変わらない
+    expect(s.units[1]!.morale).toBeCloseTo(n, 9);
+    expect(s.units[3]!.morale).toBeCloseTo(e, 9);
+  });
+});

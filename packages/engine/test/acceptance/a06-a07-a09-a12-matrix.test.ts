@@ -1,14 +1,26 @@
-// A6 1戦の長さ・A7 最強も最弱もない・A12 壊れた状態にならない（どれも総当たり 420 戦で見る）
+// A6 1戦の長さ・A7 最強も最弱もない・A9 決着の判定・A12 壊れた状態にならない（どれも総当たり 420 戦で見る）
 import { describe, expect, it } from 'vitest';
 import { T } from '../../src/tuning.ts';
-import type { BattleEvent, BattleState } from '../../src/index.ts';
+import type { BattleEvent, BattleState, Side } from '../../src/index.ts';
 import { matrixStats, runMatrix, TEMPLATE_IDS, type MatrixGame } from '../../sim/lib.ts';
 
-describe('総当たり（42通り × 種10個）', () => {
+/** 陣営の負けの条件（design §3.6.4）：本陣が active でない／本陣以外がすべて active でない */
+function lost(s: BattleState, side: Side): { hq: boolean; wipe: boolean } {
+  const mine = s.units.filter((u) => u.side === side);
+  const hq = mine.find((u) => u.kind === 'hq');
+  const others = mine.filter((u) => u.kind !== 'hq');
+  return { hq: hq !== undefined && hq.status !== 'active', wipe: others.length > 0 && others.every((u) => u.status !== 'active') };
+}
+
+const finite = (v: number): boolean => typeof v === 'number' && Number.isFinite(v);
+
+describe('総当たり（42通り × 種10個、ふつうの初期状態から）', () => {
   let games: MatrixGame[] = [];
   const problems: string[] = [];
+  const reasons = new Set<string>();
+  const outcomeProblems: string[] = [];
 
-  it('A12 全刻みで壊れた状態にならない', () => {
+  it('A12 全刻みで壊れた状態にならない。最後の状態は JSON にして戻しても同じ', () => {
     let seen = { rout: new Set<number>(), destroyed: new Set<number>(), ends: 0 };
     let current: BattleState | null = null;
     const onTick = (s: BattleState, ev: BattleEvent[]): void => {
@@ -18,20 +30,23 @@ describe('総当たり（42通り × 種10個）', () => {
       }
       const W = s.field.width;
       const H = s.field.height;
+      for (const u of s.units) {
+        if (![u.x, u.y, u.fx, u.fy, u.men, u.morale].every(finite)) problems.push(`有限でない値 ${u.id} @${s.tick}`);
+        if (!(u.men >= 0 && u.men <= u.maxMen)) problems.push(`兵数 ${u.id} @${s.tick}`);
+        if (!(u.morale >= 0 && u.morale <= 100)) problems.push(`士気 ${u.id} @${s.tick}`);
+      }
       const act = s.units.filter((u) => u.status === 'active');
       for (const u of act) {
-        if (u.x < T.edgeMargin - 1e-9 || u.x > W - T.edgeMargin + 1e-9 || u.y < T.edgeMargin - 1e-9 || u.y > H - T.edgeMargin + 1e-9) problems.push(`端の外 ${u.id} @${s.tick}`);
+        if (!(u.x >= T.edgeMargin - 1e-9 && u.x <= W - T.edgeMargin + 1e-9 && u.y >= T.edgeMargin - 1e-9 && u.y <= H - T.edgeMargin + 1e-9)) {
+          problems.push(`端の外 ${u.id} @${s.tick}`);
+        }
       }
       for (let i = 0; i < act.length; i++) {
         for (let j = i + 1; j < act.length; j++) {
           const a = act[i]!;
           const b = act[j]!;
-          if (Math.hypot(a.x - b.x, a.y - b.y) < 0.6) problems.push(`近すぎる ${a.id}-${b.id} @${s.tick}`);
+          if (!(Math.hypot(a.x - b.x, a.y - b.y) >= 0.6)) problems.push(`近すぎる ${a.id}-${b.id} @${s.tick}`);
         }
-      }
-      for (const u of s.units) {
-        if (!(u.men >= 0 && u.men <= u.maxMen)) problems.push(`兵数 ${u.id} @${s.tick}`);
-        if (!(u.morale >= 0 && u.morale <= 100)) problems.push(`士気 ${u.id} @${s.tick}`);
       }
       for (const e of ev) {
         if (e.type === 'rout') {
@@ -45,13 +60,45 @@ describe('総当たり（42通り × 種10個）', () => {
         if (e.type === 'end') {
           seen.ends++;
           if (seen.ends > 1) problems.push('決着が2回');
+          checkOutcome(s);
         }
       }
+      if (s.outcome && JSON.stringify(JSON.parse(JSON.stringify(s))) !== JSON.stringify(s)) problems.push('JSON にして戻すと変わる');
+      if (s.outcome) expect(JSON.parse(JSON.stringify(s))).toEqual(s);
     };
     games = runMatrix(undefined, onTick);
     expect(games.length).toBe(420);
     expect(problems.slice(0, 20)).toEqual([]);
   }, 600_000);
+
+  /** A9：決着した刻みの状態が、決着の表と合っているか */
+  function checkOutcome(s: BattleState): void {
+    const o = s.outcome!;
+    reasons.add(o.reason);
+    const l = [lost(s, 0), lost(s, 1)] as const;
+    const any = (x: { hq: boolean; wipe: boolean }): boolean => x.hq || x.wipe;
+    const tag = `${o.reason} ${String(o.winner)} @${o.tick}`;
+    if (o.reason === 'timeout') {
+      if (s.tick !== s.maxTicks) outcomeProblems.push(`時間切れなのに tick が maxTicks でない ${tag}`);
+      if (any(l[0]) || any(l[1])) outcomeProblems.push(`時間切れなのに負けの条件を満たした側がある ${tag}`);
+      return;
+    }
+    if (o.winner === 'draw') {
+      if (!(any(l[0]) && any(l[1]))) outcomeProblems.push(`引き分けなのに両軍が条件を満たしていない ${tag}`);
+      if (o.reason === 'hq' && !(l[0].hq || l[1].hq)) outcomeProblems.push(`理由が hq なのに本陣が残っている ${tag}`);
+      return;
+    }
+    const loser = o.winner === 0 ? 1 : 0;
+    const winner = o.winner;
+    if (any(l[winner])) outcomeProblems.push(`勝った側も負けの条件を満たしている ${tag}`);
+    if (o.reason === 'hq' && !l[loser].hq) outcomeProblems.push(`理由が hq なのに負けた側の本陣が active ${tag}`);
+    if (o.reason === 'wipeout' && !(l[loser].wipe && !l[loser].hq)) outcomeProblems.push(`理由が wipeout なのに条件が合わない ${tag}`);
+  }
+
+  it('A9 決着はすべて決着の表のとおり。hq・wipeout・timeout がそれぞれ1回以上出る', () => {
+    expect(outcomeProblems.slice(0, 20)).toEqual([]);
+    for (const r of ['hq', 'wipeout', 'timeout']) expect(reasons.has(r), r).toBe(true);
+  });
 
   it('A6 決着した戦いの長さの中央値が 40〜120秒。引き分けは 10% 以下。方円を含まない組の時間切れは 10% 以下', () => {
     const st = matrixStats(games);
