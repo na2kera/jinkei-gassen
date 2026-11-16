@@ -27,6 +27,6 @@ export { listTemplates, applyTemplate } from './templates.ts';
 export const STANDARD_ROSTER = { hq: 1, infantry: 5, shield: 3, cavalry: 3, archer: 3 } as const;
 export { PVP_RULES, pvpArmyLimits } from './pvp.ts';
 export { recognizeFormation, formationScores, FORMATION_MIN_SCORE, FORMATION_MIN_MARGIN } from './formation.ts';
-export { stageSetup, stageSetupWith, validateStageArmy, starsFor, stageEnemyVisible, stageLineArmy, stanceAllowedInStage, STAGE_MAX_TICKS } from './stage.ts';
+export { STAR_THRESHOLDS, stageSetup, stageSetupWith, validateStageArmy, starsFor, stageEnemyVisible, stageLineArmy, stanceAllowedInStage, STAGE_MAX_TICKS } from './stage.ts';
 export type { Stage, StageAllow, StageEnemyOrder, StageEnemyView } from './stage.ts';
 export { STAGES } from './stages.ts';

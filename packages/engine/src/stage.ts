@@ -107,13 +107,16 @@ export function validateStageArmy(stage: Stage, placements: Placement[]): ArmyEr
   return errors;
 }
 
-/** 星（勝ったときだけ1以上）：残った兵の割合が 0.8 以上で3つ、0.5 以上で2つ、それ未満で1つ。負けと引き分けは0 */
+/** 星の境目：残った兵の割合が [0] 以上で2つ、[1] 以上で3つ */
+export const STAR_THRESHOLDS: readonly [number, number] = [0.5, 0.7];
+
+/** 星（勝ったときだけ1以上）：残った兵の割合が STAR_THRESHOLDS[1]（0.7）以上で3つ、[0]（0.5）以上で2つ、それ未満で1つ。負けと引き分けは0 */
 export function starsFor(summary: BattleSummary, side: Side): 0 | 1 | 2 | 3 {
   if (!isObject(summary) || summary.winner !== side) return 0;
   const r = summary.remaining?.[side];
   if (typeof r !== 'number' || !Number.isFinite(r)) return 1;
-  if (r >= 0.8) return 3;
-  if (r >= 0.5) return 2;
+  if (r >= STAR_THRESHOLDS[1]) return 3;
+  if (r >= STAR_THRESHOLDS[0]) return 2;
   return 1;
 }
 

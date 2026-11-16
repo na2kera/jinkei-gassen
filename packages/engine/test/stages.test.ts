@@ -10,6 +10,7 @@ import {
   validateArmy,
   validateStageArmy,
   MAX_UNITS,
+  STAR_THRESHOLDS,
   summarize,
   type BattleSummary,
   type Placement,
@@ -112,9 +113,10 @@ describe('validateStageArmy', () => {
 
 describe('starsFor', () => {
   const sum = (winner: 0 | 1 | 'draw', r0: number): BattleSummary => ({ winner, reason: 'wipeout', seconds: 10, remaining: [r0, 0.2], units: [], firstBroken: [null, null] });
-  it('勝ったときだけ星が付く。残った兵の割合 0.8 以上で3、0.5 以上で2、それ未満で1（境目）', () => {
-    expect(starsFor(sum(0, 0.8), 0)).toBe(3);
-    expect(starsFor(sum(0, 0.7999), 0)).toBe(2);
+  it('勝ったときだけ星が付く。残った兵の割合 0.7 以上で3、0.5 以上で2、それ未満で1（境目）', () => {
+    expect(STAR_THRESHOLDS).toEqual([0.5, 0.7]);
+    expect(starsFor(sum(0, 0.7), 0)).toBe(3);
+    expect(starsFor(sum(0, 0.6999), 0)).toBe(2);
     expect(starsFor(sum(0, 0.5), 0)).toBe(2);
     expect(starsFor(sum(0, 0.4999), 0)).toBe(1);
     expect(starsFor(sum(0, 0), 0)).toBe(1);
@@ -139,41 +141,31 @@ describe('stageEnemyVisible', () => {
   });
 });
 
-describe('星3つは取れる（1-5）', () => {
-  // 見本を出発点に、部隊の位置・方針・号令を少しずつ変えて探した配置（Stage には入れない）。
-  // 楔の先の歩兵を迂回にして中央の外側へ、盾兵を前へ出し、騎兵は左の端と後ろから回す。
-  // 号令：5秒に全軍堅守（敵の突撃を待ち構える）、21秒に右翼突撃、36秒に全軍突撃
-  it('1-5：この配置と号令で、種20個のうち10個以上で星3つ', () => {
-    const s = STAGES.find((x) => x.id === '1-5')!;
-    const p = (kind: Placement['kind'], col: number, row: number, stance: Placement['stance']): Placement => ({ kind, col, row, stance });
-    const ps: Placement[] = [
-      p('hq', 4, 13, 'hold'),
-      p('infantry', 3, 11, 'hold'),
-      p('infantry', 6, 10, 'flank'),
-      p('infantry', 2, 11, 'advance'),
-      p('infantry', 8, 12, 'advance'),
-      p('infantry', 2, 14, 'advance'),
-      p('shield', 2, 10, 'advance'),
-      p('shield', 8, 11, 'advance'),
-      p('shield', 6, 11, 'advance'),
-      p('archer', 6, 13, 'advance'),
-      p('archer', 5, 12, 'hold'),
-      p('archer', 7, 13, 'advance'),
-      p('cavalry', 0, 12, 'flank'),
-      p('cavalry', 0, 13, 'flank'),
-      p('cavalry', 7, 15, 'flank'),
-    ];
-    expect(validateStageArmy(s, ps)).toEqual([]);
-    const orders = [
-      { atSec: 5, target: 'all' as const, kind: 'brace' as const },
-      { atSec: 21, target: 'right' as const, kind: 'charge' as const },
-      { atSec: 36, target: 'all' as const, kind: 'charge' as const },
-    ];
-    let three = 0;
-    for (const seed of STAGE_SEEDS) {
-      const sm = summarize(runStage(s, ps, seed, undefined, orders));
-      if (starsFor(sm, 0) === 3) three++;
-    }
-    expect(three).toBeGreaterThanOrEqual(10);
-  }, 120_000);
+describe('星3つは取れる（1-2〜1-5）', () => {
+  // 見本を出発点に、部隊の位置・方針（選べる面だけ）・号令（出せる面だけ）を少しずつ変えて探した配置。Stage には入れない。
+  // [兵種, 列, 行, 方針]。号令は秒・相手・種類
+  type Row = [Placement['kind'], number, number, Placement['stance']];
+  const FOUND: Record<string, { ps: Row[]; orders: { atSec: number; target: 'all' | 'left' | 'center' | 'right'; kind: 'charge' | 'brace' | 'retreat' }[] }> = {
+    // 盾兵を3・5・7列に散らして騎兵の通り道を広く受け、歩兵を両端へ
+    '1-2': { ps: [['hq', 5, 14, 'hold'], ['shield', 3, 10, 'hold'], ['shield', 7, 10, 'hold'], ['shield', 5, 10, 'hold'], ['infantry', 0, 10, 'advance'], ['infantry', 1, 11, 'advance'], ['infantry', 11, 10, 'advance'], ['infantry', 7, 11, 'advance'], ['infantry', 8, 11, 'advance']], orders: [] },
+    // 盾兵の壁の後ろと右の端に弓兵を散らし、歩兵は後ろ
+    '1-3': { ps: [['hq', 2, 15, 'hold'], ['shield', 4, 10, 'hold'], ['shield', 5, 10, 'hold'], ['shield', 6, 10, 'hold'], ['shield', 7, 10, 'hold'], ['archer', 4, 11, 'advance'], ['archer', 10, 12, 'advance'], ['archer', 8, 12, 'advance'], ['archer', 11, 10, 'advance'], ['infantry', 4, 12, 'advance'], ['infantry', 5, 14, 'advance'], ['infantry', 6, 11, 'advance']], orders: [] },
+    // 正面は守備、右の歩兵2と騎兵3で右から回り込み、本陣は右の後ろ
+    '1-4': { ps: [['hq', 11, 11, 'hold'], ['shield', 4, 11, 'hold'], ['shield', 5, 11, 'hold'], ['shield', 6, 11, 'hold'], ['infantry', 2, 11, 'hold'], ['infantry', 3, 11, 'hold'], ['infantry', 7, 11, 'flank'], ['infantry', 9, 12, 'flank'], ['archer', 7, 12, 'hunt'], ['archer', 6, 12, 'advance'], ['cavalry', 7, 10, 'flank'], ['cavalry', 10, 10, 'flank'], ['cavalry', 11, 10, 'flank']], orders: [] },
+    // 楔の先の歩兵を迂回にして中央の外側へ、盾兵を前へ出し、騎兵は左の端と後ろから回す。5秒に全軍堅守、21秒に右翼突撃、36秒に全軍突撃
+    '1-5': {
+      ps: [['hq', 4, 13, 'hold'], ['infantry', 3, 11, 'hold'], ['infantry', 6, 10, 'flank'], ['infantry', 2, 11, 'advance'], ['infantry', 8, 12, 'advance'], ['infantry', 2, 14, 'advance'], ['shield', 2, 10, 'advance'], ['shield', 8, 11, 'advance'], ['shield', 6, 11, 'advance'], ['archer', 6, 13, 'advance'], ['archer', 5, 12, 'hunt'], ['archer', 7, 13, 'advance'], ['cavalry', 0, 12, 'flank'], ['cavalry', 0, 13, 'flank'], ['cavalry', 7, 15, 'flank']],
+      orders: [{ atSec: 5, target: 'all', kind: 'brace' }, { atSec: 21, target: 'right', kind: 'charge' }, { atSec: 36, target: 'all', kind: 'charge' }],
+    },
+  };
+  for (const [id, f] of Object.entries(FOUND)) {
+    it(`${id}：見つけた配置で、種20個のうち10個以上で星3つ`, () => {
+      const s = STAGES.find((x) => x.id === id)!;
+      const ps: Placement[] = f.ps.map(([kind, col, row, stance]) => ({ kind, col, row, stance }));
+      expect(validateStageArmy(s, ps)).toEqual([]);
+      let three = 0;
+      for (const seed of STAGE_SEEDS) if (starsFor(summarize(runStage(s, ps, seed, undefined, f.orders)), 0) === 3) three++;
+      expect(three).toBeGreaterThanOrEqual(10);
+    }, 120_000);
+  }
 });
