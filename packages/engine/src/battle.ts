@@ -1005,9 +1005,9 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   for (const u of state.units) if (u.order && t >= u.order.untilTick) endOrder(u);
 
   const snap: Snap[] = state.units.map((u) => ({ x: u.x, y: u.y, fx: u.fx, fy: u.fy, status: u.status, target: u.target }));
-  // 城壁は門のある戦場だけ（createBattle で調べ済み）。門が破れて両隣が崩れたあとも、城壁の行と門の列で通り道を決める
-  const walls = state.gate ? wallsOfGate(state.gate) : null;
+  // 城壁は門のある戦場だけ（createBattle で調べ済み）。門が破れたあとは、崩れた3マスのうち自分の x にいちばん近い列を通る
   const gateUp = state.gate && (state.units[state.gate.id] as Unit).status === 'active' ? state.gate.id : null;
+  const walls = state.gate ? wallsOfGate(state.gate, gateUp === null, state.field.width) : null;
   const eps = hasTerrain(state.field) ? 1e-9 : 0;
   const ctx: TickCtx = { state, snap, t, walls, gateUp, eps };
 

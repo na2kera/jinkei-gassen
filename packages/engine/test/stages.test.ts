@@ -18,10 +18,14 @@ import {
 } from '../src/index.ts';
 import { lineStats, runStage, solutionStats, STAGE_SEEDS, templateWins } from '../sim/stagelib.ts';
 
+/** 第1章の5面（第2章・第3章は stages-ch23.test.ts） */
+const CH1 = STAGES.filter((s) => s.chapter === 1);
+
 describe('第1章の5面', () => {
   it('id は 1-1〜1-5、手持ちは 8〜15 部隊で、面が進むにつれて増える', () => {
-    expect(STAGES.map((s) => s.id)).toEqual(['1-1', '1-2', '1-3', '1-4', '1-5']);
-    const sizes = STAGES.map((s) => Object.values(s.roster).reduce((a, b) => a + (b ?? 0), 0));
+    expect(CH1.map((s) => s.id)).toEqual(['1-1', '1-2', '1-3', '1-4', '1-5']);
+    expect(STAGES.slice(0, 5)).toEqual(CH1);
+    const sizes = CH1.map((s) => Object.values(s.roster).reduce((a, b) => a + (b ?? 0), 0));
     for (const n of sizes) {
       expect(n).toBeGreaterThanOrEqual(8);
       expect(n).toBeLessThanOrEqual(15);
@@ -35,7 +39,7 @@ describe('第1章の5面', () => {
     expect(STAGES.find((s) => s.id === '1-5')!.allow).toBeUndefined();
   });
   it('各面の敵・見本・手持ちが、配置の検査を通る', () => {
-    for (const s of STAGES) {
+    for (const s of CH1) {
       expect(validateArmy(s.enemy, s.field.zones[1], { maxUnits: MAX_UNITS }), `${s.id} の敵`).toEqual([]);
       expect(validateStageArmy(s, s.solution), `${s.id} の見本`).toEqual([]);
       expect(validateStageArmy(s, stageLineArmy(s)), `${s.id} の横陣`).toEqual([]);
@@ -43,7 +47,7 @@ describe('第1章の5面', () => {
       expect(s.hint.length).toBeLessThanOrEqual(24);
     }
   });
-  for (const s of STAGES) {
+  for (const s of CH1) {
     it(`${s.id} ${s.name}：見本が種20個のうち18個以上で勝ち、星の平均が2以上`, () => {
       const r = solutionStats(s);
       expect(r.wins).toBeGreaterThanOrEqual(18);
@@ -128,7 +132,7 @@ describe('starsFor', () => {
 
 describe('stageEnemyVisible', () => {
   it('霧のマスを除き、方針を含めない', () => {
-    for (const s of STAGES) {
+    for (const s of STAGES.filter((x) => !x.fog)) {
       const v = stageEnemyVisible(s);
       expect(v.length).toBe(s.enemy.length);
       for (const e of v) expect(Object.keys(e).sort()).toEqual(['col', 'kind', 'row']);

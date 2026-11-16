@@ -493,6 +493,36 @@ describe('門を攻める距離と、門が破れたあとの城壁', () => {
     expect(Math.floor(after.x)).toBe(4);
     expect(Math.floor(after.y)).toBe(5);
   });
+  it('門が破れたあとは、崩れた3マスのうち自分の x にいちばん近い列を通る。両脇の真下の部隊は、真ん中を取り合わずにそれぞれの列から入る', () => {
+    const s = scene();
+    const g = s.gate!.id;
+    const { col, row } = s.gate!;
+    place(s, 1, col + 0.5, 6.45);
+    s.units[1]!.target = g;
+    s.units[g]!.men = 0.01;
+    place(s, 2, col - 0.5, 6.5);
+    place(s, 3, col + 1.5, 6.5);
+    for (const id of [4, 5, 6]) place(s, id, id - 2, 15.5);
+    step(s, []);
+    expect(s.units[g]!.status).toBe('gone');
+    const passedAt: Record<number, number> = {};
+    const colWhenPassing: Record<number, number> = {};
+    for (let i = 0; i < 60 && !s.outcome; i++) {
+      step(s, []);
+      for (const id of [2, 3]) {
+        const u = s.units[id]!;
+        if (passedAt[id] === undefined && u.y < row + 0.5) {
+          passedAt[id] = s.tick;
+          colWhenPassing[id] = Math.floor(u.x);
+        }
+      }
+    }
+    // どちらも 2 秒ほどで城壁の行の真ん中を越え、越えたのはそれぞれ自分の真上の列
+    expect(passedAt[2]).toBeLessThan(30);
+    expect(passedAt[3]).toBeLessThan(30);
+    expect(colWhenPassing[2]).toBe(col - 1);
+    expect(colWhenPassing[3]).toBe(col + 1);
+  });
   it('崩れた城壁は JSON にして戻しても同じで、続きも同じに進む', () => {
     const s = scene();
     const g = s.gate!.id;

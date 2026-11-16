@@ -8,6 +8,8 @@ import { T } from './tuning.ts';
 export interface WallInfo {
   row: number;
   gapCol: number;
+  /** 門が破れて両隣が崩れたあとの、通れる列の範囲 [lo, hi]（門が立っている間は項目ごとない） */
+  open?: [number, number];
 }
 
 /** 城壁の形を調べる。城壁がなければ null、形が正しければ WallInfo、正しくなければ理由の文字列 */
@@ -26,9 +28,25 @@ export function readWalls(field: Field): WallInfo | null | string {
   return { row, gapCol };
 }
 
-/** 門のある戦場の城壁（門が破れて両隣が崩れたあとも、城壁の行と門の列は同じ） */
-export function wallsOfGate(gate: { row: number; col: number }): WallInfo {
-  return { row: gate.row, gapCol: gate.col };
+/** 門のある戦場の城壁。門が破れたあと（broken）は、崩れた3マス（戦場の端で切る）を通れる列の範囲にする */
+export function wallsOfGate(gate: { row: number; col: number }, broken = false, fieldWidth = Infinity): WallInfo {
+  if (!broken) return { row: gate.row, gapCol: gate.col };
+  return { row: gate.row, gapCol: gate.col, open: [Math.max(0, gate.col - 1), Math.min(fieldWidth - 1, gate.col + 1)] };
+}
+
+/** 城壁を抜けるときに通る列。門が立っている間は門の列。崩れたあとは、通れる列のうち x がいちばん近い列（同じ近さなら門の列に近いほう） */
+export function passCol(w: WallInfo, px: number): number {
+  if (!w.open) return w.gapCol;
+  let best = w.gapCol;
+  let bd = Math.abs(px - (best + 0.5));
+  for (let c = w.open[0]; c <= w.open[1]; c++) {
+    const d = Math.abs(px - (c + 0.5));
+    if (d < bd - 1e-12 || (Math.abs(d - bd) <= 1e-12 && Math.abs(c - w.gapCol) < Math.abs(best - w.gapCol))) {
+      best = c;
+      bd = d;
+    }
+  }
+  return best;
 }
 
 /** 門が破れたら、門のマスの左右1マスずつの城壁を平地に変える（次の刻みから、3マスの幅で通れる） */
@@ -58,6 +76,11 @@ export function gateCenter(w: WallInfo): { x: number; y: number } {
   return { x: w.gapCol + 0.5, y: w.row + 0.5 };
 }
 
+/** (px, ·) にいる部隊が城壁を抜けるときに通るマスの中心（門が立っている間は門のマス） */
+function passCenter(w: WallInfo, px: number): { x: number; y: number } {
+  return { x: passCol(w, px) + 0.5, y: w.row + 0.5 };
+}
+
 /**
  * 通り道：部隊が (px, py) にいて、行き先が (dx, dy) のとき、いま向かう点。
  * 行き先が城壁の行をはさんで反対側（または門のマスそのもの）なら、①門のマスの自分の側の1マス手前の中心 → ②門のマスの中心 → ③行き先。
@@ -69,7 +92,7 @@ export function routeTo(w: WallInfo | null, px: number, py: number, dx: number, 
   const su = sideOfWall(w, py);
   const sd = sideOfWall(w, dy);
   if (su === 0 || sd === su) return { x: dx, y: dy, waypoint: false };
-  const g = gateCenter(w);
+  const g = passCenter(w, px);
   const nearX = Math.abs(px - g.x) <= T.gateApproachTolerance;
   const adjacent = su < 0 ? py >= w.row - 1 : py <= w.row + 2;
   if (nearX && adjacent) return sd === 0 ? { x: dx, y: dy, waypoint: false } : { x: g.x, y: g.y, waypoint: true };
@@ -82,7 +105,7 @@ export function pathLength(w: WallInfo | null, px: number, py: number, qx: numbe
     const a = sideOfWall(w, py);
     const b = sideOfWall(w, qy);
     if (a !== 0 && b !== 0 && a !== b) {
-      const g = gateCenter(w);
+      const g = passCenter(w, px);
       return Math.hypot(g.x - px, g.y - py) + Math.hypot(qx - g.x, qy - g.y);
     }
   }
