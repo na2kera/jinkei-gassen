@@ -9,14 +9,18 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "deploy": "vite build && wrangler deploy"
   },
   "dependencies": {
     "@jinkei/engine": "workspace:*",
+    "@jinkei/server": "workspace:*",
     "phaser": "4.2.1"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "1.69.1",
     "typescript": "7.0.2",
-    "vite": "8.3.8"
+    "vite": "8.3.8",
+    "wrangler": "4.162.0"
   }
 }
