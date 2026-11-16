@@ -4,7 +4,14 @@
 
 import {
   KINDS,
+  plainField,
+  PVP_MAPS,
+  pvpField,
   STAGES,
+  type Field,
+  type GateSetup,
+  type PvpMapId,
+  type Stage,
   type BattleView,
   type OrderKind,
   type OrderTarget,
@@ -14,6 +21,7 @@ import {
 } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import { effectCounts } from './art/effects.ts';
+import { LocalBattleSource } from './battle/LocalBattleSource.ts';
 import { unitReach } from './art/UnitSprite.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
 import { client, pvp, pvpLocal } from './net/pvp.ts';
@@ -131,6 +139,7 @@ export function installDebug(game: Phaser.Game): void {
         status: client.status,
         code: client.code,
         phase: r?.phase ?? null,
+        map: r?.map ?? null,
         battleNo: r?.battleNo ?? null,
         you: r?.you ?? null,
         score: r?.score ?? null,
@@ -143,7 +152,16 @@ export function installDebug(game: Phaser.Game): void {
         roster: { ...pvpLocal.roster },
         result: client.result ? { winner: client.result.winner, reason: client.result.reason, score: client.result.score } : null,
         snapTick: client.snap?.tick ?? null,
+        myArmy: r?.myArmy ?? null,
+        draftDirty: pvpLocal.draftDirty,
+        wantReady: pvpLocal.wantReady,
+        local: pvpLocal.placements.map((p) => ({ ...p })),
+        failure: client.failure,
       };
+    },
+    /** いま動いているシーン（2つの画面が同時に動いていないかを確かめるため） */
+    get scenes(): string[] {
+      return game.scene.getScenes(true).map((s) => s.scene.key);
     },
     /** 前の部屋（または指定したコードの部屋）に、保存した名前で入る（確かめるときに画面の操作を省くため） */
     pvpJoin(code?: string): boolean {
@@ -152,6 +170,88 @@ export function installDebug(game: Phaser.Game): void {
       pvp.begin();
       client.join(c, playerId(), savedName() || '試し');
       return true;
+    },
+    /**
+     * 任意の戦場で戦いを始めて、戦闘の画面を開く（地形・門・幅の違う戦場を画面で確かめるため）。
+     * engine の createBattle にそのまま渡す。敵の配置はエリアの検査を外す（面のデータと同じ扱い）
+     */
+    startCustom(opts: {
+      field: Field;
+      armies: [Placement[], Placement[]];
+      gate?: GateSetup;
+      seconds?: number;
+      viewer?: Side;
+      fog?: { col: number; row: number }[];
+      survive?: boolean;
+    }): unknown {
+      const viewer = opts.viewer ?? 0;
+      const made = LocalBattleSource.create(
+        {
+          field: opts.field,
+          armies: opts.armies,
+          seed: (Math.random() * 0x100000000) >>> 0,
+          maxTicks: Math.round((opts.seconds ?? 180) * 10),
+          timeout: opts.survive ? 'side0_wins' : 'compare',
+          skipZoneCheck: 1,
+          ...(opts.gate ? { gate: opts.gate } : {}),
+        },
+        viewer,
+      );
+      if (!made.ok) return made.error;
+      const cur = game.scene.getScenes(true).find((s) => s.scene.key !== 'NetOverlay');
+      const data = {
+        source: made.source,
+        field: opts.field,
+        viewer,
+        orders: true,
+        onQuit: (b: Phaser.Scene) => b.scene.start('Title'),
+        stageId: '',
+        ...(opts.fog ? { fog: opts.fog } : {}),
+        survive: opts.survive ?? false,
+      };
+      if (cur) cur.scene.start('Battle', data);
+      else game.scene.start('Battle', data);
+      return true;
+    },
+    /** 城壁と門の場面（engine の sim/terrain-scenes.ts の castleSetup と同じ形）を戦闘の画面で流す */
+    castle(win = false): unknown {
+      const at = (kind: Placement['kind'], stance: Placement['stance'], cols: number[], row: number): Placement[] =>
+        cols.map((col) => ({ kind, stance, col, row }));
+      const f = plainField();
+      for (let c = 0; c < f.width; c++) if (c !== 5) f.terrain[5 * f.width + c] = 'wall';
+      f.zones = [f.zones[0], { col: 0, row: 0, width: f.width, height: 6 }];
+      return api.startCustom({
+        field: f,
+        armies: [
+          [{ kind: 'hq', stance: 'hold', col: 5, row: 14 }, ...at('infantry', 'advance', [3, 4, 5, 6], 10), ...at('shield', 'advance', [4, 6], 11)],
+          [{ kind: 'hq', stance: 'hold', col: 5, row: 1 }, ...at('infantry', 'hold', [4, 6], 3), ...at('archer', 'hold', [2, 8], 2)],
+        ],
+        gate: { side: 1, col: 5, row: 5, win },
+      });
+    },
+    /** 面を仮に足す（同じ id があれば置き換える）。第2章・第3章のデータができるまで、霧・狭い戦場・門・ステージ選択を確かめるため */
+    addStage(stage: Stage): number {
+      const i = STAGES.findIndex((s) => s.id === stage.id);
+      if (i >= 0) STAGES[i] = stage;
+      else STAGES.push(stage);
+      return STAGES.length;
+    },
+    /** 確かめ用の戦場を作る道具 */
+    fields: {
+      plain: (width = 12) => plainField(width),
+      pvp: (id: PvpMapId) => pvpField(id),
+      /** engine の sim/terrain-scenes.ts の castleField と同じ形：城壁は行 5、切れ目（門）は列 5 */
+      castle: () => {
+        const f = plainField();
+        for (let c = 0; c < f.width; c++) if (c !== 5) f.terrain[5 * f.width + c] = 'wall';
+        f.zones = [f.zones[0], { col: 0, row: 0, width: f.width, height: 6 }];
+        return f;
+      },
+      maps: () => PVP_MAPS,
+    },
+    /** 部屋を出る（画面の「出る」と同じ） */
+    pvpLeave(): void {
+      pvp.leave();
     },
     /** 対戦のつながりを切る（自動でつなぎ直すかを確かめるため） */
     pvpDrop(): void {
@@ -226,4 +326,27 @@ export function installDebug(game: Phaser.Game): void {
     },
   };
   (window as unknown as { __jg: typeof api }).__jg = api;
+}
+
+/**
+ * 開発用：URL に ?harness=col（上下）か ?harness=row（左右）を付けると、このページを「2人分の画面を並べる台」にする。
+ * 中に ?save=a と ?save=b の2つの画面を iframe で開く（別のタブにすると、裏のタブが読み込み直されて確かめられないため）。
+ * 読み込み直されても、自分で組み直す。本番では呼ばれない（main.ts の DEV の分岐の中から呼ぶ）。
+ */
+export function installHarness(): boolean {
+  const mode = new URLSearchParams(window.location.search).get('harness');
+  if (mode !== 'col' && mode !== 'row') return false;
+  document.body.innerHTML = '';
+  Object.assign(document.body.style, { background: '#000', display: 'flex', flexDirection: mode === 'row' ? 'row' : 'column', gap: '4px' });
+  for (const s of ['a', 'b']) {
+    const f = document.createElement('iframe');
+    f.id = `f${s}`;
+    f.src = `/?save=${s}`;
+    Object.assign(f.style, { flex: '1 1 0', border: '0', minWidth: '0', minHeight: '0' });
+    document.body.appendChild(f);
+  }
+  const w = window as unknown as Record<string, unknown>;
+  w.A = () => (document.getElementById('fa') as HTMLIFrameElement).contentWindow;
+  w.B = () => (document.getElementById('fb') as HTMLIFrameElement).contentWindow;
+  return true;
 }

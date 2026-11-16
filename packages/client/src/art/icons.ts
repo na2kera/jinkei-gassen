@@ -85,3 +85,16 @@ export function drawStar(g: Phaser.GameObjects.Graphics, x: number, y: number, f
 
 /** 星1つの幅（scale 倍） */
 export const STAR_SIZE = 7;
+
+/** 守り切れば勝ちの面の印（盾。5×5 の点を2倍で描く）。残り時間の左に置く */
+export function drawSurviveIcon(g: Phaser.GameObjects.Graphics, x: number, y: number): void {
+  const rows = ['xxxxx', 'xyyyx', 'xyyyx', '.xyx.', '..x..'];
+  rows.forEach((line, ry) => {
+    for (let rx = 0; rx < line.length; rx++) {
+      const ch = line[rx];
+      if (ch === '.') continue;
+      g.fillStyle(ch === 'x' ? COLOR.gold : COLOR.goldLo, 1);
+      g.fillRect(x + rx * 2, y + ry * 2, 2, 2);
+    }
+  });
+}

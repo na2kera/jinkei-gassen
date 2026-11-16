@@ -4,7 +4,7 @@
 import Phaser from 'phaser';
 import { installAudioUnlock, setMuted } from './audio/sfx.ts';
 import { savedMuted } from './save.ts';
-import { installDebug } from './debug.ts';
+import { installDebug, installHarness } from './debug.ts';
 import { computeLayout, getLayout, LAYOUT_EVENT, sameSize, setLayout } from './layout.ts';
 import { BattleScene } from './scenes/BattleScene.ts';
 import { BootScene } from './scenes/BootScene.ts';
@@ -25,6 +25,8 @@ function parentSize(): { w: number; h: number } {
 }
 
 async function start(): Promise<void> {
+  // 開発用：2人分の画面を並べる台として開かれたときは、ゲームを始めない
+  if (import.meta.env.DEV && installHarness()) return;
   // どの画面でも、最初の操作で音を解禁する（iOS Safari 対策。手本の走れだいごくんと同じ）
   installAudioUnlock();
   // 前に音を切っていたら、切ったまま始める

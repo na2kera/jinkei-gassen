@@ -9,7 +9,7 @@ import { playStar } from '../audio/sfx.ts';
 import { debug } from '../debug.ts';
 import { getLayout, LAYOUT_EVENT, resultLayout } from '../layout.ts';
 import { recordStars } from '../save.ts';
-import { nextStage, session } from '../session.ts';
+import { nextStage, session, stageById } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { KIND_LABEL, WING_LABEL, wingForViewer } from '../ui/labels.ts';
 import { drawBox } from '../ui/panel.ts';
@@ -23,15 +23,20 @@ export function titleOf(s: BattleSummary, viewer: Side): string {
   return s.winner === viewer ? '勝ち' : '負け';
 }
 
-export function reasonOf(s: BattleSummary, viewer: Side): string {
+/**
+ * 決着の理由。survive は「時間切れまで守り切れば勝ち」の面（時間切れで勝ったら「守り切った」と出す）
+ */
+export function reasonOf(s: BattleSummary, viewer: Side, survive = false): string {
   const won = s.winner === viewer;
   switch (s.reason) {
+    case 'gate':
+      return won ? '門を破った' : '門を破られた';
     case 'hq':
       return won ? '本陣を討った' : '本陣を討たれた';
     case 'wipeout':
       return won ? '敵軍が壊滅' : '自軍が壊滅';
     case 'timeout':
-      return '時間切れ';
+      return survive && won ? '守り切った' : '時間切れ';
     default:
       return '';
   }
@@ -42,8 +47,12 @@ export function percent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
-/** 部隊の呼び名（「左翼の騎兵」）。翼は見ている人から見た左右（敵の翼は左右を入れ替える） */
-export function unitName(id: number | null, units: UnitView[], viewer: Side): string {
+/**
+ * 部隊の呼び名（「左翼の騎兵」）。翼は見ている人から見た左右（敵の翼は左右を入れ替える）。
+ * 振り返りの値（BattleSummary.units。wing を持つ）だけから呼ぶ。場面に頼ると、結果の画面だけに戻ってきた人や、
+ * 別の戦いの場面が残っているときに、名前が「なし」になったり、違う部隊を指したりするため
+ */
+export function unitName(id: number | null, units: readonly Pick<UnitView, 'id' | 'side' | 'kind' | 'wing'>[], viewer: Side): string {
   if (id === null) return 'なし';
   const u = units.find((v) => v.id === id);
   if (!u) return 'なし';
@@ -85,7 +94,8 @@ export class ResultScene extends Phaser.Scene {
     };
 
     if (result) {
-      const { summary: s, units, viewer } = result;
+      const { summary: s, viewer } = result;
+      const units = s.units;
       const enemy: Side = viewer === 0 ? 1 : 0;
       drawBox(this.add.graphics(), r.box);
       // 見出しは淡い色、中身は明るい色にして、説明文を足さずに読み分けられるようにする
@@ -93,7 +103,7 @@ export class ResultScene extends Phaser.Scene {
         addText(this, Math.round(r.centerX), y, text, size, color).setOrigin(0.5, 0);
       };
       center(r.title, titleOf(s, viewer), 32, won ? COLOR.goldHi : s.winner === 'draw' ? COLOR.cream : COLOR.red);
-      center(r.reason, reasonOf(s, viewer));
+      center(r.reason, reasonOf(s, viewer, stageById(stageId)?.win.type === 'survive'));
 
       // 星：勝ったときだけ。取った星を1つずつ出す（向きの切り替えで作り直したときは、すぐ全部出す）
       const stars = won ? starsFor(s, viewer) : 0;

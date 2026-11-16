@@ -8,7 +8,7 @@ import { COLOR } from '../art/palette.ts';
 import { debug } from '../debug.ts';
 import { getLayout, LAYOUT_EVENT, stageSelectLayout } from '../layout.ts';
 import { starsOf } from '../save.ts';
-import { chapters, isUnlocked, session } from '../session.ts';
+import { chapters, isUnlocked, orderedStages, session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { addText } from '../ui/text.ts';
 
@@ -35,7 +35,7 @@ export class StageSelectScene extends Phaser.Scene {
       shownChapter = cur ? cur.chapter : (list[0] ?? 1);
     }
     const chapter = shownChapter;
-    const stages = STAGES.filter((s) => s.chapter === chapter);
+    const stages = orderedStages().filter((s) => s.chapter === chapter);
     const l = stageSelectLayout(layout, stages.length);
 
     new Button(this, l.back, '戻る', () => this.scene.start('Title'));

@@ -5,17 +5,31 @@ import type { Field, Zone } from '@jinkei/engine';
 import Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
 import { COLOR } from './palette.ts';
-import { PLAIN_VARIANTS, tileKey } from './textures.ts';
+import type { Rect } from '../layout.ts';
+import { PLAIN_VARIANTS, ROCK_KEY, TILE, tileKey } from './textures.ts';
 
 let serial = 0;
 
-/** 戦場の背景を作って置く。戻り値は置いた Image（作り直すときは destroy する） */
-export function addFieldImage(scene: Phaser.Scene, fv: FieldView, field: Field): Phaser.GameObjects.Image {
-  const r = fv.rect;
+/**
+ * 戦場の背景を作って置く。戻り値は置いた Image（作り直すときは destroy する）。
+ * area は描き場所（12列ぶん）。戦場が狭いときは、戦場の外側の列に岩壁を敷く（谷の狭い道を表す）
+ */
+export function addFieldImage(scene: Phaser.Scene, fv: FieldView, field: Field, area: Rect = fv.rect): Phaser.GameObjects.Image {
+  const r = area;
   const key = `field-bg-${serial++}`;
   const tex = scene.textures.createCanvas(key, r.w, r.h);
   if (tex) {
     const ctx = tex.getContext();
+    // 戦場の外側（狭い戦場の左右）は岩壁
+    for (let y = 0; y < r.h; y += TILE) {
+      for (let x = 0; x < r.w; x += TILE) {
+        const inside = r.x + x >= fv.rect.x && r.x + x < fv.rect.x + fv.rect.w;
+        if (inside) continue;
+        const v = ((x / TILE) * 5 + (y / TILE) * 3) % 3;
+        const src = scene.textures.get(`${ROCK_KEY}-${v}`).getSourceImage() as HTMLCanvasElement;
+        ctx.drawImage(src, x, y);
+      }
+    }
     for (let row = 0; row < field.height; row++) {
       for (let col = 0; col < field.width; col++) {
         const terrain = field.terrain[row * field.width + col] ?? 'plain';
@@ -36,9 +50,9 @@ export function addFieldImage(scene: Phaser.Scene, fv: FieldView, field: Field):
   return img;
 }
 
-/** 戦場のまわりの枠（輪郭 2px + 暗い金 2px） */
-export function drawFieldFrame(g: Phaser.GameObjects.Graphics, fv: FieldView): void {
-  const r = fv.rect;
+/** 戦場のまわりの枠（輪郭 2px + 暗い金 2px）。描き場所（area）の外側に付ける */
+export function drawFieldFrame(g: Phaser.GameObjects.Graphics, fv: FieldView, area: Rect = fv.rect): void {
+  const r = area;
   g.fillStyle(COLOR.dim, 1);
   g.fillRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
   g.fillStyle(COLOR.outline, 1);

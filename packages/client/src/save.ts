@@ -35,10 +35,15 @@ export interface SaveData {
   name: string;
   /** 最後に入っていた部屋のコード（読み込み直したときに「前の部屋に戻る」を出すため） */
   roomCode: string | null;
+  /**
+   * 対戦の最後の配置（自分が下の座標）。読み込み直したあとの次の戦いでも、前の配置から始められるようにする。
+   * サーバーは新しい配置の段階に入ると下書きを消すので、手元に残しておかないと、読み込み直した人の配置が空になるため
+   */
+  pvpArmy: Placement[];
 }
 
 function empty(): SaveData {
-  return { v: 1, stars: {}, placements: {}, muted: false, pid: null, name: '', roomCode: null };
+  return { v: 1, stars: {}, placements: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [] };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -75,6 +80,9 @@ function sanitize(raw: unknown): SaveData {
   if (typeof raw.pid === 'string' && /^[0-9a-f]{32}$/.test(raw.pid)) data.pid = raw.pid;
   if (typeof raw.name === 'string' && [...raw.name].length <= 12) data.name = raw.name;
   if (typeof raw.roomCode === 'string' && /^\d{4}$/.test(raw.roomCode)) data.roomCode = raw.roomCode;
+  if (Array.isArray(raw.pvpArmy) && raw.pvpArmy.length <= 16 && raw.pvpArmy.every(isPlacement)) {
+    data.pvpArmy = raw.pvpArmy.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
+  }
   return data;
 }
 
@@ -180,4 +188,13 @@ export function saveRoomCode(code: string | null): void {
 export function resetPlayerIdForDebug(): string {
   loadSave().pid = null;
   return playerId();
+}
+
+export function savedPvpArmy(): Placement[] {
+  return loadSave().pvpArmy.map((p) => ({ ...p }));
+}
+
+export function savePvpArmy(list: readonly Placement[]): void {
+  loadSave().pvpArmy = list.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
+  write();
 }

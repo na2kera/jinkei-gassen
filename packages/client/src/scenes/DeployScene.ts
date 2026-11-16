@@ -28,18 +28,23 @@ import {
   type Stance,
   type StageEnemyOrder,
   type TemplateId,
+  type Terrain,
   type Zone,
+  PVP_MAPS,
 } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { addFieldImage, drawFieldFrame, drawZone } from '../art/field.ts';
 import { COLOR } from '../art/palette.ts';
+import { GateSprite } from '../art/GateSprite.ts';
+import { FOG_KEY } from '../art/textures.ts';
 import { UnitSprite } from '../art/UnitSprite.ts';
 import { playFormation, playPlace, playRemove, playStance, playStart } from '../audio/sfx.ts';
-import { FieldView, type Cell } from '../battle/FieldView.ts';
+import { centeredFieldView, FieldView, type Cell } from '../battle/FieldView.ts';
 import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
 import { debug } from '../debug.ts';
+import { savedPvpArmy } from '../save.ts';
 import { CELL, deployPanel, getLayout, LAYOUT_EVENT, pvpDeployPanel, type Rect } from '../layout.ts';
-import { client, notify, pvp, pvpLocal } from '../net/pvp.ts';
+import { client, pvp, pvpLocal } from '../net/pvp.ts';
 import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { KIND_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
@@ -48,10 +53,18 @@ import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
 import type { BattleSceneData } from './BattleScene.ts';
 
+/** 地形の名前と効きめ（配置の画面で、マスを押している間だけ1行で出す）。数字は出さず、何に効くかだけを書く */
+const TERRAIN_TEXT: Partial<Record<Terrain, string>> = {
+  hill: '丘：上が有利。弓が遠くまで届く',
+  river: '川：渡る間は遅く、打たれ弱い',
+  forest: '森：騎兵が止まる。弓が当たりにくい',
+  fence: '柵：正面から崩されにくい',
+  wall: '城壁：通れない。弓は越える',
+};
+const GATE_TEXT = '門：破れば通れる';
+
 /** これ以上動いたら「押した」ではなく「引きずった」とみなす（px） */
 const DRAG_THRESHOLD = 6;
-/** 下書きを送る間隔の下限（ミリ秒。design §4.3） */
-const DRAFT_GAP_MS = 500;
 /** 「出る」を2回押すまでの猶予（ミリ秒） */
 const LEAVE_ARM_MS = 2500;
 
@@ -104,13 +117,14 @@ export class DeployScene extends Phaser.Scene {
   private formationBox!: Phaser.GameObjects.Graphics;
   private formationText!: Phaser.GameObjects.Text;
   private formationName: string | null = null;
+  private terrainBox!: Phaser.GameObjects.Graphics;
+  private terrainText!: Phaser.GameObjects.Text;
+  private terrainPointer: number | null = null;
   private stageIdArg: string | undefined;
   // 対戦だけ
   private budgetText: Phaser.GameObjects.Text | null = null;
   private infoBox: Phaser.GameObjects.Graphics | null = null;
   private infoText: Phaser.GameObjects.Text | null = null;
-  private lastDraftAt = 0;
-  private draftTimer = 0;
   private leaveArmedUntil = 0;
   private unsubscribe: (() => void)[] = [];
 
@@ -144,16 +158,17 @@ export class DeployScene extends Phaser.Scene {
     this.leaveArmedUntil = 0;
 
     if (this.pvpMode) {
+      pvp.arrived('Deploy');
       const room = client.room;
-      if (!room) {
-        this.scene.start('Lobby');
-        return;
-      }
+      // 部屋の様子がまだない（起きないはず）ときは、pvp.ts が次の room で画面を選び直すので、ここでは何もしない
+      if (!room) return;
       // 戦場は「自分が下」の座標で届く。自分の配置エリアは zones[you]（いつも下側）
       this.field = room.field;
       this.ownZone = room.field.zones[room.you];
       this.otherZone = room.field.zones[room.you === 0 ? 1 : 0];
       this.beginPvpSetup();
+      // 作り直す前に送れていなかった配置・確定があれば、ここで送る
+      pvp.syncSetup();
     } else {
       // 面を開く（前にこの面で置いた配置があれば戻る）
       this.stage = openStage(this.stageIdArg ?? session.stageId);
@@ -163,14 +178,23 @@ export class DeployScene extends Phaser.Scene {
     }
 
     const field = this.field;
-    this.fv = new FieldView(layout.field, field.width, field.height);
-    drawFieldFrame(this.add.graphics(), this.fv);
-    addFieldImage(this, this.fv, field);
+    this.fv = centeredFieldView(layout.field, field);
+    drawFieldFrame(this.add.graphics(), this.fv, layout.field);
+    addFieldImage(this, this.fv, field, layout.field);
     // 配置エリアは配置の画面だけで見せる。自軍は明るい金、敵軍は暗い色
     const zones = this.add.graphics();
     drawZone(zones, this.fv, this.ownZone, COLOR.gold);
     drawZone(zones, this.fv, this.otherZone, COLOR.dim);
     if (this.pvpMode) this.drawFog(zones, this.otherZone);
+    if (!this.pvpMode) {
+      // 門（配置の画面でも見せる）と、霧のマス（何かいるかもしれない、と分かるように覆う）
+      const layer = this.add.container(0, 0);
+      if (this.stage.gate) new GateSprite(this, this.fv, this.field, this.stage.gate.col, this.stage.gate.row, layer);
+      for (const c of this.stage.fog ?? []) {
+        const r = this.fv.cellRect(c.col, c.row);
+        layer.add(this.add.image(r.x, r.y, FOG_KEY).setOrigin(0, 0));
+      }
+    }
     this.soldierLayer = this.add.container(0, 0);
     this.markLayer = this.add.container(0, 0);
     this.dropMark = this.add.graphics();
@@ -193,6 +217,9 @@ export class DeployScene extends Phaser.Scene {
     this.formationBox = this.add.graphics();
     this.formationText = addText(this, 0, 0, '', 16, COLOR.goldHi).setOrigin(0.5, 0.5).setVisible(false);
     this.popupLayer = this.add.container(0, 0);
+    this.terrainBox = this.add.graphics();
+    this.terrainText = addText(this, 0, 0, '', 16, COLOR.cream).setOrigin(0.5, 0.5).setVisible(false);
+    this.terrainPointer = null;
 
     if (this.pvpMode) this.buildPvpPanel();
     else this.buildStagePanel();
@@ -202,13 +229,14 @@ export class DeployScene extends Phaser.Scene {
     this.input.on(Phaser.Input.Events.POINTER_UP, this.onUp, this);
     this.input.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, this.onUp, this);
 
+    // 向きが変わったら作り直す。対戦では、画面の切り替えとぶつからないよう pvp.ts に頼む
     const onLayout = (): void => {
-      this.scene.restart();
+      if (this.pvpMode) pvp.requestRestart(this, { pvp: true });
+      else this.scene.restart();
     };
     this.game.events.on(LAYOUT_EVENT, onLayout);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off(LAYOUT_EVENT, onLayout);
-      window.clearTimeout(this.draftTimer);
       for (const u of this.unsubscribe) u();
       debug.applyTemplate = null;
       debug.start = null;
@@ -269,11 +297,6 @@ export class DeployScene extends Phaser.Scene {
     this.startButton = new Button(this, panel.start, '完了', () => this.pressReady(), { primary: true });
     // 部屋の様子（自分と相手の確定・期限）が変わったら、ボタンと表示を直す
     this.unsubscribe.push(client.subscribe(() => this.refresh(false)));
-    this.unsubscribe.push(
-      client.onError((m) => {
-        if (m.reason === 'invalid_army') notify('配置が正しくありません');
-      }),
-    );
   }
 
   private addTemplateButtons(rects: Rect[]): void {
@@ -293,7 +316,7 @@ export class DeployScene extends Phaser.Scene {
   private setList(list: Placement[]): void {
     if (this.pvpMode) {
       pvpLocal.placements = list;
-      this.scheduleDraft();
+      pvp.markDraft();
     } else {
       setPlacements(list);
     }
@@ -322,28 +345,38 @@ export class DeployScene extends Phaser.Scene {
     return this.pvpMode ? validateArmy(list, this.ownZone, pvpArmyLimits()) : armyErrors(list);
   }
 
-  /** 対戦で、自分が確定している間は配置を動かせない */
+  /**
+   * 対戦で、自分が確定している間は配置を動かせない。
+   * 確定・取り消しを押してまだ届いていない間は、押した側の状態とみなす（押したのに動かせる、をなくす）
+   */
   private locked(): boolean {
+    if (!this.pvpMode) return false;
+    if (pvpLocal.wantReady !== null) return pvpLocal.wantReady;
     const room = client.room;
-    return this.pvpMode && !!room && room.seats[room.you]?.ready === true;
+    return !!room && room.seats[room.you]?.ready === true;
   }
 
   // ---- 対戦の編成と下書き ----
 
   /**
-   * 配置の段階に入ったときの始め方。戦いが変わった（新しい配置の段階）なら、
-   * room.myArmy（入り直したときにサーバーが覚えていた下書き）、なければ前の戦いの配置から始める。
+   * 配置の段階に入ったときの始め方（戦いが変わった・読み込み直した・出て入り直したとき）。
+   *   1. サーバーの myArmy（その配置の段階でサーバーが覚えている、最後に検査を通った下書き）があれば、それを出す
+   *   2. なければ、手元の最後の配置（覚えている配置、なければ保存した配置）を出し、「まだ送っていない」印を立てて送る
+   * サーバーは新しい配置の段階に入ると下書きを消すので、2 がないと、読み込み直した人の配置が空になる
    */
   private beginPvpSetup(): void {
     const room = client.room;
     if (!room || pvpLocal.setupFor === room.battleNo) return;
     pvpLocal.setupFor = room.battleNo;
-    const base = room.myArmy ?? pvpLocal.placements;
+    const fromServer = room.myArmy !== null && room.myArmy.length > 0;
+    const local = pvpLocal.placements.length > 0 ? pvpLocal.placements : savedPvpArmy();
+    const base = fromServer && room.myArmy ? room.myArmy : local;
     const ok = !validateArmy(base, this.ownZone, pvpArmyLimits()).some((e) => BROKEN.has(e.code));
     pvpLocal.placements = ok ? base.map((p) => ({ ...p })) : [];
     // 編成は、置いてある部隊の数から始める。まだ何も置いていなければ、既定の編成（予算ちょうど）から始める
     pvpLocal.roster = pvpLocal.placements.length > 0 ? { ...countKinds(pvpLocal.placements), hq: 1 } : { ...room.rules.standardRoster };
-    if (pvpLocal.placements.length > 0) this.scheduleDraft();
+    // サーバーにない配置を出したときだけ、送る印を立てる
+    if (!fromServer && pvpLocal.placements.length > 0) pvp.markDraft();
   }
 
   private costs(): Record<Kind, number> {
@@ -386,25 +419,18 @@ export class DeployScene extends Phaser.Scene {
     this.refresh();
   }
 
-  /** 下書きを送る。0.5秒に1回までにまとめ、間に合わなければ少し待って最後の配置を送る */
-  private scheduleDraft(): void {
-    if (!this.pvpMode || this.locked()) return;
-    window.clearTimeout(this.draftTimer);
-    const wait = Math.max(0, this.lastDraftAt + DRAFT_GAP_MS - Date.now());
-    this.draftTimer = window.setTimeout(() => {
-      if (this.locked()) return;
-      this.lastDraftAt = Date.now();
-      client.send({ type: 'draft', army: pvpLocal.placements.map((p) => ({ ...p })) });
-    }, wait);
-  }
-
-  /** 「完了」で確定し、確定中にもう一度押すと取り消す */
+  /** 「完了」で確定し、確定中にもう一度押すと取り消す。届くまでの送り直しは pvp.ts が受け持つ */
   private pressReady(): boolean {
-    if (this.locked()) return client.send({ type: 'unready' });
+    if (this.locked()) {
+      pvp.setReady(false);
+      this.refresh(false);
+      return true;
+    }
     if (this.errors(this.list).length > 0) return false;
-    window.clearTimeout(this.draftTimer);
     playStart();
-    return client.send({ type: 'ready', army: this.list.map((p) => ({ ...p })) });
+    pvp.setReady(true);
+    this.refresh(false);
+    return true;
   }
 
   /** 「出る」：1回目は「出る？」に変わるだけで、猶予のうちにもう一度押すと部屋を出る */
@@ -519,6 +545,8 @@ export class DeployScene extends Phaser.Scene {
       orders: this.stage.allow?.orders !== false,
       onQuit: (battle) => battle.scene.start('Deploy', { stageId }),
       stageId,
+      ...(this.stage.fog && this.stage.fog.length > 0 ? { fog: this.stage.fog } : {}),
+      survive: this.stage.win.type === 'survive',
     };
     playStart();
     this.scene.start('Battle', data);
@@ -535,16 +563,45 @@ export class DeployScene extends Phaser.Scene {
     this.closePopup();
     const cell = this.fv.cellAt(pointer.x, pointer.y);
     if (!cell || !this.inOwnZone(cell)) {
+      // 自分のエリアの外：押している間だけ、そのマスの地形を1行で出す
+      if (cell) this.showTerrain(pointer.id, cell);
       if (hadPopup) this.refresh();
       return;
     }
     const index = this.indexAt(cell);
     if (index >= 0) {
+      // 部隊のいるマスでは、部隊の操作（方針の切り替え）を優先する
       this.press = { pointerId: pointer.id, index, startX: pointer.x, startY: pointer.y, dragging: false };
     } else if (!hadPopup && this.selectedKind && this.remaining(this.selectedKind) > 0) {
       this.place(this.selectedKind, cell);
+    } else {
+      this.showTerrain(pointer.id, cell);
     }
     this.refresh();
+  }
+
+  /** 押している間だけ、マスの地形の名前と効きめを1行で出す（平地では出さない） */
+  private showTerrain(pointerId: number, cell: Cell): void {
+    const t = this.field.terrain[cell.row * this.field.width + cell.col] ?? 'plain';
+    const gate = !this.pvpMode && this.stage.gate && this.stage.gate.col === cell.col && this.stage.gate.row === cell.row;
+    const text = gate ? GATE_TEXT : TERRAIN_TEXT[t];
+    if (!text) return;
+    this.terrainPointer = pointerId;
+    this.terrainText.setText(text).setVisible(true);
+    const w = Math.ceil(this.terrainText.width / 2) * 2 + 20;
+    const f = this.fv.rect;
+    const r: Rect = { x: Math.round((f.x + f.w / 2 - w / 2) / 2) * 2, y: f.y + 8, w, h: 28 };
+    this.terrainBox.clear();
+    drawBox(this.terrainBox, r);
+    this.terrainText.setPosition(Math.round(r.x + w / 2), r.y + 14);
+    this.children.bringToTop(this.terrainBox);
+    this.children.bringToTop(this.terrainText);
+  }
+
+  private hideTerrain(): void {
+    this.terrainPointer = null;
+    this.terrainBox.clear();
+    this.terrainText.setVisible(false);
   }
 
   private onMove(pointer: Phaser.Input.Pointer): void {
@@ -562,6 +619,7 @@ export class DeployScene extends Phaser.Scene {
   }
 
   private onUp(pointer: Phaser.Input.Pointer): void {
+    if (this.terrainPointer === pointer.id) this.hideTerrain();
     const press = this.press;
     if (!press || pointer.id !== press.pointerId) return;
     this.press = null;
@@ -710,7 +768,9 @@ export class DeployScene extends Phaser.Scene {
     const left = deadline === null ? 0 : Math.max(0, Math.ceil((deadline - client.serverNow()) / 1000));
     const other = room.seats[room.you === 0 ? 1 : 0];
     const mark = other ? (other.ready ? '相手 確定' : '相手 配置中') : '';
-    const text = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}  ${mark}`;
+    // 戦場の名前も小さく添える（どの戦場で戦うかが分かるように）
+    const mapName = PVP_MAPS.find((m) => m.id === room.map)?.name ?? '';
+    const text = `${mapName}  ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}  ${mark}`;
     if (this.infoText.text === text) return;
     this.infoText.setText(text);
     const band = this.bandRows();

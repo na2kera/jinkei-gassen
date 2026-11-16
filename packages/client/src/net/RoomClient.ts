@@ -4,6 +4,7 @@
 
 import type {
   ClientMessage,
+  CloseCode,
   CreateRoomResponse,
   ErrorMessage,
   ResultMessage,
@@ -24,7 +25,7 @@ export type NetStatus =
   | 'reconnecting';
 
 /** 入室・作成の失敗の理由（画面に出す1行に直す） */
-export type JoinFailure = 'not_found' | 'full' | 'busy' | 'wait' | 'network' | 'lost';
+export type JoinFailure = 'not_found' | 'full' | 'busy' | 'wait' | 'network' | 'lost' | 'replaced';
 
 export function failureText(f: JoinFailure): string {
   switch (f) {
@@ -40,6 +41,8 @@ export function failureText(f: JoinFailure): string {
       return 'つながりません';
     case 'lost':
       return 'つながりが切れました';
+    case 'replaced':
+      return '別の画面で開かれました';
   }
 }
 
@@ -50,6 +53,8 @@ const RETRY_DELAYS = [500, 1000, 2000, 4000, 8000];
 /** これだけ何も届かなければ、切れたとみなしてつなぎ直す（手元の開発環境では close が届かないことがあるため） */
 const SILENCE_MS = 12000;
 const PING_MS = 4000;
+/** error のあと close が届くのを待つ長さ（ミリ秒） */
+const ERROR_GRACE_MS = 400;
 
 export class RoomClient {
   status: NetStatus = 'idle';
@@ -62,6 +67,13 @@ export class RoomClient {
   clockOffset = 0;
   /** 最後の入室の失敗（画面に1行で出すため。出したら消す） */
   failure: JoinFailure | null = null;
+  /** 部屋を作っている途中か（画面を作り直しても、作成を2つ始めないよう、シーンの外に持つ） */
+  creating = false;
+  /**
+   * 部屋に入り直した回数（room が届くたびではなく、つながり直して最初の room が届いたときに増える）。
+   * 号令の数え方などを、つなぎ直したあとの最初の場面で正し直すために使う
+   */
+  session = 0;
 
   /** 開発用：届いたメッセージの種類ごとの数と、送ったメッセージの記録 */
   readonly received: Record<string, number> = {};
@@ -73,6 +85,11 @@ export class RoomClient {
   private name = '';
   private retry = 0;
   private retryTimer = 0;
+  private errorTimer = 0;
+  /** 作成・入室・退室のたびに増える番号。古い操作の遅れた応答を捨てるため */
+  private opGen = 0;
+  /** いまのつながりで、まだ room が届いていないか */
+  private freshSocket = false;
   private pingTimer = 0;
   private lastHeard = 0;
   private readonly listeners = new Set<Listener>();
@@ -102,14 +119,32 @@ export class RoomClient {
 
   /** 部屋を作る。成功すればコードを返し、そのまま入る */
   async create(pid: string, name: string): Promise<boolean> {
+    if (this.creating) return false;
+    this.leaveQuietly();
+    const gen = ++this.opGen;
     this.failure = null;
+    this.creating = true;
+    this.emit();
+    try {
+      return await this.createWith(gen, pid, name);
+    } finally {
+      if (gen === this.opGen) {
+        this.creating = false;
+        this.emit();
+      }
+    }
+  }
+
+  private async createWith(gen: number, pid: string, name: string): Promise<boolean> {
     let res: Response;
     try {
       res = await fetch('/api/rooms', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pid }) });
     } catch {
-      this.fail('network');
-      return false;
+      // 出たあと・別の操作のあとに届いた応答は捨てる
+      if (gen !== this.opGen) return false;
+      return this.fail('network');
     }
+    if (gen !== this.opGen) return false;
     if (res.status === 503) return this.fail('busy');
     if (res.status === 429) return this.fail('wait');
     if (res.status !== 201) return this.fail('network');
@@ -117,8 +152,10 @@ export class RoomClient {
     try {
       body = (await res.json()) as CreateRoomResponse;
     } catch {
-      return this.fail('network');
+      return gen === this.opGen ? this.fail('network') : false;
     }
+    if (gen !== this.opGen) return false;
+    this.creating = false;
     this.join(body.code, pid, name);
     return true;
   }
@@ -126,6 +163,8 @@ export class RoomClient {
   /** コードで入る（作った人も、作ったあとにこれでつなぐ） */
   join(code: string, pid: string, name: string): void {
     this.leaveQuietly();
+    this.opGen++;
+    this.creating = false;
     this.code = code;
     this.pid = pid;
     this.name = name;
@@ -143,6 +182,9 @@ export class RoomClient {
   /** 部屋を出る（自分から閉じる。つなぎ直さない） */
   leave(): void {
     this.leaveQuietly();
+    // 作っている途中の応答が、あとから部屋へ連れ戻さないようにする
+    this.opGen++;
+    this.creating = false;
     this.code = null;
     this.room = null;
     this.reveal = null;
@@ -188,6 +230,7 @@ export class RoomClient {
 
   private leaveQuietly(): void {
     window.clearTimeout(this.retryTimer);
+    window.clearTimeout(this.errorTimer);
     this.closeSocket();
   }
 
@@ -221,14 +264,21 @@ export class RoomClient {
       return;
     }
     this.ws = ws;
+    this.freshSocket = true;
     this.lastHeard = Date.now();
     ws.onmessage = (ev) => this.onMessage(ev);
-    ws.onclose = () => {
-      if (this.ws === ws) this.lost();
+    ws.onclose = (ev) => {
+      if (this.ws !== ws) return;
+      window.clearTimeout(this.errorTimer);
+      this.closed(ev.code as CloseCode | number);
     };
     ws.onerror = () => {
-      // 続けて close が届くはずだが、届かない環境があるので、ここでもつなぎ直しへ進める
-      if (this.ws === ws) this.lost();
+      // ふつうは続けて close が届き、そのコードでつなぎ直すかを決める。
+      // close が届かない環境があるので、少し待っても届かなければ、ふつうの切断としてつなぎ直す
+      window.clearTimeout(this.errorTimer);
+      this.errorTimer = window.setTimeout(() => {
+        if (this.ws === ws) this.lost();
+      }, ERROR_GRACE_MS);
     };
     window.clearInterval(this.pingTimer);
     this.pingTimer = window.setInterval(() => {
@@ -239,6 +289,36 @@ export class RoomClient {
       }
       if (ws.readyState === WebSocket.OPEN) ws.send('ping');
     }, PING_MS);
+  }
+
+  /**
+   * サーバーが閉じた。コードを見て、つなぎ直すかを決める（protocol の CloseCode）。
+   *   4001: 同じ pid の新しい接続に置き換えられた（別のタブで開いた）。つなぎ直すと奪い合いになるので、やめる
+   *   1003・1008・1009: 決まりを破ったとして閉じられた。つなぎ直しても同じことになるので、やめる
+   *   4002・4003・4004: 満員・部屋がない・接続が多すぎる。つなぎ直さない
+   * それ以外（ネットワークの切断など）は、間隔を空けてつなぎ直す
+   */
+  private closed(code: number): void {
+    const stop: Partial<Record<number, JoinFailure>> = {
+      4001: 'replaced',
+      1003: 'lost',
+      1008: 'lost',
+      1009: 'lost',
+      4002: 'full',
+      4003: 'not_found',
+      4004: 'busy',
+    };
+    const f = stop[code];
+    if (!f) {
+      this.lost();
+      return;
+    }
+    this.closeSocket();
+    window.clearTimeout(this.retryTimer);
+    this.code = null;
+    this.room = null;
+    this.status = 'idle';
+    this.fail(f);
   }
 
   /** 思わず切れた。部屋に入れていたなら、間隔を空けてつなぎ直す */
@@ -280,6 +360,11 @@ export class RoomClient {
     this.lastType = msg.type;
     switch (msg.type) {
       case 'room':
+        // つながり直して最初の room なら、入り直した回数を増やす（RemoteBattleSource が号令の数え方を正し直す）
+        if (this.freshSocket) {
+          this.freshSocket = false;
+          this.session++;
+        }
         this.room = msg;
         this.clockOffset = msg.serverTime - Date.now();
         this.status = 'open';

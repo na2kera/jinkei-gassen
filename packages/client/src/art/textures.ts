@@ -207,14 +207,15 @@ function paintTerrain(ctx: CanvasRenderingContext2D, terrain: Terrain, variant: 
       return;
     case 'hill': {
       // 丘：明るい草に、等高線の段
-      fill(ctx, 0x6f8a3a, 0, 0, TILE, TILE);
+      // 草地との違いが小さな絵でも分かるよう、明るい黄緑にしている
+      fill(ctx, 0x7d9a40, 0, 0, TILE, TILE);
       for (const [y, x0, x1] of [
         [4, 6, 18],
         [10, 2, 22],
         [16, 0, 24],
       ] as const) {
-        fill(ctx, 0x86a046, x0, y, x1 - x0, 2);
-        fill(ctx, 0x56702c, x0, y + 2, x1 - x0, 2);
+        fill(ctx, 0x9cb456, x0, y, x1 - x0, 2);
+        fill(ctx, 0x5a7430, x0, y + 2, x1 - x0, 2);
       }
       return;
     }
@@ -226,23 +227,24 @@ function paintTerrain(ctx: CanvasRenderingContext2D, terrain: Terrain, variant: 
         [17, 9],
         [9, 17],
       ] as const) {
-        fill(ctx, 0x1e3212, cx - 4, cy - 2, 10, 8);
-        fill(ctx, 0x2f4a1e, cx - 4, cy - 4, 8, 8);
-        fill(ctx, 0x2f4a1e, cx - 2, cy - 6, 4, 2);
-        fill(ctx, 0x3f6026, cx - 2, cy - 4, 4, 2);
+        // 木の冠は草地より暗いが、上に立つ部隊（藍・朱）が沈まない明るさにしている
+        fill(ctx, 0x2a4418, cx - 4, cy - 2, 10, 8);
+        fill(ctx, 0x3a5a22, cx - 4, cy - 4, 8, 8);
+        fill(ctx, 0x3a5a22, cx - 2, cy - 6, 4, 2);
+        fill(ctx, 0x4e7430, cx - 2, cy - 4, 4, 2);
       }
       return;
     }
     case 'river': {
-      // 川：水面に短い波
-      fill(ctx, 0x2f5f8a, 0, 0, TILE, TILE);
+      // 川：水面に短い波。藍の部隊と色が近づかないよう、明るい青緑にしている
+      fill(ctx, 0x4a92ac, 0, 0, TILE, TILE);
       for (const [x, y] of [
         [2, 4],
         [14, 8],
         [6, 14],
         [16, 18],
       ] as const) {
-        fill(ctx, 0x5f8fba, x, y, 4, 2);
+        fill(ctx, 0x9ccfdc, x, y, 4, 2);
       }
       return;
     }
@@ -306,9 +308,88 @@ export function buildTextures(scene: Phaser.Scene): void {
     const n = t === 'plain' ? PLAIN_VARIANTS : 1;
     for (let v = 0; v < n; v++) makeCanvasTexture(scene, tileKey(t, v), TILE, TILE, (ctx) => paintTerrain(ctx, t, v));
   }
+  buildStage4Textures(scene);
 }
 
 /** 地形のタイルの見本を返す（段階4の確かめ用。開発用の口から使う） */
 export function terrainList(): readonly Terrain[] {
   return TERRAINS;
+}
+
+// ---- 段階4の絵：瓦礫・岩壁・霧・門 ----
+
+export const RUBBLE_KEY = 'tile-rubble';
+export const ROCK_KEY = 'tile-rock';
+export const FOG_KEY = 'tile-fog';
+/** 門の絵（壊れ具合で3段階。0 が無傷） */
+export function gateKey(stage: 0 | 1 | 2): string {
+  return `gate-${stage}`;
+}
+
+/** 崩れた城壁（通れる）：土の地に、石のかけら。平地とは違う絵にして、門が破れた所だと分かるようにする */
+function paintRubble(ctx: CanvasRenderingContext2D): void {
+  fill(ctx, 0x6e6450, 0, 0, TILE, TILE);
+  for (const [x, y, w] of [
+    [2, 4, 6],
+    [12, 2, 4],
+    [16, 10, 6],
+    [4, 14, 4],
+    [10, 18, 6],
+    [18, 18, 4],
+  ] as const) {
+    fill(ctx, 0x77736a, x, y, w, 2);
+    fill(ctx, 0x4a4640, x, y + 2, w, 2);
+  }
+}
+
+/** 岩壁（戦場の幅が狭い面で、戦場の外側に置く）：暗い岩の段 */
+function paintRock(ctx: CanvasRenderingContext2D, seed: number): void {
+  fill(ctx, 0x3a3428, 0, 0, TILE, TILE);
+  for (let i = 0; i < 5; i++) {
+    const x = Math.floor(hash(seed * 17 + i) * 9) * 2;
+    const y = Math.floor(hash(seed * 29 + i * 5) * 10) * 2;
+    fill(ctx, 0x4e4636, x, y, 6, 2);
+    fill(ctx, 0x2a251c, x, y + 2, 6, 2);
+  }
+}
+
+/** 霧：灰色の点を市松に近い形で散らす（下の草地が少し透けて見え、「何かいるかもしれない」と分かる） */
+function paintFog(ctx: CanvasRenderingContext2D): void {
+  for (let y = 0; y < TILE; y += 2) {
+    for (let x = 0; x < TILE; x += 2) {
+      if (((x + y) / 2) % 2 === 0 || (x * 7 + y * 3) % 10 === 0) fill(ctx, 0xc8c8c0, x, y, 2, 2);
+    }
+  }
+}
+
+/** 門：木の扉に鉄の帯。壊れ具合 1 でひびと欠け、2 で大きく割れて傾く */
+function paintGate(ctx: CanvasRenderingContext2D, stage: 0 | 1 | 2): void {
+  fill(ctx, 0x2a1c0e, 0, 2, TILE, 22);
+  fill(ctx, 0x8a5a2a, 2, 4, 20, 18);
+  fill(ctx, 0x6e4620, 11, 4, 2, 18);
+  for (const y of [6, 12, 18]) fill(ctx, 0x45464e, 2, y, 20, 2);
+  for (const x of [4, 18]) for (const y of [6, 12, 18]) fill(ctx, 0xdcdcd2, x, y, 2, 2);
+  if (stage >= 1) {
+    // ひびと欠け（小さな絵でも分かるよう、板が1枚抜け、角が欠ける）
+    fill(ctx, 0x2a1c0e, 4, 8, 6, 4);
+    fill(ctx, 0x2a1c0e, 6, 12, 2, 4);
+    fill(ctx, 0x2a1c0e, 14, 14, 6, 4);
+    fill(ctx, 0x2a1c0e, 18, 4, 4, 2);
+    fill(ctx, 0x6e6450, 2, 22, 4, 2);
+  }
+  if (stage >= 2) {
+    // 大きく割れて、真ん中が抜けかける
+    fill(ctx, 0x2a1c0e, 10, 4, 4, 10);
+    fill(ctx, 0x2a1c0e, 8, 14, 8, 2);
+    fill(ctx, 0x2a1c0e, 12, 16, 2, 6);
+    fill(ctx, 0x6e6450, 2, 20, 6, 2);
+    fill(ctx, 0x6e6450, 16, 20, 6, 2);
+  }
+}
+
+export function buildStage4Textures(scene: Phaser.Scene): void {
+  makeCanvasTexture(scene, RUBBLE_KEY, TILE, TILE, paintRubble);
+  for (let v = 0; v < 3; v++) makeCanvasTexture(scene, `${ROCK_KEY}-${v}`, TILE, TILE, (ctx) => paintRock(ctx, v + 3));
+  makeCanvasTexture(scene, FOG_KEY, TILE, TILE, paintFog);
+  for (const s of [0, 1, 2] as const) makeCanvasTexture(scene, gateKey(s), TILE, TILE, (ctx) => paintGate(ctx, s));
 }

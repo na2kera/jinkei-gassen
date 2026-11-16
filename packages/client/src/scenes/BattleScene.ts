@@ -18,14 +18,18 @@ import {
 } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { Effects } from '../art/effects.ts';
+import { GateSprite } from '../art/GateSprite.ts';
+import { FOG_KEY } from '../art/textures.ts';
 import { addFieldImage, drawFieldFrame } from '../art/field.ts';
-import { drawDrum } from '../art/icons.ts';
-import { COLOR } from '../art/palette.ts';
+import { drawDrum, drawSurviveIcon } from '../art/icons.ts';
+import { COLOR, css } from '../art/palette.ts';
 import { UnitSprite } from '../art/UnitSprite.ts';
 import {
   playArrow,
   playClash,
   playDraw,
+  playFogClear,
+  playGateBreak,
   playImpact,
   playLose,
   playOrderDrum,
@@ -33,10 +37,11 @@ import {
   playWin,
 } from '../audio/sfx.ts';
 import type { BattleFrame, BattleSource } from '../battle/BattleSource.ts';
-import { FieldView } from '../battle/FieldView.ts';
+import { centeredFieldView, FieldView } from '../battle/FieldView.ts';
 import { FrameInterpolator, type UnitSample } from '../battle/interp.ts';
 import { debug, pushCapped } from '../debug.ts';
 import { battlePanel, CELL, getLayout, LAYOUT_EVENT, type Rect } from '../layout.ts';
+import { pvp } from '../net/pvp.ts';
 import { session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { ORDER_LABEL, TARGET_LABEL, wingForViewer } from '../ui/labels.ts';
@@ -52,6 +57,8 @@ const WAVE_MS = 900;
 const END_DELAY_MS = 2200;
 /** これより遠い相手への攻撃は弓とみなし、矢を飛ばす（マス）。engine の近接の距離 1.05（design §3.5）に少し余裕を足す */
 const MELEE_DIST = 1.3;
+/** 門を攻めるときの近接の距離（engine は 1.6。少し余裕を足す） */
+const GATE_MELEE_DIST = 1.7;
 /** 「やめる」を2回押すまでの猶予（ミリ秒）。押し間違いで戦いが消えないよう、1回目は確かめるだけにする */
 const QUIT_ARM_MS = 2500;
 
@@ -81,6 +88,10 @@ export interface BattleSceneData {
   flip?: boolean;
   /** 結果の画面に渡す面の id（対戦では空） */
   stageId: string;
+  /** 配置中に霧で隠していたマス。開戦の瞬間に晴れる演出を出す */
+  fog?: { col: number; row: number }[];
+  /** 時間切れまで守り切れば勝ちの面（win が survive）。残り時間の所に小さな印を付ける */
+  survive?: boolean;
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -96,6 +107,12 @@ export class BattleScene extends Phaser.Scene {
   private quitLabel = 'やめる';
   private onFinished: BattleSceneData['onFinished'] | null = null;
   private flip = false;
+  private fog: { col: number; row: number }[] = [];
+  private fogCleared = false;
+  private survive = false;
+  private gateSprite: GateSprite | null = null;
+  private gateLayer!: Phaser.GameObjects.Container;
+  private fogLayer!: Phaser.GameObjects.Container;
   private stageId = '';
   private quitArmedUntil = 0;
   private quitButton: Button | null = null;
@@ -144,11 +161,16 @@ export class BattleScene extends Phaser.Scene {
     this.quitLabel = data.quitLabel ?? 'やめる';
     this.onFinished = data.onFinished ?? null;
     this.flip = data.flip ?? this.viewer === 1;
+    this.fog = data.fog ?? [];
+    this.fogCleared = this.fog.length === 0;
+    this.survive = data.survive ?? false;
     this.stageId = data.stageId ?? '';
   }
 
   create(): void {
     debug.scene = 'Battle';
+    // 対戦で pvp.ts が予約した画面が始まったことを知らせる（1人用では何もしない）
+    pvp.arrived('Battle');
     debug.view = null;
     debug.frameTicks = [];
     debug.events = [];
@@ -209,15 +231,19 @@ export class BattleScene extends Phaser.Scene {
     this.cameras.main.setSize(layout.width, layout.height);
     const field = this.field;
     // 陣営1の人が見るときは上下左右を返し、自軍がいつも下に映るようにする
-    this.fv = new FieldView(layout.field, field.width, field.height, this.flip);
+    this.fv = centeredFieldView(layout.field, field, this.flip);
     this.root = this.add.container(0, 0);
     const frame = this.add.graphics();
-    drawFieldFrame(frame, this.fv);
-    const bg = addFieldImage(this, this.fv, field);
+    drawFieldFrame(frame, this.fv, layout.field);
+    const bg = addFieldImage(this, this.fv, field, layout.field);
     const soldierLayer = this.add.container(0, 0);
     const effectLayer = this.add.container(0, 0);
     const markLayer = this.add.container(0, 0);
-    this.root.add([frame, bg, soldierLayer, effectLayer, markLayer]);
+    this.gateLayer = this.add.container(0, 0);
+    this.fogLayer = this.add.container(0, 0);
+    this.root.add([frame, bg, this.gateLayer, soldierLayer, effectLayer, this.fogLayer, markLayer]);
+    this.buildGate();
+    this.buildFog();
     this.effects = new Effects(this, effectLayer);
 
     this.sprites = new Map();
@@ -229,6 +255,13 @@ export class BattleScene extends Phaser.Scene {
 
     const panel = battlePanel(layout);
     this.timeText = addText(this, panel.time.x, panel.time.y + Math.round((panel.time.h - 16) / 2) - 2, '');
+    if (this.survive) {
+      // 守り切れば勝ちの面：残り時間の左に盾の印を付け、時間の文字を金にしてずらす
+      const icon = this.add.graphics();
+      drawSurviveIcon(icon, panel.time.x, Math.round(panel.time.y + panel.time.h / 2 - 5));
+      this.root.add(icon);
+      this.timeText.setX(panel.time.x + 12).setColor(css(COLOR.goldHi));
+    }
     this.marks = this.add.graphics();
     this.markRects = panel.marks;
     this.root.add([this.timeText, this.marks]);
@@ -289,6 +322,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private rebuild(): void {
+    this.gateSprite?.destroy();
+    this.gateSprite = null;
     if (!this.source && !this.summary) return;
     for (const s of this.sprites.values()) s.destroy();
     this.effects?.destroy();
@@ -515,6 +550,7 @@ export class BattleScene extends Phaser.Scene {
       if (this.inspect?.unit === u.id) inspected = s;
     }
     this.shootArrows(samples, now);
+    this.updateGate(now);
     this.effects?.update(now);
     this.drawTime(frame);
     this.drawMarks(frame);
@@ -531,13 +567,17 @@ export class BattleScene extends Phaser.Scene {
   private findFights(samples: UnitSample[], now: number): Set<number> {
     const fighting = new Set<number>();
     const byId = this.sampleIndex(samples);
+    const gate = this.interp.latest?.view.gate;
     for (const a of samples) {
       const target = a.view.attacking;
       if (target === null || a.view.status !== 'active') continue;
-      const b = byId.get(target);
-      if (!b || Math.hypot(a.x - b.x, a.y - b.y) > MELEE_DIST) continue;
+      // 門を攻めているときは、門の位置を相手にする（門は units に入っていない。少し離れた所からも攻められる）
+      const unit = byId.get(target);
+      const isGate = !unit && !!gate && gate.id === target;
+      const b = unit ?? (isGate && gate ? { x: gate.x, y: gate.y, view: { id: gate.id } } : null);
+      if (!b || Math.hypot(a.x - b.x, a.y - b.y) > (isGate ? GATE_MELEE_DIST : MELEE_DIST)) continue;
       fighting.add(a.view.id);
-      fighting.add(b.view.id);
+      if (unit) fighting.add(unit.view.id);
       if (this.ended) continue;
       const key = Math.min(a.view.id, b.view.id) * 1000 + Math.max(a.view.id, b.view.id);
       if (now < (this.nextSpark.get(key) ?? 0)) continue;
@@ -658,5 +698,50 @@ export class BattleScene extends Phaser.Scene {
     const y = Math.round((p.y - 20 - h >= f.y ? p.y - 20 - h : p.y + 20) / 2) * 2;
     drawBox(this.infoBox, { x, y, w, h });
     this.infoText.setPosition(x + 8, y + 6).setVisible(true);
+  }
+  // ---- 門と霧 ----
+
+  /** 場面に門があれば、門の絵を置く（すでに破れていれば、瓦礫から始める） */
+  private buildGate(): void {
+    const g = this.interp.latest?.view.gate;
+    if (!g) return;
+    this.gateSprite = new GateSprite(this, this.fv, this.field, g.col, g.row, this.gateLayer);
+    this.gateSprite.setHealth(g.men / g.maxMen);
+    if (g.status === 'gone') this.gateSprite.breakOpen();
+  }
+
+  /** 門の壊れ具合を場面に合わせる。破れた瞬間だけ、崩れる演出と音を出す */
+  private updateGate(now: number): void {
+    const g = this.interp.latest?.view.gate;
+    if (!g) return;
+    if (!this.gateSprite) {
+      this.buildGate();
+      return;
+    }
+    this.gateSprite.setHealth(g.men / g.maxMen);
+    if (g.status === 'gone' && !this.gateSprite.isBroken) {
+      for (const c of this.gateSprite.breakOpen()) this.effects?.impact(c.x, c.y, now);
+      playGateBreak();
+    }
+  }
+
+  /** 配置中に霧で隠していたマスを、開戦の瞬間だけ霧の絵で覆う */
+  private buildFog(): void {
+    if (this.fogCleared) return;
+    const imgs = this.fog.map((c) => {
+      const r = this.fv.cellRect(c.col, c.row);
+      const img = this.add.image(r.x, r.y, FOG_KEY).setOrigin(0, 0);
+      this.fogLayer.add(img);
+      return img;
+    });
+    // 晴れる演出：4回に分けて、霧のマスを少しずつ消す（なめらかに薄くせず、ドットらしく段で消す）
+    this.fogCleared = true;
+    playFogClear();
+    const order = imgs.map((img, i) => ({ img, k: (i * 7) % 4 }));
+    for (let step = 0; step < 4; step++) {
+      this.time.delayedCall(150 + step * 150, () => {
+        for (const o of order) if (o.k === step) o.img.destroy();
+      });
+    }
   }
 }

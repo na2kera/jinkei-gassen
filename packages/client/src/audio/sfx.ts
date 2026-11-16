@@ -287,3 +287,19 @@ export function playFormation(): void {
     ]),
   );
 }
+
+/** 門が破れた：木の割れる音と、崩れる低い音 */
+export function playGateBreak(): void {
+  play('gate', 0, (ac) => {
+    noises(ac, [
+      { delay: 0, duration: 0.12, freq: 1800, q: 1.5, volume: 0.2 },
+      { delay: 0.08, duration: 0.5, freq: 160, q: 0.6, volume: 0.35 },
+    ]);
+    tones(ac, [{ from: 110, to: 40, delay: 0.05, duration: 0.45, type: 'sine', volume: 0.3 }]);
+  });
+}
+
+/** 霧が晴れる：小さく上がる音 */
+export function playFogClear(): void {
+  play('fog', 0, (ac) => noises(ac, [{ delay: 0, duration: 0.4, freq: 2400, q: 0.8, volume: 0.05 }]));
+}

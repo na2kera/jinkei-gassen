@@ -74,3 +74,16 @@ export class FieldView {
     return CELL;
   }
 }
+
+/**
+ * 戦場の幅が面で変わる（6〜12）ので、狭い戦場は、決まった描き場所（12列ぶん）の中央に寄せて描く。
+ * 1マスの大きさは変えない。外側には岩壁の絵を置く（art/field.ts）。
+ * 配置の操作・枠・文字の位置は、どれもここで作った FieldView を通すので、幅に合わせて動く。
+ */
+export function centeredFieldView(area: Rect, field: { width: number; height: number }, flipped = false): FieldView {
+  const w = field.width * CELL;
+  const h = field.height * CELL;
+  const x = area.x + Math.round((area.w - w) / 2 / CELL) * CELL;
+  const y = area.y + Math.round((area.h - h) / 2 / CELL) * CELL;
+  return new FieldView({ x, y, w, h }, field.width, field.height, flipped);
+}

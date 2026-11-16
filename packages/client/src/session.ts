@@ -51,17 +51,24 @@ export function currentStage(): Stage {
   return stageById(session.stageId) ?? STAGES[0]!;
 }
 
-/** STAGES の並びで次の面。最後の面なら null */
+/** 章と番号の順に並べた面（データの並び順に頼らず、章が増えても正しい順で開く・並ぶようにする） */
+export function orderedStages(): Stage[] {
+  return STAGES.slice().sort((a, b) => a.chapter - b.chapter || a.index - b.index);
+}
+
+/** 次の面。最後の面なら null */
 export function nextStage(id: string): Stage | null {
-  const i = STAGES.findIndex((s) => s.id === id);
-  return i >= 0 ? (STAGES[i + 1] ?? null) : null;
+  const list = orderedStages();
+  const i = list.findIndex((s) => s.id === id);
+  return i >= 0 ? (list[i + 1] ?? null) : null;
 }
 
 /** 前の面（STAGES の並び）を勝っていれば開く。最初の面はいつも開いている */
 export function isUnlocked(stage: Stage): boolean {
-  const i = STAGES.findIndex((s) => s.id === stage.id);
+  const list = orderedStages();
+  const i = list.findIndex((s) => s.id === stage.id);
   if (i <= 0) return true;
-  const prev = STAGES[i - 1];
+  const prev = list[i - 1];
   return !!prev && starsOf(prev.id) > 0;
 }
 
