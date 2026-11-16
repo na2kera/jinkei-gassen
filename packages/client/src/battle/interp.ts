@@ -12,6 +12,8 @@ export interface UnitSample {
   y: number;
   fx: number;
   fy: number;
+  /** 前の場面から位置が変わった（歩く絵を出すため） */
+  moving: boolean;
 }
 
 /** 角度の近いほうの回りで補う（fx と fy を別々に補うと 180° の向き替えで長さが潰れるため） */
@@ -84,12 +86,13 @@ export class FrameInterpolator {
       const u = units[i]!;
       const p = this.before.get(u.id) ?? u;
       const a = lerpAngle(p.fx, p.fy, u.fx, u.fy, t);
-      const s = out[i] ?? { view: u, x: 0, y: 0, fx: 0, fy: -1 };
+      const s = out[i] ?? { view: u, x: 0, y: 0, fx: 0, fy: -1, moving: false };
       s.view = u;
       s.x = p.x + (u.x - p.x) * t;
       s.y = p.y + (u.y - p.y) * t;
       s.fx = Math.cos(a);
       s.fy = Math.sin(a);
+      s.moving = Math.abs(u.x - p.x) + Math.abs(u.y - p.y) > 0.01;
       out[i] = s;
     }
     return out;

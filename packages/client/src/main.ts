@@ -2,6 +2,7 @@
 // 画面の向き（横長・縦長）は起動時と、親要素の大きさが変わったときに決め直す（assumptions S13）。
 
 import Phaser from 'phaser';
+import { installAudioUnlock } from './audio/sfx.ts';
 import { installDebug } from './debug.ts';
 import { computeLayout, getLayout, LAYOUT_EVENT, sameSize, setLayout } from './layout.ts';
 import { BattleScene } from './scenes/BattleScene.ts';
@@ -16,6 +17,8 @@ function parentSize(): { w: number; h: number } {
 }
 
 async function start(): Promise<void> {
+  // どの画面でも、最初の操作で音を解禁する（iOS Safari 対策。手本の走れだいごくんと同じ）
+  installAudioUnlock();
   await document.fonts.load(`16px "${FONT_FAMILY}"`, '陣形合戦');
   const size = parentSize();
   setLayout(computeLayout(size.w, size.h));
@@ -25,7 +28,7 @@ async function start(): Promise<void> {
     parent: 'game',
     width: layout.width,
     height: layout.height,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#100d08',
     pixelArt: true,
     scale: {
       mode: Phaser.Scale.FIT,
@@ -54,7 +57,7 @@ async function start(): Promise<void> {
   window.addEventListener('resize', relayout);
   window.addEventListener('orientationchange', relayout);
 
-  if (import.meta.env.DEV) installDebug();
+  if (import.meta.env.DEV) installDebug(game);
 }
 
 void start();

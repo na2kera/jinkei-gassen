@@ -16,8 +16,9 @@ import {
   type TemplateId,
 } from '@jinkei/engine';
 import Phaser from 'phaser';
-import { drawField } from '../art/field.ts';
+import { addFieldImage, drawFieldFrame, drawZone } from '../art/field.ts';
 import { COLOR } from '../art/palette.ts';
+import { playPlace, playRemove, playStance, playStart } from '../audio/sfx.ts';
 import { UnitSprite } from '../art/UnitSprite.ts';
 import { FieldView, type Cell } from '../battle/FieldView.ts';
 import { debug } from '../debug.ts';
@@ -27,6 +28,7 @@ import { armyErrors, battleSetup, ROSTER, session } from '../session.ts';
 import type { BattleSceneData } from './BattleScene.ts';
 import { Button } from '../ui/Button.ts';
 import { KIND_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
+import { addMuteButton } from '../ui/mute.ts';
 
 /** これ以上動いたら「押した」ではなく「引きずった」とみなす（px） */
 const DRAG_THRESHOLD = 6;
@@ -70,19 +72,24 @@ export class DeployScene extends Phaser.Scene {
 
     const field = session.field;
     this.fv = new FieldView(layout.field, field.width, field.height);
-    drawField(this.add.graphics(), this.fv, field);
+    drawFieldFrame(this.add.graphics(), this.fv);
+    addFieldImage(this, this.fv, field);
+    // 配置エリアは配置の画面だけで見せる。自軍は明るい金、敵軍は暗い色
+    const zones = this.add.graphics();
+    drawZone(zones, this.fv, field.zones[0], COLOR.gold);
+    drawZone(zones, this.fv, field.zones[1], COLOR.dim);
     this.soldierLayer = this.add.container(0, 0);
     this.markLayer = this.add.container(0, 0);
     this.dropMark = this.add.graphics();
     this.popupLayer = this.add.container(0, 0);
 
     // 敵の配置は見せる（方針は見せない。decisions §8）
-    for (const p of session.enemy) {
-      const s = new UnitSprite(this, 1, p.kind, this.soldierLayer, this.markLayer);
+    session.enemy.forEach((p, i) => {
+      const s = new UnitSprite(this, 1, p.kind, 100 + i, this.soldierLayer, this.markLayer);
       const c = this.fv.cellCenter(p.col, p.row);
       const d = this.fv.dirToScreen(0, 1);
-      s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight: false });
-    }
+      s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
+    });
 
     const panel = deployPanel(layout);
     ROSTER_ORDER.forEach((kind, i) => {
@@ -95,7 +102,8 @@ export class DeployScene extends Phaser.Scene {
       if (!r) return;
       new Button(this, r, t.name, () => this.useTemplate(t.id));
     });
-    this.startButton = new Button(this, panel.start, '開戦', () => this.startBattle());
+    this.startButton = new Button(this, panel.start, '開戦', () => this.startBattle(), { primary: true });
+    addMuteButton(this, panel.mute);
 
     this.input.on(Phaser.Input.Events.POINTER_DOWN, this.onDown, this);
     this.input.on(Phaser.Input.Events.POINTER_MOVE, this.onMove, this);
@@ -143,11 +151,13 @@ export class DeployScene extends Phaser.Scene {
     this.closePopup();
     this.selectedKind = null;
     session.placements = applyTemplate(id, ROSTER, session.field.zones[0], 0);
+    playPlace();
     this.refresh();
   }
 
   private place(kind: Kind, cell: Cell): void {
     session.placements.push({ kind, col: cell.col, row: cell.row, stance: defaultStance(kind) });
+    playPlace();
   }
 
   /** index の部隊を cell へ。そこに別の部隊がいれば入れ替える */
@@ -163,17 +173,20 @@ export class DeployScene extends Phaser.Scene {
     }
     me.col = cell.col;
     me.row = cell.row;
+    playPlace();
   }
 
   private setStance(index: number, stance: Stance): void {
     const p = session.placements[index];
     if (p && stanceAllowed(p.kind, stance)) p.stance = stance;
+    playStance();
     this.closePopup();
     this.refresh();
   }
 
   private removeAt(index: number): void {
     session.placements.splice(index, 1);
+    playRemove();
     this.closePopup();
     this.refresh();
   }
@@ -191,6 +204,7 @@ export class DeployScene extends Phaser.Scene {
       return false;
     }
     const data: BattleSceneData = { source: made.source, field: session.field, viewer };
+    playStart();
     this.scene.start('Battle', data);
     return true;
   }
@@ -225,7 +239,7 @@ export class DeployScene extends Phaser.Scene {
     const p = session.placements[press.index];
     const sprite = this.ownSprites[press.index];
     if (!p || !sprite) return;
-    sprite.apply({ x: pointer.x, y: pointer.y, dx: 0, dy: -1, menRatio: 1, morale: 100, rout: 0, highlight: true });
+    sprite.apply({ x: pointer.x, y: pointer.y, dx: 0, dy: -1, menRatio: 1, morale: 100, rout: 0, highlight: true, stance: p.stance });
     const cell = this.fv.cellAt(pointer.x, pointer.y);
     this.dropMark.clear();
     if (cell && this.inOwnZone(cell)) this.drawCellFrame(this.dropMark, this.fv.cellRect(cell.col, cell.row));
@@ -304,11 +318,12 @@ export class DeployScene extends Phaser.Scene {
   private refresh(): void {
     for (const s of this.ownSprites) s.destroy();
     this.ownSprites = session.placements.map((p: Placement, i) => {
-      const s = new UnitSprite(this, 0, p.kind, this.soldierLayer, this.markLayer);
+      const s = new UnitSprite(this, 0, p.kind, i, this.soldierLayer, this.markLayer);
       const c = this.fv.cellCenter(p.col, p.row);
       const d = this.fv.dirToScreen(0, -1);
       const highlight = i === this.popupIndex || (this.press?.index === i && this.press.dragging);
-      s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight });
+      // 自軍には方針の印を付ける（押さなくても方針が分かるように。敵には付けない）
+      s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight, stance: p.stance, bounds: this.fv.rect });
       return s;
     });
     if (this.selectedKind && this.remaining(this.selectedKind) <= 0) this.selectedKind = null;

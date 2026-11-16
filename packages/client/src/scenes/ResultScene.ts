@@ -7,7 +7,9 @@ import { getLayout, LAYOUT_EVENT, resultLayout } from '../layout.ts';
 import { session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { KIND_LABEL, WING_LABEL, wingForViewer } from '../ui/labels.ts';
+import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
+import { COLOR } from '../art/palette.ts';
 
 function titleOf(s: BattleSummary, viewer: Side): string {
   if (s.winner === 'draw') return '引き分け';
@@ -59,23 +61,26 @@ export class ResultScene extends Phaser.Scene {
     if (result) {
       const { summary: s, units, viewer } = result;
       const enemy: Side = viewer === 0 ? 1 : 0;
-      const center = (y: number, text: string, size: 16 | 32 = 16): void => {
-        addText(this, Math.round(r.centerX), y, text, size).setOrigin(0.5, 0);
+      drawBox(this.add.graphics(), r.box);
+      // 見出しは淡い色、中身は明るい色にして、説明文を足さずに読み分けられるようにする
+      const center = (y: number, text: string, size: 16 | 32 = 16, color: number = COLOR.cream): void => {
+        addText(this, Math.round(r.centerX), y, text, size, color).setOrigin(0.5, 0);
       };
-      center(r.title, titleOf(s, viewer), 32);
+      const won = s.winner === viewer;
+      center(r.title, titleOf(s, viewer), 32, won ? COLOR.goldHi : s.winner === 'draw' ? COLOR.cream : COLOR.red);
       center(r.reason, reasonOf(s, viewer));
       center(r.remaining, `残った兵 自軍${percent(s.remaining[viewer])} 敵軍${percent(s.remaining[enemy])}`);
       // 振り返り：最初に崩れた部隊（両軍）と、いちばん損害を与えた自軍の部隊
       const best = s.units
         .filter((u) => u.side === viewer && u.dealt > 0)
         .reduce<{ id: number; dealt: number } | null>((a, u) => (!a || u.dealt > a.dealt ? { id: u.id, dealt: u.dealt } : a), null);
-      center(r.review, '先に崩れた');
+      center(r.review, '先に崩れた', 16, COLOR.muted);
       center(r.review + 20, `自軍 ${unitName(s.firstBroken[viewer], units, viewer)}`);
       center(r.review + 40, `敵軍 ${unitName(s.firstBroken[enemy], units, viewer)}`);
-      center(r.review + 72, '一番の戦果');
+      center(r.review + 72, '一番の戦果', 16, COLOR.muted);
       center(r.review + 92, unitName(best ? best.id : null, units, viewer));
     }
-    new Button(this, r.retry, 'もう一度', retry);
+    new Button(this, r.retry, 'もう一度', retry, { primary: true });
 
     const onLayout = (): void => {
       this.scene.restart();

@@ -12,7 +12,7 @@ export function addText(
   y: number,
   str: string,
   size: FontSize = 16,
-  color: number = COLOR.text,
+  color: number = COLOR.cream,
 ): Phaser.GameObjects.Text {
   return scene.add.text(x, y, str, {
     fontFamily: FONT_FAMILY,

@@ -1,16 +1,24 @@
 // ボタン。枠と塗りは Graphics、押せる範囲は Zone で持つ（Container の当たり判定は原点がずれやすいため）。
 // 押したボタンの上で離したときだけ反応する。マウスとタッチで同じに動く。
+// 見た目は panel.ts の枠：ふつうは金の線、選んでいる・押しているときは明るい線、押せないときは暗い線。
+// 「開戦」「もう一度」のような大事なボタンは primary にして、金の地で目立たせる。
 
 import Phaser from 'phaser';
-import { COLOR } from '../art/palette.ts';
+import { COLOR, css } from '../art/palette.ts';
 import type { Rect } from '../layout.ts';
-import { drawBox } from './panel.ts';
+import { drawFrame, type FrameStyle } from './panel.ts';
 import { addText, type FontSize } from './text.ts';
+
+export interface ButtonOptions {
+  size?: FontSize;
+  primary?: boolean;
+}
 
 export class Button {
   private readonly gfx: Phaser.GameObjects.Graphics;
   private readonly label: Phaser.GameObjects.Text;
   private readonly zone: Phaser.GameObjects.Zone;
+  private readonly primary: boolean;
   private enabled = true;
   private selected = false;
   private pressed = false;
@@ -20,10 +28,11 @@ export class Button {
     readonly rect: Rect,
     text: string,
     private readonly onTap: () => void,
-    size: FontSize = 16,
+    options: ButtonOptions = {},
   ) {
+    this.primary = options.primary ?? false;
     this.gfx = scene.add.graphics();
-    this.label = addText(scene, 0, 0, text, size).setOrigin(0.5, 0.5);
+    this.label = addText(scene, 0, 0, text, options.size ?? 16).setOrigin(0.5, 0.5);
     this.zone = scene.add.zone(rect.x, rect.y, rect.w, rect.h).setOrigin(0, 0).setInteractive({ useHandCursor: true });
     this.zone.on(Phaser.Input.Events.GAMEOBJECT_POINTER_DOWN, () => {
       if (!this.enabled) return;
@@ -46,7 +55,7 @@ export class Button {
   }
 
   setText(text: string): this {
-    this.label.setText(text);
+    if (this.label.text !== text) this.label.setText(text);
     return this;
   }
 
@@ -77,13 +86,6 @@ export class Button {
     return this;
   }
 
-  setDepth(d: number): this {
-    this.gfx.setDepth(d);
-    this.label.setDepth(d);
-    this.zone.setDepth(d);
-    return this;
-  }
-
   destroy(): void {
     this.gfx.destroy();
     this.label.destroy();
@@ -92,14 +94,23 @@ export class Button {
 
   private redraw(): void {
     const r = this.rect;
-    const inverted = this.enabled && (this.selected || this.pressed);
-    const fill = inverted ? COLOR.selected : COLOR.button;
-    const border = this.enabled ? COLOR.border : COLOR.borderDim;
-    const text = !this.enabled ? COLOR.textDim : inverted ? COLOR.selectedText : COLOR.text;
+    let style: FrameStyle;
+    let text: number;
+    if (!this.enabled) {
+      style = 'dim';
+      text = COLOR.dim;
+    } else if (this.primary || this.selected || this.pressed) {
+      // 大事なボタンと、選んでいるボタンは金の地。押している間は明るい線にして、押したことが分かるようにする
+      style = this.pressed && !this.selected ? 'hot' : 'solid';
+      text = style === 'solid' ? COLOR.ink : COLOR.goldHi;
+    } else {
+      style = 'line';
+      text = COLOR.cream;
+    }
     this.gfx.clear();
-    drawBox(this.gfx, r, fill, border);
-    this.label.setColor(`#${text.toString(16).padStart(6, '0')}`);
-    // 文字の位置も整数の px に揃える
-    this.label.setPosition(Math.round(r.x + r.w / 2), Math.round(r.y + r.h / 2));
+    drawFrame(this.gfx, r, style);
+    this.label.setColor(css(text));
+    // 文字の位置も整数の px に揃える。金の地のボタンは下と右が影なので、文字を 1px 上に寄せる
+    this.label.setPosition(Math.round(r.x + r.w / 2), Math.round(r.y + r.h / 2) - (style === 'solid' ? 1 : 0));
   }
 }

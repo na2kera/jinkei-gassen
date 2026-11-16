@@ -2,7 +2,21 @@
 // シーンはこの入れ物に、いまの状態と操作を書き込むだけにする（本番では window に出さないので無害）。
 // installDebug は main.ts の import.meta.env.DEV の分岐の中からだけ呼ぶので、本番のビルドからは消える。
 
-import type { BattleSetup, BattleView, OrderKind, OrderTarget, Placement, ScriptedOrder, Side, TemplateId } from '@jinkei/engine';
+import {
+  KINDS,
+  type BattleSetup,
+  type BattleView,
+  type OrderKind,
+  type OrderTarget,
+  type Placement,
+  type ScriptedOrder,
+  type Side,
+  type TemplateId,
+} from '@jinkei/engine';
+import type Phaser from 'phaser';
+import { effectCounts } from './art/effects.ts';
+import { unitReach } from './art/UnitSprite.ts';
+import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
 import { PLAIN_STAGE, session, type ResultData } from './session.ts';
 
 interface DebugHooks {
@@ -41,8 +55,29 @@ export function pushCapped<T>(arr: T[], v: T, cap: number): void {
   if (arr.length > cap) arr.splice(0, arr.length - cap);
 }
 
-export function installDebug(): void {
+export function installDebug(game: Phaser.Game): void {
   const api = {
+    /** 実際のフレームの速さ（32部隊で 55 以上あることを確かめるため） */
+    get fps(): number {
+      return game.loop.actualFps;
+    },
+    /** 音の状態と、鳴らす関数が呼ばれた回数・実際に鳴らした回数（耳では確かめられないため） */
+    get audio(): { state: string; muted: boolean; counts: typeof sfxCounts } {
+      return { state: audioState(), muted: isMuted(), counts: JSON.parse(JSON.stringify(sfxCounts)) as typeof sfxCounts };
+    },
+    /** 演出ごとに出した回数 */
+    get effects(): typeof effectCounts {
+      return { ...effectCounts };
+    },
+    /** 起動時に作った絵（兵やタイル）の canvas。拡大して見比べるため */
+    texture(key: string): HTMLCanvasElement | null {
+      if (!game.textures.exists(key)) return null;
+      return game.textures.get(key).getSourceImage() as HTMLCanvasElement;
+    },
+    /** 兵種ごとの、部隊の絵が中心から届く距離（px）。10 以下なら、隣の部隊と重ならない */
+    get reach(): Record<string, number> {
+      return Object.fromEntries(KINDS.map((k) => [k, Math.round(unitReach(k) * 100) / 100]));
+    },
     get scene(): string {
       return debug.scene;
     },
