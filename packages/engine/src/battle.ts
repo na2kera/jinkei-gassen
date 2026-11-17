@@ -91,6 +91,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
   if (!isInt(setup.maxTicks) || setup.maxTicks < 1) return bad('maxTicks は1以上の整数');
   if (!['compare', 'side0_wins', 'side0_loses'].includes(setup.timeout as string)) return bad('timeout が正しくない');
   if (setup.requireHq !== undefined && typeof setup.requireHq !== 'boolean') return bad('requireHq が正しくない');
+  if (setup.stalemate !== undefined && typeof setup.stalemate !== 'boolean') return bad('stalemate が正しくない');
   const rawScripted: unknown = setup.scriptedOrders ?? [];
   if (!isDenseArray(rawScripted)) return bad('予定された号令は配列で書く');
   if (rawScripted.length > MAX_SCRIPTED_ORDERS) return bad(`予定された号令は ${MAX_SCRIPTED_ORDERS} 件まで`);
@@ -266,6 +267,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
     maxTicks: setup.maxTicks,
     timeout: setup.timeout,
     outcome: null,
+    quietTicks: setup.stalemate === false ? null : 0,
     requireHq,
     initialMen,
     firstBroken: [null, null],
@@ -1125,6 +1127,8 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
     if (typeof u.detourX !== 'number') u.detourX = null;
     if (typeof u.detourTicks !== 'number') u.detourTicks = 0;
   }
+  // 膠着の時計（§3.6.4）がない古い状態は、0 から数える。null（決まりを切った戦い）は null のまま
+  if (typeof state.quietTicks !== 'number' && state.quietTicks !== null) state.quietTicks = 0;
   const moraleDelta = new Array<number>(n).fill(0);
 
   // ① 号令を受け付ける（予定された号令を先に、続けて渡された号令を配列の順に）
@@ -1436,14 +1440,38 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
     pushEvent(events, { type: 'end', tick: t, winner, reason });
   }
 
-  // ⑨ 刻みを進め、時間切れを調べる
+  // 膠着の時計（§3.6.4）：静かな刻みなら 1 増やし、そうでなければ 0 に戻す
+  if (state.quietTicks !== null) state.quietTicks = isQuietTick(state, decisions) ? state.quietTicks + 1 : 0;
+
+  // ⑨ 刻みを進め、時間切れと膠着を調べる（優先は 決着 → 時間切れ → 膠着）
   state.tick = t + 1;
   if (!state.outcome && state.tick >= state.maxTicks) {
     const winner = timeoutWinner(state);
     state.outcome = { winner, reason: 'timeout', tick: t };
     pushEvent(events, { type: 'end', tick: t, winner, reason: 'timeout' });
+  } else if (!state.outcome && state.quietTicks !== null && state.quietTicks >= T.stalemateTicks) {
+    // 勝ち負けは時間切れと同じ決め方
+    const winner = timeoutWinner(state);
+    state.outcome = { winner, reason: 'stalemate', tick: t };
+    pushEvent(events, { type: 'end', tick: t, winner, reason: 'stalemate' });
   }
   return events;
+}
+
+/**
+ * 静かな刻み（§3.6.4）：だれも攻撃しておらず（門への攻撃も数える）、戦場にいる部隊（active と routing。門は除く）の
+ * ③で決めた動く向き（回り込みを決めたあと）がすべて 0 で、刻みの終わりに active な部隊に効いている号令がなく、予定された号令も残っていない。
+ * 動いた距離ではなく、動こうとしたかで見る（味方に引っかかって少しずつ進む部隊を、止まっていると数えないため）。
+ */
+function isQuietTick(state: BattleState, decisions: Decision[]): boolean {
+  if (state.scriptedNext < state.scriptedOrders.length) return false;
+  for (const u of state.units) {
+    if (u.attacking !== null) return false;
+    if (u.status === 'active' && u.order !== null) return false;
+  }
+  // 全滅した部隊と門の動く向きはいつも 0 なので、全件を見れば「戦場にいる部隊（門を除く）」を見たのと同じ。敗走中の部隊はいつも逃げようとする
+  for (const d of decisions) if (d.dx !== 0 || d.dy !== 0) return false;
+  return true;
 }
 
 /** 残った兵の割合（active な部隊の兵数の合計 ÷ 開戦時の兵数の合計） */

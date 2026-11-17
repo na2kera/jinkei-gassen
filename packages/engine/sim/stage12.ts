@@ -87,13 +87,14 @@ export function stage12Samples(stage: Stage, kind: 'guarded' | 'unguarded', n = 
 
 export interface Probe12 {
   win: boolean;
+  /** 時間切れか膠着（§3.6.4）で終わった */
   timeout: boolean;
   /** 最後に誰かが攻撃した刻みから、決着までの秒数 */
   deadTail: number;
   stars: number;
 }
 
-/** 1戦を流して、勝ち・時間切れ・最後の攻撃から決着までの秒数を見る */
+/** 1戦を流して、勝ち・時間切れ（膠着を含む）・最後の攻撃から決着までの秒数を見る */
 export function probe12(stage: Stage, ps: Placement[], seed: number): Probe12 {
   let last = 0;
   const s: BattleState = runStage(stage, ps, seed, (st) => {
@@ -102,7 +103,7 @@ export function probe12(stage: Stage, ps: Placement[], seed: number): Probe12 {
   const sm = summarize(s);
   const rem = sm.remaining[0];
   const stars = sm.winner !== 0 ? 0 : rem >= 0.7 ? 3 : rem >= 0.5 ? 2 : 1;
-  return { win: sm.winner === 0, timeout: s.outcome?.reason === 'timeout', deadTail: (s.tick - last) / 10, stars };
+  return { win: sm.winner === 0, timeout: s.outcome?.reason === 'timeout' || s.outcome?.reason === 'stalemate', deadTail: (s.tick - last) / 10, stars };
 }
 
 export interface Stage12Report {
@@ -110,6 +111,7 @@ export interface Stage12Report {
   guardedGood: number;
   guardedRate: number;
   unguardedRate: number;
+  /** 時間切れか膠着で終わった戦い */
   timeouts: number;
   /** 最後の攻撃から決着までが 20 秒を超えた戦い */
   longTails: number;

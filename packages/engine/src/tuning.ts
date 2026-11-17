@@ -82,6 +82,9 @@ export const T = {
   /** 後退で止まる、配置エリアのいちばん奥の行数 */
   retreatRows: 2,
 
+  /** 膠着（§3.6.4）：静かな刻みがこの数だけ続いたら、時間切れと同じ決め方で終える */
+  stalemateTicks: 100,
+
   /** 敗走 */
   routSpeedMult: 1.3,
   routTicks: 50,

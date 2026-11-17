@@ -91,6 +91,13 @@ describe('総当たり（42通り × 種10個、ふつうの初期状態から�
       if (any(l[0]) || any(l[1])) outcomeProblems.push(`時間切れなのに負けの条件を満たした側がある ${tag}`);
       return;
     }
+    // 膠着（§3.6.4）は時間切れと同じ扱い：負けの条件を満たした側がなく、時間切れより前に、時計が満ちた刻みで終わる
+    if (o.reason === 'stalemate') {
+      if (!(s.tick < s.maxTicks)) outcomeProblems.push(`膠着なのに tick が maxTicks に達している ${tag}`);
+      if (!(s.quietTicks !== null && s.quietTicks >= T.stalemateTicks)) outcomeProblems.push(`膠着なのに時計が満ちていない ${tag}`);
+      if (any(l[0]) || any(l[1])) outcomeProblems.push(`膠着なのに負けの条件を満たした側がある ${tag}`);
+      return;
+    }
     if (o.winner === 'draw') {
       if (!(any(l[0]) && any(l[1]))) outcomeProblems.push(`引き分けなのに両軍が条件を満たしていない ${tag}`);
       if (o.reason === 'hq' && !(l[0].hq || l[1].hq)) outcomeProblems.push(`理由が hq なのに本陣が残っている ${tag}`);
@@ -103,17 +110,17 @@ describe('総当たり（42通り × 種10個、ふつうの初期状態から�
     if (o.reason === 'wipeout' && !(l[loser].wipe && !l[loser].hq)) outcomeProblems.push(`理由が wipeout なのに条件が合わない ${tag}`);
   }
 
-  it('A9 決着はすべて決着の表のとおり。hq・wipeout・timeout がそれぞれ1回以上出る', () => {
+  it('A9 決着はすべて決着の表のとおり。hq・wipeout・timeout・stalemate がそれぞれ1回以上出る', () => {
     expect(outcomeProblems.slice(0, 20)).toEqual([]);
-    for (const r of ['hq', 'wipeout', 'timeout']) expect(reasons.has(r), r).toBe(true);
+    for (const r of ['hq', 'wipeout', 'timeout', 'stalemate']) expect(reasons.has(r), r).toBe(true);
   });
 
-  it('A6 決着した戦いの長さの中央値が 40〜120秒。引き分けは 10% 以下。方円を含まない組の時間切れは 10% 以下', () => {
+  it('A6 決着した戦いの長さの中央値が 40〜120秒。引き分けは 10% 以下。方円を含まない組の時間切れと膠着は合わせて 10% 以下', () => {
     const st = matrixStats(games);
     expect(st.medianDecided).toBeGreaterThanOrEqual(40);
     expect(st.medianDecided).toBeLessThanOrEqual(120);
     expect(st.drawRate).toBeLessThanOrEqual(0.1);
-    expect(st.timeoutRateNoRing).toBeLessThanOrEqual(0.1);
+    expect(st.timeoutRateNoRing + st.stalemateRateNoRing).toBeLessThanOrEqual(0.1);
   });
 
   it('D8 鶴翼が入る120戦で、ふさがれ状態の刻みの合計が 20 秒を超える部隊がない（design §3.6.6）', () => {

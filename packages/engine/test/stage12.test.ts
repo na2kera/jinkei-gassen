@@ -46,7 +46,7 @@ describe('1-2 盾の壁の条件', () => {
     expect(r.guardedRate).toBeGreaterThanOrEqual(0.9);
     // 2. 受けていない配置40個の800戦の勝率 0.3 以下
     expect(r.unguardedRate, JSON.stringify(r)).toBeLessThanOrEqual(0.3);
-    // 3. 1・2 の全戦、横陣、見本で、時間切れがなく、最後の攻撃から決着まで 20 秒を超える戦いもない
+    // 3. 1・2 の全戦、横陣、見本で、時間切れと膠着がなく、最後の攻撃から決着まで 20 秒を超える戦いもない
     expect(r.timeouts).toBe(0);
     expect(r.longTails, `最長 ${r.maxTail} 秒`).toBe(0);
     // 4. 見本は18勝以上・星の平均2以上、横陣そのままは10勝以下

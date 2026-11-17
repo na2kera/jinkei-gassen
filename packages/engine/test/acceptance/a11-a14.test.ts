@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { a11, a13, a14 } from '../../sim/scenes.ts';
 
 describe('A11 守りが成り立つ', () => {
-  it('同じ予算の守り向きの編成（全部守備）対 攻め向きの編成：陣営を入れ替えた両方で、守る側の得点率が 0.3〜0.8。守備どうしは必ず時間切れの引き分け', () => {
+  it('同じ予算の守り向きの編成（全部守備）対 攻め向きの編成：陣営を入れ替えた両方で、守る側の得点率が 0.3〜0.8。守備どうしは必ず膠着の引き分け', () => {
     const r = a11();
     expect(r.defenderScore).toBeGreaterThanOrEqual(0.3);
     expect(r.defenderScore).toBeLessThanOrEqual(0.8);

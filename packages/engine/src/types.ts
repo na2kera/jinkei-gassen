@@ -87,6 +87,8 @@ export interface BattleSetup {
   requireHq?: boolean;
   /** 門（§3.8）。城壁の行の切れ目に置く。win が true なら、門が全滅した刻みに門の側の負け（理由は gate） */
   gate?: GateSetup;
+  /** 既定は true。false は膠着の決まり（§3.6.4）を切る（state.quietTicks が null になり、膠着で終わらない）。動かない部隊を長く見る部品のテスト用 */
+  stalemate?: boolean;
   /** この陣営の配置は「配置エリアの中」の検査をしない（面の敵の配置用）。戦場の中・城壁のマスでない・兵種・方針・本陣・部隊数は調べる */
   skipZoneCheck?: Side;
 }
@@ -172,8 +174,8 @@ export interface BrokenRecord {
 
 export interface Outcome {
   winner: Side | 'draw';
-  reason: 'hq' | 'wipeout' | 'timeout' | 'gate';
-  /** 決着した刻み（その刻みを処理した step の state.tick。時間切れは maxTicks - 1） */
+  reason: 'hq' | 'wipeout' | 'timeout' | 'stalemate' | 'gate';
+  /** 決着した刻み（その刻みを処理した step の state.tick。時間切れは maxTicks - 1。膠着は時計が満ちた刻み） */
   tick: number;
 }
 
@@ -187,6 +189,8 @@ export interface BattleState {
   maxTicks: number;
   timeout: BattleSetup['timeout'];
   outcome: null | Outcome;
+  /** 膠着の時計（§3.6.4）：静かな刻みが続いた数。null は膠着の決まりを切った戦い（BattleSetup.stalemate が false） */
+  quietTicks: number | null;
   requireHq: boolean;
   /** 開戦時の兵数の合計（本陣を含む） */
   initialMen: [number, number];

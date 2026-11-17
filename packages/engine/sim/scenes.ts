@@ -317,7 +317,8 @@ export function a11(seeds = SEEDS_40): { defenderScore: number; holdVsHoldAllDra
       maxTicks: 1800,
       timeout: 'compare',
     }).state;
-    if (!(hh.outcome?.reason === 'timeout' && hh.outcome.winner === 'draw')) allDraw = false;
+    // 全部隊が守備どうしは、膠着の引き分け（§3.6.4。開戦から 10 秒）
+    if (!(hh.outcome?.reason === 'stalemate' && hh.outcome.winner === 'draw')) allDraw = false;
   }
   return { defenderScore: mean(pts), holdVsHoldAllDraw: allDraw };
 }

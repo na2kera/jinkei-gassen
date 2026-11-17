@@ -62,8 +62,9 @@ describe('決着の規則', () => {
       expect(s.outcome).toEqual({ winner, reason: 'timeout', tick: 4 });
     }
   });
-  it('ちょうど maxTicks 回の step で終わる', () => {
-    const s = battle([p('infantry', 5, 15, 'hold')], [p('infantry', 5, 0, 'hold')], { maxTicks: 1800 });
+  it('ちょうど maxTicks 回の step で終わる（膠着の決まりを切った戦いで確かめる）', () => {
+    // 守備どうしは膠着で 10 秒で終わるので、時間切れまで見るために膠着の決まりを切る（design §3.9 A9）
+    const s = battle([p('infantry', 5, 15, 'hold')], [p('infantry', 5, 0, 'hold')], { maxTicks: 1800, stalemate: false });
     let n = 0;
     while (!s.outcome) {
       step(s, []);

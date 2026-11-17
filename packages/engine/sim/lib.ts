@@ -107,10 +107,17 @@ export interface MatrixStats {
   /** pair[x][y] = ひな形 x の、ひな形 y に対する得点率（陣営の入れ替えと種をならした値） */
   pair: Record<string, Record<string, number>>;
   overall: Record<string, number>;
+  /** 決着（本陣・壊滅・門）した戦いの長さの中央値。時間切れと膠着は含めない */
   medianDecided: number;
+  /** 決着（本陣・壊滅・門）の割合 */
+  decidedRate: number;
   timeoutRate: number;
   /** 方円を含まない組の時間切れの割合 */
   timeoutRateNoRing: number;
+  /** 膠着（§3.6.4）の割合 */
+  stalemateRate: number;
+  /** 方円を含まない組の膠着の割合 */
+  stalemateRateNoRing: number;
   drawRate: number;
   hqRate: number;
   total: number;
@@ -147,16 +154,19 @@ export function matrixStats(games: MatrixGame[]): MatrixStats {
     }
     overall[x] = all.reduce((s, v) => s + v, 0) / all.length;
   }
-  const decided = games.filter((g) => g.reason !== 'timeout');
+  // 「決着」は本陣・壊滅・門。時間切れと膠着は分けて数え、長さの中央値に含めない
+  const decided = games.filter((g) => g.reason !== 'timeout' && g.reason !== 'stalemate');
+  const nr = games.filter((g) => g.a !== 'ring' && g.b !== 'ring');
+  const rate = (gs: MatrixGame[], reason: string): number => gs.filter((g) => g.reason === reason).length / gs.length;
   return {
     pair,
     overall,
     medianDecided: median(decided.map((g) => g.seconds)),
-    timeoutRate: games.filter((g) => g.reason === 'timeout').length / games.length,
-    timeoutRateNoRing: (() => {
-      const nr = games.filter((g) => g.a !== 'ring' && g.b !== 'ring');
-      return nr.filter((g) => g.reason === 'timeout').length / nr.length;
-    })(),
+    decidedRate: decided.length / games.length,
+    timeoutRate: rate(games, 'timeout'),
+    timeoutRateNoRing: rate(nr, 'timeout'),
+    stalemateRate: rate(games, 'stalemate'),
+    stalemateRateNoRing: rate(nr, 'stalemate'),
     drawRate: games.filter((g) => g.winner === 'draw').length / games.length,
     hqRate: games.filter((g) => g.reason === 'hq').length / games.length,
     total: games.length,
@@ -179,7 +189,7 @@ export function formatMatrix(st: MatrixStats): string {
   lines.push('');
   lines.push(`戦数 ${st.total}`);
   lines.push(`決着した戦いの長さの中央値 ${st.medianDecided.toFixed(1)} 秒`);
-  lines.push(`時間切れ ${(st.timeoutRate * 100).toFixed(1)}%（方円を含まない組 ${(st.timeoutRateNoRing * 100).toFixed(1)}%）  引き分け ${(st.drawRate * 100).toFixed(1)}%  本陣での決着 ${(st.hqRate * 100).toFixed(1)}%`);
+  lines.push(`決着 ${(st.decidedRate * 100).toFixed(1)}%  時間切れ ${(st.timeoutRate * 100).toFixed(1)}%（方円を含まない組 ${(st.timeoutRateNoRing * 100).toFixed(1)}%）  膠着 ${(st.stalemateRate * 100).toFixed(1)}%（方円を含まない組 ${(st.stalemateRateNoRing * 100).toFixed(1)}%）  引き分け ${(st.drawRate * 100).toFixed(1)}%  本陣での決着 ${(st.hqRate * 100).toFixed(1)}%`);
   return lines.join('\n');
 }
 
