@@ -763,6 +763,12 @@ function decide(ctx: TickCtx, u: Unit): Decision {
 
 // ---------------------------------------------------------------- 守備の味方の並びを回り込む（§3.6.6）
 
+/**
+ * 回り込みの決まりの中の距離の比べ方の遊び。陣営を入れ替えて 180° 回した戦いで、浮動小数の丸めの差（1e-16 ほど）がしきい値をまたいで
+ * 判定が分かれないように、「以内」は値 + 1e-9 以下、「未満」は値 − 1e-9 より小さい、で比べる。持ち場にいるかの homeTolerance は、planMove と同じ式のまま
+ */
+const DETOUR_EPS = 1e-9;
+
 /** 持ち場の守り手：active で、方針が守備（本陣を含む。門は除く）で、号令がかかっておらず、持ち場から homeTolerance 以内にいる（刻みの初めの位置で見る） */
 function isHomeHolder(ctx: TickCtx, o: Unit): boolean {
   const s = ctx.snap[o.id] as Snap;
@@ -786,7 +792,7 @@ function detourExit(ctx: TickCtx, u: Unit, d: Decision): number | null | undefin
   const holders = ctx.state.units.filter((o) => o.id !== u.id && o.side === u.side && isHomeHolder(ctx, o));
   const blockers = holders.filter((o) => {
     const os = ctx.snap[o.id] as Snap;
-    return dist(s.x, s.y, os.x, os.y) <= T.spacing + T.detourReach && (os.x - s.x) * d.dx + (os.y - s.y) * d.dy > 0;
+    return dist(s.x, s.y, os.x, os.y) <= T.spacing + T.detourReach + DETOUR_EPS && (os.x - s.x) * d.dx + (os.y - s.y) * d.dy > 0;
   });
   if (blockers.length === 0) return undefined;
   // 並び：ふさいでいる守り手から、中心どうしが spacing × 2 未満の守り手をたどってつながる集まり
@@ -797,7 +803,7 @@ function detourExit(ctx: TickCtx, u: Unit, d: Decision): number | null | undefin
     for (const o of holders) {
       if (inRow.has(o.id)) continue;
       const os = ctx.snap[o.id] as Snap;
-      if (dist(a.x, a.y, os.x, os.y) < T.spacing * 2) {
+      if (dist(a.x, a.y, os.x, os.y) < T.spacing * 2 - DETOUR_EPS) {
         inRow.add(o.id);
         queue.push(o);
       }
@@ -813,11 +819,11 @@ function detourExit(ctx: TickCtx, u: Unit, d: Decision): number | null | undefin
   const off = T.spacing + T.detourGap;
   const W = ctx.state.field.width;
   const open = (ex: number): boolean => {
-    if (ex < T.edgeMargin || ex > W - T.edgeMargin) return false;
+    if (ex < T.edgeMargin - DETOUR_EPS || ex > W - T.edgeMargin + DETOUR_EPS) return false;
     const lo = Math.min(s.x, ex);
     const hi = Math.max(s.x, ex);
     // 真横の道に、並びの部隊がいない（方円の内側のように、横にも守り手がいる形を外す）
-    return !row.some((r) => Math.abs(r.y - s.y) < 0.5 && r.x > lo && r.x < hi);
+    return !row.some((r) => Math.abs(r.y - s.y) < 0.5 - DETOUR_EPS && r.x > lo + DETOUR_EPS && r.x < hi - DETOUR_EPS);
   };
   const tx = (ctx.snap[d.target as number] as Snap).x;
   const cost = (ex: number): number => Math.abs(ex - s.x) + Math.abs(tx - ex);
@@ -837,7 +843,14 @@ function detourExit(ctx: TickCtx, u: Unit, d: Decision): number | null | undefin
  * 終える条件に当たったら、その刻みはふつうの決まりのまま動く。
  */
 function planDetour(ctx: TickCtx, u: Unit, d: Decision): void {
-  if (u.status !== 'active' || isGate(u)) return;
+  if (isGate(u)) return;
+  if (u.status !== 'active') {
+    // 敗走・全滅した部隊は、回り込みの項目を消す
+    u.detourX = null;
+    u.detourTicks = 0;
+    u.advMoves = [];
+    return;
+  }
   const s = ctx.snap[u.id] as Snap;
   if (u.detourX !== null) {
     const rest = Math.abs(u.detourX - s.x);

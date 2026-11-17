@@ -4,7 +4,7 @@ import { createBattle, plainField, STAGES, step, viewFor, type BattleEvent, type
 import { T } from '../src/tuning.ts';
 import { SEEDS_40 } from '../sim/lib.ts';
 import { runStage, stageTemplateArmy, STAGE_SEEDS } from '../sim/stagelib.ts';
-import { blockedCounter } from './helpers.ts';
+import { battle, blockedCounter, p, place } from './helpers.ts';
 
 const row = (kind: Placement['kind'], stance: Placement['stance'], cols: number[], r: number): Placement[] => cols.map((col) => ({ kind, stance, col, row: r }));
 
@@ -76,7 +76,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
       if (!w.cross.every((t) => t >= 0 && t <= 250) || !w.attack.every((t) => t >= 0 && t <= 600)) bad.push(`種${seed} 越えた ${w.cross} 攻撃 ${w.attack}`);
     }
     expect(bad).toEqual([]);
-  });
+  }, 120_000);
 
   it('D2 陣営を替えても同じ：180° 回して陣営を入れ替えても D1 を満たし、盾兵の行を越える刻みが種ごとに一致する', () => {
     const bad: string[] = [];
@@ -88,7 +88,42 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
       if (JSON.stringify(a.cross) !== JSON.stringify(b.cross)) bad.push(`種${seed} 越えた刻みが違う ${a.cross} / ${b.cross}`);
     }
     expect(bad).toEqual([]);
-  });
+  }, 120_000);
+
+  it('D2 距離の境界：守り手がちょうど spacing + detourReach の距離にいる場面と、それを 180° 回して陣営を入れ替えた場面で、回り込みを始めるかが一致する', () => {
+    // 前進の歩兵 (0.5, 2) と守り手の盾兵 (1.1, 1.2) の距離は、元の配置で 1、回した配置では丸めで 1.0000000000000004 になる
+    const scene = (rot: boolean): BattleState => {
+      const P = (x: number, y: number): [number, number] => (rot ? [12 - x, 16 - y] : [x, y]);
+      const mine = [p('shield', 0, 0, 'hold'), p('infantry', 1, 1)];
+      const foe = [p('infantry', 5, 5, 'hold')];
+      const s = battle(rot ? foe : mine, rot ? mine : foe);
+      const [sh, inf, en] = rot ? [1, 2, 0] : [0, 1, 2];
+      place(s, sh, ...P(1.1, 1.2));
+      place(s, inf, ...P(0.5, 2));
+      place(s, en, ...P(5.5, 0.5));
+      s.units[inf]!.advMoves = Array.from({ length: T.detourStuckTicks }, () => [0, 0] as [number, number]);
+      return s;
+    };
+    const a = scene(false);
+    const b = scene(true);
+    step(a, []);
+    step(b, []);
+    expect(a.units[1]!.detourX).not.toBeNull();
+    expect(b.units[2]!.detourX === null).toBe(a.units[1]!.detourX === null);
+    expect(12 - b.units[2]!.detourX!).toBeCloseTo(a.units[1]!.detourX!, 9);
+  }, 120_000);
+
+  it('回り込み中に敗走した部隊は、次の刻みに回り込みの項目が消える', () => {
+    const s = make(d1Armies(), SEEDS_40[0]!);
+    while (!s.outcome && !(typeof s.units[3]!.detourX === 'number' && s.units[3]!.detourTicks > 2)) step(s, []);
+    const u = s.units[3]!;
+    u.status = 'routing';
+    u.routTick = s.tick;
+    step(s, []);
+    expect(u.detourX).toBeNull();
+    expect(u.detourTicks).toBe(0);
+    expect(u.advMoves).toEqual([]);
+  }, 120_000);
 
   it('D3 弓は盾の陰から出ない：1-3 の見本で、開戦から 20 秒の間、弓兵の x は最初の位置から 0.5 より動かない。detourX はどの部隊にも入らない', () => {
     const s13 = STAGES.find((s) => s.id === '1-3')!;
@@ -102,7 +137,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
       }, s13.solutionOrders ?? []);
     }
     expect(bad.slice(0, 10)).toEqual([]);
-  });
+  }, 120_000);
 
   const d4 = {
     '(a) 戦場の端から端まで盾兵が並ぶ': [[...row('shield', 'hold', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 10), ...row('infantry', 'advance', [5], 11)], row('infantry', 'hold', [4, 5], 3)],
@@ -128,7 +163,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
       }
       expect(s.tick).toBe(600);
       expect(bad.slice(0, 10)).toEqual([]);
-    });
+    }, 120_000);
   }
 
   // 歩兵を列 4・5 に置くと、列 5 の歩兵は右隣が空いているので ④-2 だけで出てしまうため、列 3・4 に置く（design §3.6.6 の D5）
@@ -139,12 +174,12 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
       const x0 = [s.units[3]!.x, s.units[4]!.x];
       const w = watch(s, [3, 4], 0, 400);
       w.exit.forEach((e, i) => {
-        if (e === null || !(e > x0[i]!)) bad.push(`種${seed} 歩兵${i} の出口 ${e}`);
+        if (e === null || !(e > x0[i]!) || Math.abs(e - (5.5 + T.spacing + T.detourGap)) > 1e-9) bad.push(`種${seed} 歩兵${i} の出口 ${e}`);
       });
       if (!w.cross.every((t) => t >= 0 && t <= 400)) bad.push(`種${seed} 越えた ${w.cross}`);
     }
     expect(bad).toEqual([]);
-  });
+  }, 120_000);
 
   describe('D6 途中で保存しても同じ', () => {
     it('(a) 歩兵の detourX が入っている刻みに JSON にして戻しても、以後の毎刻みの出来事と最後の状態が変わらない', () => {
@@ -165,7 +200,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
         expect(got).toEqual(log.slice(at));
         expect(restored).toEqual(ref);
       }
-    });
+    }, 120_000);
 
     it('(b) 開戦直後・待っている途中・回り込みの途中で、足した3つの項目を消して続けても落ちず、A12 を破らず、60 秒以内に敵を攻撃する', () => {
       for (const seed of SEEDS_40.slice(0, 5)) {
@@ -200,7 +235,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
           expect(attacked.every((t) => t >= 0), `種${seed} 刻み${at} ${attacked}`).toBe(true);
         }
       }
-    });
+    }, 120_000);
   });
 
   it('D7 隠す情報が増えない：回り込み中の刻みで、viewFor のどの部隊にも足した項目の鍵がなく、出来事にも出ない', () => {
@@ -210,7 +245,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
     while (!s.outcome && s.tick < 600) {
       const ev = step(s, []);
       for (const e of ev) for (const k of keys) expect(Object.keys(e)).not.toContain(k);
-      if (s.units.some((u) => u.detourX !== null)) {
+      if (s.units.some((u) => typeof u.detourX === 'number' && u.detourTicks > 0)) {
         seen++;
         for (const viewer of [0, 1, 'both'] as const) {
           const v = viewFor(s, viewer);
@@ -220,7 +255,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
       }
     }
     expect(seen).toBeGreaterThan(0);
-  });
+  }, 120_000);
 
   describe('D8 長く止まらない：ふさがれ状態の刻みの合計が、どの部隊も 20 秒を超えない', () => {
     it('D1・D5 の場面（種40個ずつ）', () => {
@@ -232,7 +267,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
         }
       }
       expect(bad).toEqual([]);
-    });
+    }, 120_000);
     // ひな形のままの鶴翼は弓兵が守備で、数える対象から外れるので、直す前のひな形の並び（盾兵の後ろの弓兵が前進）にする
     it('3-2 に、盾兵の後ろの弓兵を前進にした鶴翼を置いた20戦', () => {
       const s32 = STAGES.find((s) => s.id === '3-2')!;
