@@ -24,7 +24,7 @@ export function titleOf(s: BattleSummary, viewer: Side): string {
 }
 
 /**
- * 決着の理由。survive は「時間切れまで守り切れば勝ち」の面（時間切れで勝ったら「守り切った」と出す）
+ * 決着の理由。survive は「時間切れまで守り切れば勝ち」の面（時間切れか膠着で勝ったら「守り切った」と出す）
  */
 export function reasonOf(s: BattleSummary, viewer: Side, survive = false): string {
   const won = s.winner === viewer;
@@ -37,6 +37,8 @@ export function reasonOf(s: BattleSummary, viewer: Side, survive = false): strin
       return won ? '敵軍が壊滅' : '自軍が壊滅';
     case 'timeout':
       return survive && won ? '守り切った' : '時間切れ';
+    case 'stalemate':
+      return survive && won ? '守り切った' : '膠着';
     default:
       return '';
   }
