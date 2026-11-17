@@ -28,6 +28,7 @@ import {
   type Stage,
   type Stance,
   type StageEnemyOrder,
+  type StageEnemyView,
   type TemplateId,
   type Terrain,
   type Zone,
@@ -52,10 +53,12 @@ import { checkFit } from '../ui/overflow.ts';
 import { KIND_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
+import { unitBoxAt } from '../ui/unitBox.ts';
 import { addText } from '../ui/text.ts';
 import { FormationDialog } from '../ui/FormationDialog.ts';
 import type { SavedFormation } from '../save.ts';
 import type { BattleSceneData } from './BattleScene.ts';
+import { enemyAt } from './enemyKind.ts';
 
 /** 地形の名前と効きめ（配置の画面で、マスを押している間だけ1行で出す）。数字は出さず、何に効くかだけを書く */
 const TERRAIN_TEXT: Partial<Record<Terrain, string>> = {
@@ -73,6 +76,8 @@ const DRAG_THRESHOLD = 6;
 const HINT_MS = 3000;
 /** 陣形を呼び出したときなどの1行の知らせを出しておく長さ（ミリ秒） */
 const TOAST_MS = 2500;
+/** 敵の部隊を短く押したときも、兵種の名前を出しておく長さ（ミリ秒）。押している間は、これより長くても出したまま */
+const KIND_MS = 1000;
 /** 「出る」を2回押すまでの猶予（ミリ秒） */
 const LEAVE_ARM_MS = 2500;
 
@@ -131,6 +136,15 @@ export class DeployScene extends Phaser.Scene {
   private terrainBox!: Phaser.GameObjects.Graphics;
   private terrainText!: Phaser.GameObjects.Text;
   private terrainPointer: number | null = null;
+  /** 見えている敵の部隊（stageEnemyVisible の結果。霧のマスの部隊と方針は入らない）。対戦では空 */
+  private enemyVisible: StageEnemyView[] = [];
+  private kindBox!: Phaser.GameObjects.Graphics;
+  private kindText!: Phaser.GameObjects.Text;
+  /** 兵種の名前を出させている指（離したら null） */
+  private kindPointer: number | null = null;
+  /** 押してから KIND_MS たったか */
+  private kindExpired = false;
+  private kindTimer: Phaser.Time.TimerEvent | null = null;
   private dialog: FormationDialog | null = null;
   private toastUntil = 0;
   private stageIdArg: string | undefined;
@@ -170,6 +184,10 @@ export class DeployScene extends Phaser.Scene {
     this.hintShown = false;
     this.unsubscribe = [];
     this.leaveArmedUntil = 0;
+    this.enemyVisible = [];
+    this.kindPointer = null;
+    this.kindExpired = false;
+    this.kindTimer = null;
 
     if (this.pvpMode) {
       pvp.arrived('Deploy');
@@ -215,7 +233,8 @@ export class DeployScene extends Phaser.Scene {
 
     if (!this.pvpMode) {
       // 敵の配置は見せる（方針と、霧のマスの部隊は見せない。decisions §8）
-      stageEnemyVisible(this.stage).forEach((p, i) => {
+      this.enemyVisible = stageEnemyVisible(this.stage);
+      this.enemyVisible.forEach((p, i) => {
         const s = new UnitSprite(this, 1, p.kind, 100 + i, this.soldierLayer, this.markLayer);
         const c = this.fv.cellCenter(p.col, p.row);
         const d = this.fv.dirToScreen(0, 1);
@@ -245,6 +264,9 @@ export class DeployScene extends Phaser.Scene {
     this.terrainBox = this.add.graphics();
     this.terrainText = addText(this, 0, 0, '', 16, COLOR.cream).setOrigin(0.5, 0.5).setVisible(false);
     this.terrainPointer = null;
+    // 押した敵の部隊の兵種の名前（戦闘の画面の兵数と士気と同じ箱と文字）
+    this.kindBox = this.add.graphics();
+    this.kindText = addText(this, 0, 0, '').setVisible(false);
 
     if (this.pvpMode) this.buildPvpPanel();
     else this.buildStagePanel();
@@ -264,6 +286,8 @@ export class DeployScene extends Phaser.Scene {
       this.game.events.off(LAYOUT_EVENT, onLayout);
       // 陣形の窓の名前の入力欄（HTML）を残さない
       this.dialog?.close();
+      this.kindTimer?.remove();
+      this.kindTimer = null;
       for (const u of this.unsubscribe) u();
       debug.applyTemplate = null;
       debug.start = null;
@@ -700,6 +724,8 @@ export class DeployScene extends Phaser.Scene {
 
   private onDown(pointer: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]): void {
     if (this.press || this.locked() || this.dialog) return;
+    // 前に出した敵の兵種は、どこを押しても消す（敵の部隊を押したなら、下で新しいほうを出す）
+    this.hideKind();
     // ボタンの上は、ボタンが受け持つ
     if (over.length > 0) return;
     const hadPopup = this.popupIndex !== null;
@@ -707,7 +733,11 @@ export class DeployScene extends Phaser.Scene {
     const cell = this.fv.cellAt(pointer.x, pointer.y);
     if (!cell || !this.inOwnZone(cell)) {
       // 自分のエリアの外：押している間だけ、そのマスの地形を1行で出す
-      if (cell) this.showTerrain(pointer.id, cell);
+      // 見えている敵の部隊なら、その上に兵種の名前も出す（地形の1行とは別に出す）
+      if (cell) {
+        this.showTerrain(pointer.id, cell);
+        this.showKind(pointer.id, cell);
+      }
       if (hadPopup) this.refresh();
       return;
     }
@@ -741,6 +771,41 @@ export class DeployScene extends Phaser.Scene {
     this.children.bringToTop(this.terrainText);
   }
 
+  /** 見えている敵の部隊を押したら、その部隊の上に兵種の名前を出す。押している間と、押してから KIND_MS の間は出したまま */
+  private showKind(pointerId: number, cell: Cell): void {
+    const e = enemyAt(this.enemyVisible, cell);
+    if (!e) return;
+    this.hideKind();
+    this.kindPointer = pointerId;
+    this.kindExpired = false;
+    this.kindTimer = this.time.delayedCall(KIND_MS, () => {
+      this.kindTimer = null;
+      this.kindExpired = true;
+      if (this.kindPointer === null) this.hideKind();
+    });
+    const text = KIND_LABEL[e.kind];
+    if (this.kindText.text !== text) this.kindText.setText(text);
+    // 箱の作りと置き方は、戦闘の画面の兵数と士気（BattleScene の drawInfo）と同じ
+    const w = Math.ceil(this.kindText.width / 2) * 2 + 16;
+    const h = Math.ceil(this.kindText.height / 2) * 2 + 12;
+    const { x, y } = unitBoxAt(this.fv.rect, this.fv.cellCenter(e.col, e.row), w, h, this.fv.oblique ? 34 : 20);
+    this.kindBox.clear();
+    drawBox(this.kindBox, { x, y, w, h });
+    this.kindText.setPosition(x + 8, y + 6).setVisible(true);
+    // 地形の1行と重なるときは、押した部隊の兵種を上にする
+    this.children.bringToTop(this.kindBox);
+    this.children.bringToTop(this.kindText);
+  }
+
+  private hideKind(): void {
+    this.kindTimer?.remove();
+    this.kindTimer = null;
+    this.kindPointer = null;
+    this.kindExpired = false;
+    this.kindBox.clear();
+    this.kindText.setVisible(false);
+  }
+
   private hideTerrain(): void {
     this.terrainPointer = null;
     this.terrainBox.clear();
@@ -763,6 +828,11 @@ export class DeployScene extends Phaser.Scene {
 
   private onUp(pointer: Phaser.Input.Pointer): void {
     if (this.terrainPointer === pointer.id) this.hideTerrain();
+    if (this.kindPointer === pointer.id) {
+      // 押してから KIND_MS たっていれば消す。まだなら、時間がたったときに消える
+      this.kindPointer = null;
+      if (this.kindExpired) this.hideKind();
+    }
     const press = this.press;
     if (!press || pointer.id !== press.pointerId) return;
     this.press = null;

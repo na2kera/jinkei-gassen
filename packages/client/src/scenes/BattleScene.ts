@@ -48,6 +48,7 @@ import { Button } from '../ui/Button.ts';
 import { ORDER_LABEL, TARGET_LABEL, wingForViewer } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
+import { unitBoxAt } from '../ui/unitBox.ts';
 import { addText } from '../ui/text.ts';
 
 /** 号令の表示を出しておく長さ（ミリ秒） */
@@ -717,11 +718,10 @@ export class BattleScene extends Phaser.Scene {
     const h = Math.ceil(this.infoText.height / 2) * 2 + 12;
     const f = this.clipRect();
     const p = this.fv.toScreen(s.x, s.y);
-    // 指で隠れないよう部隊の上に出し、戦場の中に収める
-    const x = Math.round(Math.max(f.x, Math.min(f.x + f.w - w, p.x - w / 2)) / 2) * 2;
     // 斜めのときは立った兵が足もとより上に伸びるので、その分だけ上に離す
     const lift = this.fv.oblique ? 34 : 20;
-    const y = Math.round((p.y - lift - h >= f.y ? p.y - lift - h : p.y + 20) / 2) * 2;
+    // 指で隠れないよう部隊の上に出し、戦場の中に収める
+    const { x, y } = unitBoxAt(f, p, w, h, lift);
     drawBox(this.infoBox, { x, y, w, h });
     this.infoText.setPosition(x + 8, y + 6).setVisible(true);
   }
