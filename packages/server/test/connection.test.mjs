@@ -1,7 +1,7 @@
 // 切断と復帰、同じ pid の二重接続、不在（結果の段階で60秒いない席）、予約の期限、片付け。
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client, createRoom, holdArmy, randomPid, setupPair, sleep, startServer, testRoute } from './helpers.mjs';
+import { Client, createRoom, holdArmy, loneArcherArmy, randomPid, shieldWallArmy, setupPair, sleep, startServer, testRoute } from './helpers.mjs';
 
 let server;
 beforeAll(async () => {
@@ -14,8 +14,9 @@ afterAll(async () => {
 describe('切断と復帰', () => {
   it('戦闘中に片方が切れても進み、同じ pid で戻るとその時点の場面と残りの号令が届く。二重接続は古いほうが閉じる', async () => {
     const { A, B, code } = await setupPair(server.base, { tickMs: 20, revealMs: 300, maxTicks: 700, setupMs: 30_000 });
-    A.send({ type: 'ready', army: holdArmy() });
-    B.send({ type: 'ready', army: holdArmy() });
+    // 守備どうしは 10 秒で膠着になる（design §3.6.4）ので、切れて戻るまで戦闘が続くよう、攻撃が続いて時間切れになる組を使う（B は盾の壁）
+    A.send({ type: 'ready', army: loneArcherArmy() });
+    B.send({ type: 'ready', army: shieldWallArmy() });
     await B.waitMsg((m) => m.type === 'snap');
     const battleNo = B.room.battleNo;
     // B が号令を1つ使ってから切れる
@@ -39,7 +40,7 @@ describe('切断と復帰', () => {
     expect(B2.messages.indexOf(room)).toBeLessThan(B2.messages.indexOf(snap));
     expect(snap.tick).toBeGreaterThan(tickAtLeave);
     expect(snap.ordersLeft).toEqual([3, 2]);
-    expect(snap.units.length).toBe(holdArmy().length * 2);
+    expect(snap.units.length).toBe(loneArcherArmy().length + shieldWallArmy().length);
     await A.waitRoom((r) => r.seats[1].connected === true, 5000, 'B back');
     // 戻った人は号令を出せる
     B2.send({ type: 'order', battleNo, target: 'center', kind: 'brace' });
@@ -100,7 +101,7 @@ describe('不在', () => {
     B.send({ type: 'ready', army: holdArmy() });
     await A.waitRoom((r) => r.phase === 'battle', 10_000, 'battle');
     B.close();
-    // 戦闘は 150 × 20ms = 3秒。そのあいだに awayMs（0.8秒）を過ぎる
+    // 守備どうしは膠着で 100 刻み（100 × 20ms = 2秒）で終わる。そのあいだに awayMs（0.8秒）を過ぎる
     const r = await A.waitRoom((x) => x.phase === 'waiting', 15_000, 'waiting');
     expect(A.of('result').length).toBe(1);
     expect(r.seats[1]).toBeNull();

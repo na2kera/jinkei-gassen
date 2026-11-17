@@ -3,7 +3,7 @@
 import { PVP_MAPS, pvpField } from '@jinkei/engine';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fieldFor } from '../src/flip.ts';
-import { Client, army, collectEvents, holdArmy, postRoom, randomPid, setupPair, sleep, startServer, testRoute } from './helpers.mjs';
+import { Client, army, collectEvents, holdArmy, loneArcherArmy, postRoom, shieldWallArmy, randomPid, setupPair, sleep, startServer, testRoute } from './helpers.mjs';
 
 let server;
 beforeAll(async () => {
@@ -62,8 +62,9 @@ describe('出来事の通し番号', () => {
 
   it('入り直した人の最初の snap は events が空で、evBase がいままでに出た出来事の数', async () => {
     const { A, B, code } = await setupPair(server.base, { tickMs: 20, revealMs: 200, maxTicks: 600, setupMs: 30_000 });
-    A.send({ type: 'ready', army: holdArmy() });
-    B.send({ type: 'ready', army: holdArmy() });
+    // 守備どうしは 10 秒で膠着になる（design §3.6.4）ので、入り直すまで戦闘が続くよう、攻撃が続いて時間切れになる組を使う（A は盾の壁）
+    A.send({ type: 'ready', army: shieldWallArmy() });
+    B.send({ type: 'ready', army: loneArcherArmy() });
     await B.waitMsg((m) => m.type === 'snap');
     B.send({ type: 'order', battleNo: 1, target: 'all', kind: 'brace' });
     A.send({ type: 'order', battleNo: 1, target: 'center', kind: 'brace' });

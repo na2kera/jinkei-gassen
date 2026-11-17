@@ -29,7 +29,7 @@ describe('両者の不在', () => {
     await A.waitRoom((r) => r.phase === 'battle', 10_000, 'battle');
     A.close();
     B.close();
-    // 戦闘は 200 × 10ms = 2秒。決着の時点で、2人とも不在の期限（0.3秒）を過ぎている
+    // 守備どうしは膠着で 100 刻み（100 × 10ms = 1秒）で終わる。決着の時点で、2人とも不在の期限（0.3秒）を過ぎている
     let st;
     for (let i = 0; i < 60; i++) {
       await sleep(200);
