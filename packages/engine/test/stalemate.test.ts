@@ -106,11 +106,15 @@ describe('膠着（design §3.6.4）', () => {
     // 陣営0の歩兵（前進）が 13 マス先の、陣営1の歩兵（守備）へ歩いていく
     const s = battle([p('infantry', 5, 15)], [p('infantry', 5, 1, 'hold')]);
     let firstAttack = -1;
+    let quietBefore = 0;
     while (!s.outcome) {
       step(s, []);
       if (firstAttack < 0 && s.units.some((u) => u.attacking !== null)) firstAttack = s.tick;
+      // 歩いているあいだは、毎刻み時計が 0（動こうとする部隊がいる刻みは、静かな刻みではない）
+      if (firstAttack < 0) quietBefore = Math.max(quietBefore, s.quietTicks!);
     }
     expect(firstAttack).toBeGreaterThan(T.stalemateTicks);
+    expect(quietBefore).toBe(0);
     expect(s.outcome.reason).not.toBe('stalemate');
   });
 
@@ -294,7 +298,8 @@ describe('膠着（design §3.6.4）', () => {
         if (firstAttack < 0 && s.units.some((u) => u.attacking !== null)) firstAttack = s.tick - 1;
         if (firstAttack < 0) quietBefore = Math.max(quietBefore, s.quietTicks!);
       }
-      if (!(firstAttack >= 0 && firstAttack <= 600 && quietBefore < T.stalemateTicks)) bad.push(`種${seed}: 最初の攻撃 ${firstAttack}、それまでの時計の最大 ${quietBefore}`);
+      // ふさがれて待つあいだも、回り込むあいだも、歩兵は毎刻み動こうとしているので、最初の攻撃（実測は 149 刻み）まで時計は 0 のまま
+      if (!(firstAttack >= 0 && firstAttack <= 200 && quietBefore === 0)) bad.push(`種${seed}: 最初の攻撃 ${firstAttack}、それまでの時計の最大 ${quietBefore}`);
       const off = runSetup({ ...setup, stalemate: false }).state.outcome!;
       const on = s.outcome;
       if (on.reason === 'stalemate' ? !(off.reason === 'timeout' && off.winner === on.winner && on.tick > firstAttack) : JSON.stringify(on) !== JSON.stringify(off)) {
