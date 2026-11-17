@@ -16,7 +16,7 @@ import {
   type Placement,
   type Stage,
 } from '../src/index.ts';
-import { lineStats, ORDER_PERMS, runStage, solutionStats, STAGE_SEEDS, templateWins } from '../sim/stagelib.ts';
+import { lineStats, ORDER_PERMS, runStage, solutionStats, STAGE_SEEDS, stageTemplateArmy, templateWins } from '../sim/stagelib.ts';
 
 /** 第1章の5面（第2章・第3章は stages-ch23.test.ts） */
 const CH1 = STAGES.filter((s) => s.chapter === 1);
@@ -72,6 +72,19 @@ describe('ひな形を選ぶだけでは勝ちきれない（1-4・1-5）', () =
       expect(rows.filter((r) => r.wins > 10).map((r) => r.id).length, JSON.stringify(rows)).toBeLessThanOrEqual(2);
     }, 300_000);
   }
+});
+
+describe('1-5 は膠着しない', () => {
+  // 敵の鶴翼の弓兵が守備だと、盾兵3と弓兵2が動かず、こちらの攻め手が尽きたあと時間切れまで何も起きなかった（2026-11-17）
+  it('横陣と鶴翼をそのまま置いた40戦（種20個ずつ）に、時間切れで終わる戦いがない', () => {
+    const s5 = STAGES.find((x) => x.id === '1-5')!;
+    const bad: string[] = [];
+    for (const id of ['line', 'crane'] as const) {
+      const army = stageTemplateArmy(s5, id);
+      for (const seed of STAGE_SEEDS) if (runStage(s5, army, seed).outcome?.reason === 'timeout') bad.push(`${id} 種${seed}`);
+    }
+    expect(bad).toEqual([]);
+  }, 300_000);
 });
 
 describe('stageSetup', () => {

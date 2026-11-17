@@ -95,8 +95,10 @@ export const STAGES: Stage[] = [
     hint: '鶴の真ん中は薄い。突撃はどう受ける？',
     field: plainField(),
     roster: { hq: 1, infantry: 5, shield: 3, cavalry: 3, archer: 3 },
-    // 敵は鶴翼（14部隊）。10秒と30秒に全軍突撃してくる
-    enemy: applyTemplate('crane', { hq: 1, infantry: 5, shield: 3, cavalry: 3, archer: 2 }, plainField().zones[1], 1),
+    // 敵は鶴翼（14部隊）。10秒と30秒に全軍突撃してくる。
+    // 鶴翼のひな形で並べ、弓兵の方針だけ前進にする（2026-11-17 にひな形の弓兵を守備に替える前と同じ並び・同じ方針。design §3.6.6）。
+    // 敵の弓兵が守備だと、盾兵3と弓兵2が動かず、こちらの攻め手が尽きたあと時間切れまで何も起きない
+    enemy: applyTemplate('crane', { hq: 1, infantry: 5, shield: 3, cavalry: 3, archer: 2 }, plainField().zones[1], 1).map((p) => (p.kind === 'archer' ? { ...p, stance: 'advance' as const } : p)),
     enemyOrders: [
       { atSec: 10, target: 'all', kind: 'charge' },
       { atSec: 30, target: 'all', kind: 'charge' },
