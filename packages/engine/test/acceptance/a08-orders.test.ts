@@ -1,4 +1,4 @@
-// A8 号令が効く（場面は sim/scenes.ts）。決まりの確認は test/orders.test.ts にもある
+// A8 号令が効く（場面は sim/scenes.ts。突撃の場面は、偃月 対 鋒矢。突撃で何が変わって勝つかも、そこに書いた）。決まりの確認は test/orders.test.ts にもある
 import { describe, expect, it } from 'vitest';
 import { canOrder, step } from '../../src/index.ts';
 import { a8 } from '../../sim/scenes.ts';

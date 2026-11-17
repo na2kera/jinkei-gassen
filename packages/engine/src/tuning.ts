@@ -97,6 +97,15 @@ export const T = {
   /** 本陣狙いの「詰まった」の判定：この刻み数のあいだに動いた距離の合計が huntStuckDist に満たない */
   huntStuckTicks: 20,
   huntStuckDist: 0.3,
+  /** 守備の味方の並びを回り込む（§3.6.6）：前へ進む動きで、この刻み数のあいだに動いた分の合計が detourStuckDist に満たなければ、ふさがれたとみなす */
+  detourStuckTicks: 50,
+  detourStuckDist: 0.3,
+  /** 回り込みを打ち切る刻み数 */
+  detourMaxTicks: 100,
+  /** ふさいでいる守り手とみなす距離の、spacing への上乗せ */
+  detourReach: 0.1,
+  /** 出口の x を、並びの端の守り手から spacing + detourGap だけ外にする */
+  detourGap: 0.05,
   /** 本陣狙い・迂回①②が戦う「進む向きの正面」（度） */
   passFrontAngle: 50,
 

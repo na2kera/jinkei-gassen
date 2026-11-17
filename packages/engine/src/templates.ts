@@ -102,13 +102,18 @@ const line: Layout = (c, w, h) => {
   return wants;
 };
 
-/** 鶴翼：中央に盾兵（守備）と弓兵（前進）、両翼に歩兵（前進）が前へ張り出し、翼の先に騎兵（迂回） */
+/**
+ * 鶴翼：中央に盾兵（守備）と弓兵（守備。盾の陰から撃つ）、両翼に歩兵（前進）が前へ張り出し、翼の先に騎兵（迂回）。
+ * 弓兵は 2026-11-17 に前進から守備に替えた（design §3.6.6）。前進のままだと、守備の味方の並びを回り込む決まりで弓兵が戦いに加わり、
+ * 鶴翼の得点率が 0.47 → 0.76 に上がって、方円がほかの6つすべてに負け（A7）、総当たりで時間切れが出なくなる（A9）。
+ * 守備にすると鶴翼は 0.48 で、数字を変えずに A6・A7・A9・A11 と対戦用の戦場の釣り合いが通る
+ */
 const crane: Layout = (c, w) => {
   const wants: Want[] = [];
   const order = centerOut(w);
   const sx = order.slice(0, Math.min(c.shield, w));
   rowsFrom(c.shield, 2, w).forEach((q) => wants.push({ kind: 'shield', stance: 'hold', ...q }));
-  rowsFrom(c.archer, 3, w).forEach((q) => wants.push({ kind: 'archer', stance: 'advance', ...q }));
+  rowsFrom(c.archer, 3, w).forEach((q) => wants.push({ kind: 'archer', stance: 'hold', ...q }));
   const cc = centerCol(w);
   const sMin = sx.length ? Math.min(...sx) : cc + 1;
   const sMax = sx.length ? Math.max(...sx) : cc;

@@ -172,6 +172,9 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
         huntMoves: [],
         huntStuckOn: null,
         slideSign: 0,
+        advMoves: [],
+        detourX: null,
+        detourTicks: 0,
         lastHitTick: null,
         routTick: null,
       });
@@ -246,6 +249,9 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
       huntMoves: [],
       huntStuckOn: null,
       slideSign: 0,
+      advMoves: [],
+      detourX: null,
+      detourTicks: 0,
       lastHitTick: null,
       routTick: null,
     });
@@ -306,6 +312,10 @@ interface Decision {
   routing: boolean;
   /** 本陣狙いで本陣へ向かって動く（詰まりの判定に、この刻みに動いた距離を数える） */
   huntMove: boolean;
+  /** 前へ進む動き（§3.6.6）：前進の決まりで動き、狙いがあり、戦っても撃ってもいない */
+  advMove: boolean;
+  /** この刻みは、守備の味方の並びを回り込んで真横に動く（§3.6.6） */
+  detouring: boolean;
 }
 
 interface Damage {
@@ -440,6 +450,8 @@ function emptyDecision(): Decision {
     faceMove: false,
     routing: false,
     huntMove: false,
+    advMove: false,
+    detouring: false,
   };
 }
 
@@ -508,6 +520,8 @@ interface Plan {
   atHome: boolean;
   /** 本陣狙いで、敵の本陣へ向かっている */
   hunt?: boolean;
+  /** 前進の決まり（前進、突撃の号令中、迂回の③、敵の本陣がないときの本陣狙い）で決めた動き（§3.6.6 の「前へ進む動き」の候補） */
+  adv?: boolean;
 }
 
 /** 行き先 (dx, dy) へ向かう向き。城壁をはさむときは通り道（門の手前 → 門 → 行き先）の、いま向かう点へ */
@@ -523,7 +537,7 @@ function planAdvance(ctx: TickCtx, u: Unit): Plan {
   if (target === null) return { target: null, vx: 0, vy: 0, limit: Infinity, passing: false, atHome: false };
   const e = ctx.snap[target] as Snap;
   const v = steer(ctx, s, e.x, e.y, Infinity);
-  return { target, vx: v.vx, vy: v.vy, limit: v.limit, passing: false, atHome: false };
+  return { target, vx: v.vx, vy: v.vy, limit: v.limit, passing: false, atHome: false, adv: true };
 }
 
 function planMove(ctx: TickCtx, u: Unit, stance: Unit['stance']): Plan {
@@ -569,7 +583,7 @@ function planMove(ctx: TickCtx, u: Unit, stance: Unit['stance']): Plan {
       if (target === null) return { target: null, vx: 0, vy: 0, limit: Infinity, passing: false, atHome: false };
       const e = ctx.snap[target] as Snap;
       const v = steer(ctx, s, e.x, e.y, Infinity);
-      return { target, vx: v.vx, vy: v.vy, limit: v.limit, passing: false, atHome: false };
+      return { target, vx: v.vx, vy: v.vy, limit: v.limit, passing: false, atHome: false, adv: true };
     }
     case 'hunt': {
       // 敵の本陣へまっすぐ向かう。途中の敵にぶつかったら、④の決まり（手前で止まり、接線に回る）で列に沿って滑る。
@@ -743,7 +757,111 @@ function decide(ctx: TickCtx, u: Unit): Decision {
   d.target = plan.target;
   if (plan.atHome) d.anchor = true;
   setDir(d, plan.vx, plan.vy, plan.limit);
+  d.advMove = plan.adv === true && plan.target !== null && !d.anchor && !plan.hunt && (d.dx !== 0 || d.dy !== 0);
   return d;
+}
+
+// ---------------------------------------------------------------- 守備の味方の並びを回り込む（§3.6.6）
+
+/** 持ち場の守り手：active で、方針が守備（本陣を含む。門は除く）で、号令がかかっておらず、持ち場から homeTolerance 以内にいる（刻みの初めの位置で見る） */
+function isHomeHolder(ctx: TickCtx, o: Unit): boolean {
+  const s = ctx.snap[o.id] as Snap;
+  return s.status === 'active' && !isGate(o) && o.stance === 'hold' && o.order === null && dist(s.x, s.y, o.home.x, o.home.y) <= T.homeTolerance;
+}
+
+/**
+ * 前へ進む動きで、守備の味方にふさがれているなら、開いている出口の x を返す。ふさがれていなければ undefined、
+ * ふさがれているが開いている出口がなければ null。判断は刻みの初めの位置で行う。
+ */
+function detourExit(ctx: TickCtx, u: Unit, d: Decision): number | null | undefined {
+  if (u.advMoves.length < T.detourStuckTicks) return undefined;
+  let mx = 0;
+  let my = 0;
+  for (const m of u.advMoves) {
+    mx += m[0];
+    my += m[1];
+  }
+  if (Math.hypot(mx, my) >= T.detourStuckDist) return undefined;
+  const s = ctx.snap[u.id] as Snap;
+  const holders = ctx.state.units.filter((o) => o.id !== u.id && o.side === u.side && isHomeHolder(ctx, o));
+  const blockers = holders.filter((o) => {
+    const os = ctx.snap[o.id] as Snap;
+    return dist(s.x, s.y, os.x, os.y) <= T.spacing + T.detourReach && (os.x - s.x) * d.dx + (os.y - s.y) * d.dy > 0;
+  });
+  if (blockers.length === 0) return undefined;
+  // 並び：ふさいでいる守り手から、中心どうしが spacing × 2 未満の守り手をたどってつながる集まり
+  const inRow = new Set<number>(blockers.map((o) => o.id));
+  const queue = blockers.slice();
+  while (queue.length > 0) {
+    const a = ctx.snap[(queue.shift() as Unit).id] as Snap;
+    for (const o of holders) {
+      if (inRow.has(o.id)) continue;
+      const os = ctx.snap[o.id] as Snap;
+      if (dist(a.x, a.y, os.x, os.y) < T.spacing * 2) {
+        inRow.add(o.id);
+        queue.push(o);
+      }
+    }
+  }
+  const row = holders.filter((o) => inRow.has(o.id)).map((o) => ctx.snap[o.id] as Snap);
+  let xL = Infinity;
+  let xR = -Infinity;
+  for (const r of row) {
+    xL = Math.min(xL, r.x);
+    xR = Math.max(xR, r.x);
+  }
+  const off = T.spacing + T.detourGap;
+  const W = ctx.state.field.width;
+  const open = (ex: number): boolean => {
+    if (ex < T.edgeMargin || ex > W - T.edgeMargin) return false;
+    const lo = Math.min(s.x, ex);
+    const hi = Math.max(s.x, ex);
+    // 真横の道に、並びの部隊がいない（方円の内側のように、横にも守り手がいる形を外す）
+    return !row.some((r) => Math.abs(r.y - s.y) < 0.5 && r.x > lo && r.x < hi);
+  };
+  const tx = (ctx.snap[d.target as number] as Snap).x;
+  const cost = (ex: number): number => Math.abs(ex - s.x) + Math.abs(tx - ex);
+  const exits = [xL - off, xR + off].filter(open);
+  if (exits.length === 0) return null;
+  if (exits.length === 1) return exits[0] as number;
+  const [a, b] = exits as [number, number];
+  const ca = cost(a);
+  const cb = cost(b);
+  if (Math.abs(ca - cb) > 1e-9) return ca < cb ? a : b;
+  // 同じなら、自軍から見て左（陣営0は x の小さいほう、陣営1は大きいほう）
+  return leftSignX(u.side) < 0 ? a : b;
+}
+
+/**
+ * 回り込みの判断（§3.6.6 の 6 の 2・3）。decide のあとに部隊ごとに呼び、回り込むなら動く向きを真横に置き換える。
+ * 終える条件に当たったら、その刻みはふつうの決まりのまま動く。
+ */
+function planDetour(ctx: TickCtx, u: Unit, d: Decision): void {
+  if (u.status !== 'active' || isGate(u)) return;
+  const s = ctx.snap[u.id] as Snap;
+  if (u.detourX !== null) {
+    const rest = Math.abs(u.detourX - s.x);
+    if (!d.advMove || rest <= 1e-9 || u.detourTicks >= T.detourMaxTicks) {
+      u.detourX = null;
+      u.detourTicks = 0;
+      u.advMoves = [];
+      return;
+    }
+  } else {
+    if (!d.advMove) return;
+    const exit = detourExit(ctx, u, d);
+    if (exit === undefined) return;
+    if (exit === null) {
+      u.advMoves = [];
+      return;
+    }
+    u.detourX = exit;
+    u.detourTicks = 0;
+  }
+  const dx = (u.detourX as number) - s.x;
+  setDir(d, dx, 0, Math.abs(dx));
+  u.detourTicks++;
+  d.detouring = true;
 }
 
 /**
@@ -988,6 +1106,12 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   if (state.outcome) return events;
   const t = state.tick;
   const n = state.units.length;
+  // 回り込みの項目（§3.6.6）がない古い状態は、空・null・0 として扱う
+  for (const u of state.units) {
+    if (!Array.isArray(u.advMoves)) u.advMoves = [];
+    if (typeof u.detourX !== 'number') u.detourX = null;
+    if (typeof u.detourTicks !== 'number') u.detourTicks = 0;
+  }
   const moraleDelta = new Array<number>(n).fill(0);
 
   // ① 号令を受け付ける（予定された号令を先に、続けて渡された号令を配列の順に）
@@ -1022,8 +1146,9 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   const eps = hasTerrain(state.field) ? 1e-9 : 0;
   const ctx: TickCtx = { state, snap, t, walls, gateUp, eps };
 
-  // ③ 狙いと動く向きを決める
+  // ③ 狙いと動く向きを決める。続けて、守備の味方の並びを回り込むかを決める（§3.6.6）
   const decisions = state.units.map((u) => decide(ctx, u));
+  for (const u of state.units) planDetour(ctx, u, decisions[u.id] as Decision);
   for (const u of state.units) {
     const d = decisions[u.id] as Decision;
     if (u.status === 'active') u.target = d.target;
@@ -1071,6 +1196,13 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
       if (u.huntMoves.length > T.huntStuckTicks) u.huntMoves.shift();
     } else if (u.huntMoves.length > 0) {
       u.huntMoves = [];
+    }
+    // 守備の味方にふさがれたかの判定：ふつうの前へ進む動きをした刻み（回り込み中を除く）に動いた分を、直近の detourStuckTicks 刻みぶん持つ
+    if (u.status === 'active' && d.advMove && !d.detouring) {
+      u.advMoves.push([u.x - s.x, u.y - s.y]);
+      if (u.advMoves.length > T.detourStuckTicks) u.advMoves.shift();
+    } else if (u.advMoves.length > 0) {
+      u.advMoves = [];
     }
   }
 

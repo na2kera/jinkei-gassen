@@ -147,6 +147,12 @@ export interface Unit {
   huntStuckOn: number | null;
   /** 本陣狙い：ぶつかり続けている間に回る側。動きたい向きの左が 1、右が -1、未定は 0 */
   slideSign: 1 | -1 | 0;
+  /** 前へ進む動き（§3.6.6）：直近の刻みに実際に動いた分 [dx, dy]（守備の味方にふさがれたかの判定に使う。最大 detourStuckTicks 個） */
+  advMoves: [number, number][];
+  /** 守備の味方の並びを回り込む途中なら、向かう出口の x。回り込んでいなければ null（§3.6.6） */
+  detourX: number | null;
+  /** 回り込みを始めてからの刻み数（回り込んでいなければ 0） */
+  detourTicks: number;
   /** 最後に損害を受けた刻み。まだなら null */
   lastHitTick: number | null;
   /** 敗走を始めた刻み。敗走していなければ null */

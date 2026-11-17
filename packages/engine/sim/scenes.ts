@@ -237,9 +237,12 @@ export function a5(seeds = SEEDS_40): A5Result {
 
 // ------------------------------------------------------------ A8
 // 号令ごとの場面。どれも、ふつうの初期状態から始まり、号令を出す刻みを決めておく。号令を出すのは陣営0。
-// 突撃：陣営0は鶴翼（R15）、陣営1は偃月（R15）。8秒に全軍突撃。
-//       出さないと、鶴翼の中央の盾兵（守備）は動かず、両翼が崩れたあと時間切れで負ける（種1000：残り 6% 対 30%）。
-//       出すと、中央の盾兵も前へ出て戦いに加わり、敵の本陣まで押し込んで討つ（種1000：132秒で本陣）。
+// 突撃：陣営0は偃月（R15）、陣営1は鋒矢（R15）。8秒に全軍突撃（2026-11-17 に替えた。design §3.6.6）。
+//       出さないと、鋒矢の軸の盾兵が偃月の中央を抜けて本陣を討つ（種40個すべて hq、平均 72.6 秒）。
+//       出すと、ぶつかった直後の10秒の攻撃が 1.3 倍になり、偃月の歩兵と弓兵が鋒矢の矢じりと軸を先に崩す（与えた損害の平均：弓兵 380 → 551、歩兵 189 → 256）。
+//       盾兵は本陣に届かず、鋒矢は全滅する（40個すべて wipeout）。どちらの場合も、守備の味方にふさがれる部隊も時間切れもない。刻み 6〜15 秒で出しても 40 個すべて勝つ。
+//       前の場面（鶴翼 対 偃月）は、盾兵の後ろでふさがれていた弓兵を突撃が押し出していただけだったので、回り込みの決まりを足したときに替えた。
+//       T10 の記録の「A8 charge」は、前の場面の配置のまま残している（A8 のテストの場面とは別）。
 // 堅守：陣営0は鶴翼（R15）、陣営1は魚鱗（R15）。6秒に中央（4〜7列）へ堅守。
 //       中央の翼に入る、両翼の内側の歩兵が魚鱗の先と組み合っている。出さないと崩れて負ける（種1000：103秒で壊滅）。
 //       出すと、その場で踏みとどまって崩れず、勝ちに変わる（種1000：58秒で壊滅させて勝ち）。
@@ -250,7 +253,7 @@ export function a5(seeds = SEEDS_40): A5Result {
 export type A8Kind = 'charge' | 'brace' | 'retreat';
 
 export const A8_ORDER_TICK: Record<A8Kind, number> = { charge: 80, brace: 60, retreat: 50 };
-export const A8_TEMPLATES: Record<'charge' | 'brace', [TemplateId, TemplateId]> = { charge: ['crane', 'crescent'], brace: ['crane', 'scale'] };
+export const A8_TEMPLATES: Record<'charge' | 'brace', [TemplateId, TemplateId]> = { charge: ['crescent', 'arrow'], brace: ['crane', 'scale'] };
 
 export function a8Setup(kind: A8Kind, seed: number): BattleSetup {
   if (kind === 'charge' || kind === 'brace') {

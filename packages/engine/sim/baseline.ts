@@ -1,13 +1,34 @@
 // T10 の記録を書き出す道具。最初は地形を入れる前のコミット（4b3a90b）で動かし、2026-11-17 に本陣狙いの直しのために作り直した
 // （3つめの引数に、作り直した理由を書く）。平地の戦いを変える直しをしない限り、動かさない。
 //   node --experimental-strip-types --no-warnings sim/baseline.ts <コミット> <日付> [作り直した理由]
-import { writeFileSync } from 'node:fs';
+// 平地の決まりを直して、決まった戦いだけが変わるときは、次の道を使う（design §3.6.6「記録の作り直し方」）。
+// いまの記録の setup・orders・stateKeys・unitKeys をそのまま使い、名前を挙げた戦いの checkpoints・ticks・final だけを流し直して書き換える。
+// STAGES やひな形から設定を作り直さないので、面を変えたあとでも、記録の中の「面 1-2 の見本」などの設定は変わらない。
+//   node --experimental-strip-types --no-warnings sim/baseline.ts --redo <新しい note> <戦いの名前> [<戦いの名前> ...]
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createBattle, STAGES, stageSetupWith } from '../src/index.ts';
 import { matchupSetup, SEEDS_10, TEMPLATE_IDS } from './lib.ts';
 import { a8Order, a8Setup, A8_ORDER_TICK, A11_DEFENSE, A11_OFFENSE, allHold } from './scenes.ts';
 import { applyTemplate, plainField } from '../src/index.ts';
 import { playT10, type T10Battle, type T10File } from './t10.ts';
 
+const FIXTURE = 'test/fixtures/t10-baseline.json';
+
+function redo(): void {
+  const [note, ...names] = process.argv.slice(3);
+  if (!note || names.length === 0) throw new Error('使い方: sim/baseline.ts --redo <新しい note> <戦いの名前> ...');
+  const file = JSON.parse(readFileSync(FIXTURE, 'utf8')) as T10File;
+  for (const name of names) if (!file.battles.some((b) => b.name === name)) throw new Error(`記録にない戦い: ${name}`);
+  const out: T10File = {
+    ...file,
+    note,
+    battles: file.battles.map((b) => (names.includes(b.name) ? { name: b.name, setup: b.setup, orders: b.orders, ...playT10(b, file.stateKeys, file.unitKeys) } : b)),
+  };
+  writeFileSync(FIXTURE, JSON.stringify(out));
+  console.log(`${names.length} 戦を流し直した（${names.join('、')}）`);
+}
+
+function full(): void {
 const commit = process.argv[2] ?? '(不明)';
 const battles: T10Battle[] = [];
 // 総当たりから10戦：ひな形の組を順にずらして選び、種も順に使う
@@ -50,5 +71,9 @@ const out: T10File = {
   unitKeys,
   battles: battles.map((b) => ({ name: b.name, setup: JSON.parse(JSON.stringify(b.setup)), orders: b.orders, ...playT10(b, stateKeys, unitKeys) })),
 };
-writeFileSync('test/fixtures/t10-baseline.json', JSON.stringify(out));
+writeFileSync(FIXTURE, JSON.stringify(out));
 console.log(`${out.battles.length} 戦を書き出した（${out.battles.map((b) => b.ticks).join(', ')} 刻み）`);
+}
+
+if (process.argv[2] === '--redo') redo();
+else full();
