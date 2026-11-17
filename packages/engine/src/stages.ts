@@ -48,7 +48,8 @@ export const STAGES: Stage[] = [
     hint: '敵の騎兵は、どこを通る？',
     field: plainField(),
     roster: { hq: 1, infantry: 5, shield: 3 },
-    enemy: [hq(5, 0), ...at('cavalry', 'advance', [3, 4, 5, 6], 4), ...at('infantry', 'hold', [3, 4, 5, 6], 2)],
+    // 騎兵3（列 3〜5、行 3）が先に当たり、歩兵4（列 4〜7、行 2）があとから来る。どちらも前進（2026-11-17 に作り直した。design §3.10）
+    enemy: [hq(5, 0), ...at('cavalry', 'advance', [3, 4, 5], 3), ...at('infantry', 'advance', [4, 5, 6, 7], 2)],
     win: { type: 'defeat' },
     allow: BASIC,
     solution: [hq(5, 14), ...at('shield', 'hold', [3, 4, 5], 10), ...at('infantry', 'advance', [1, 2, 6, 7, 8], 11)],
