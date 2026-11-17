@@ -43,21 +43,22 @@ describe('1戦の通し', () => {
 
     await A.waitRoom((r) => r.phase === 'battle', 5000, 'battle');
     const [resA, resB] = await Promise.all([A.waitMsg((m) => m.type === 'result', { ms: 20_000 }), B.waitMsg((m) => m.type === 'result', { ms: 20_000 })]);
-    // 全部隊が守備どうしは時間切れの引き分け
+    // 全部隊が守備どうしは、開戦から 10 秒（100 刻み）で膠着の引き分け（design §3.6.4）
     expect(resA.winner).toBe('draw');
-    expect(resA.reason).toBe('timeout');
+    expect(resA.reason).toBe('stalemate');
+    expect(resA.summary.seconds).toBe(10);
     expect(resA.score).toEqual([0, 0, 1]);
     expect(resB.score).toEqual([0, 0, 1]);
     expect(resA.battleNo).toBe(1);
     // 決着の刻みの snap が result より前に届く
     const lastSnap = A.last('snap');
     expect(lastSnap.outcome).not.toBeNull();
-    expect(lastSnap.tick).toBe(300);
+    expect(lastSnap.tick).toBe(100);
     expect(lastSnap.events.some((e) => e.type === 'end')).toBe(true);
     // snap の刻みは前に進むだけ。間隔はふつう2刻み（遅れを取り戻す呼び出しでは最大5刻み）
     const ticks = A.of('snap').map((s) => s.tick);
     for (let i = 1; i < ticks.length; i++) expect(ticks[i]).toBeGreaterThan(ticks[i - 1]);
-    expect(ticks.length).toBeGreaterThan(300 / 6);
+    expect(ticks.length).toBeGreaterThan(100 / 6);
     await A.waitRoom((r) => r.phase === 'result');
 
     // 違う battleNo の rematch は効かない

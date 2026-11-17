@@ -266,7 +266,10 @@ export function army(cells) {
   return cells.map(([kind, col, row, stance]) => ({ kind, col, row, stance }));
 }
 
-/** 全部隊が守備の軍（必ず時間切れの引き分けになる、design §3.9 A11）。予算 36 以内 */
+/**
+ * 全部隊が守備の軍。予算 36 以内。この軍どうしは、だれも攻めず動かないので、開戦から 10 秒（100 刻み）で膠着の引き分けになる
+ * （design §3.6.4、§3.9 A11）。maxTicks が 100 以下なら時間切れの引き分け
+ */
 export function holdArmy() {
   return army([
     ['hq', 5, 15, 'hold'],
@@ -280,6 +283,19 @@ export function holdArmy() {
     ['archer', 4, 13, 'hold'],
     ['archer', 6, 13, 'hold'],
   ]);
+}
+
+/**
+ * 攻撃が続いて時間切れになる組（design §3.9 の「この決まりで意味が変わる、いまあるテストと集計」）。
+ * 盾の壁（本陣と盾兵12、全部隊が守備）を、本陣と弓兵1（前進）の軍が端から1部隊ずつ撃ち続ける。弓兵は盾兵の近接の距離に入らず、
+ * 盾兵は撃たれても持ち場を離れないので、毎刻みだれかが撃つか動こうとしていて膠着にならず、3分では決着しない。
+ * engine で種400個を流して、すべて 1800 刻みの時間切れ（弓兵の側の勝ち）になることを確かめた（盾の壁の側が翼ごとに堅守を3回出しても同じ）
+ */
+export function shieldWallArmy() {
+  return army([['hq', 5, 15, 'hold'], ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((c) => ['shield', c, 10, 'hold'])]);
+}
+export function loneArcherArmy() {
+  return army([['hq', 5, 15, 'hold'], ['archer', 5, 10, 'advance']]);
 }
 
 /** 部隊を名前つきの形に戻す（PackedUnit の並び、protocol.ts） */

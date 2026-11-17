@@ -1,7 +1,7 @@
 // 境目のテスト：両者の不在のあとのアラーム、各段階での作り直し、決まりを破った接続、部屋の世代、書き込みの回数、回数の上限。
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client, createRoom, holdArmy, postRoom, randomPid, setupPair, sleep, startServer, testRoute, upgradeStatus } from './helpers.mjs';
+import { Client, createRoom, holdArmy, loneArcherArmy, postRoom, shieldWallArmy, randomPid, setupPair, sleep, startServer, testRoute, upgradeStatus } from './helpers.mjs';
 
 let server;
 beforeAll(async () => {
@@ -206,8 +206,9 @@ describe('書き込みの回数', () => {
   it('最長（1800刻み）の1戦で、保存とアラームの書き込みを数える', async () => {
     const { A, B, code } = await setupPair(server.base, { tickMs: 5, revealMs: 200, maxTicks: 1800, setupMs: 30_000 });
     const before = (await testRoute(server.base, code, 'state')).counts;
-    A.send({ type: 'ready', army: holdArmy() });
-    B.send({ type: 'ready', army: holdArmy() });
+    // 守備どうしは 10 秒で膠着になるので、攻撃が続いて時間切れになる組で測る（A は盾の壁、B は弓兵1）
+    A.send({ type: 'ready', army: shieldWallArmy() });
+    B.send({ type: 'ready', army: loneArcherArmy() });
     await A.waitRoom((r) => r.phase === 'battle', 10_000, 'battle');
     // 号令を3回使う（号令を受け付けた刻みは別に書く）
     for (const target of ['left', 'center', 'right']) {
@@ -216,6 +217,7 @@ describe('書き込みの回数', () => {
     }
     const res = await A.waitMsg((m) => m.type === 'result', { ms: 60_000 });
     expect(res.summary.reason).toBe('timeout');
+    expect(res.summary.seconds).toBe(180);
     const after = (await testRoute(server.base, code, 'state')).counts;
     const put = after.put - before.put;
     const alarmSet = after.alarmSet - before.alarmSet;

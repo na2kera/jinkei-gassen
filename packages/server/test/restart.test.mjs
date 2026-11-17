@@ -1,9 +1,11 @@
 // 再開：戦闘中に Durable Object が作り直されても、保存した刻みから続き（追いかけない）、決着まで進み、成績が1回だけ足される。
 // 作り直し方は2つ。(1) テスト用の経路から ctx.abort() を呼ぶ（見張りのアラームだけで再開することを見る）。
 // (2) 開発サーバーを止めて起動し直す（メモリ・接続・setInterval がすべて消える。超富豪の restart.test.mjs と同じ）。
+// 守備どうしは 10 秒で膠着になる（design §3.6.4）ので、作り直しをまたいで長く続く戦いには、攻撃が続いて時間切れになる組
+// （A は盾の壁、B は弓兵1。B の勝ち）を使う。膠着の時計が作り直しをまたいで続くことは、守備どうしの戦いで別に見る。
 
 import { afterAll, describe, expect, it } from 'vitest';
-import { Client, holdArmy, setupPair, sleep, startServer, testRoute } from './helpers.mjs';
+import { Client, holdArmy, loneArcherArmy, setupPair, shieldWallArmy, sleep, startServer, testRoute } from './helpers.mjs';
 
 const PORT = 8803;
 let server;
@@ -24,8 +26,8 @@ describe('再開', () => {
     server = await startServer({ port: PORT });
     const timing = { tickMs: 20, revealMs: 200, maxTicks: 700, setupMs: 30_000, watchdogMs: 1000 };
     const { A, B, code } = await setupPair(server.base, timing);
-    A.send({ type: 'ready', army: holdArmy() });
-    B.send({ type: 'ready', army: holdArmy() });
+    A.send({ type: 'ready', army: shieldWallArmy() });
+    B.send({ type: 'ready', army: loneArcherArmy() });
     await A.waitMsg((m) => m.type === 'snap' && m.tick >= 100, { ms: 20_000 });
     // 号令を1つ使っておく（作り直されても、使った回数が巻き戻らない）
     A.send({ type: 'order', battleNo: A.room.battleNo, target: 'all', kind: 'brace' });
@@ -57,14 +59,15 @@ describe('再開', () => {
     expect(firstAfter.ordersLeft[0]).toBe(2);
 
     const [ra, rb] = await Promise.all([a.waitMsg((m) => m.type === 'result', { ms: 30_000 }), b.waitMsg((m) => m.type === 'result', { ms: 30_000 })]);
-    expect(ra.winner).toBe('draw');
-    expect(ra.score).toEqual([0, 0, 1]);
-    expect(rb.score).toEqual([0, 0, 1]);
+    expect(ra.winner).toBe(1);
+    expect(ra.reason).toBe('timeout');
+    expect(ra.score).toEqual([0, 1, 0]);
+    expect(rb.score).toEqual([0, 1, 0]);
     // アラームがさらに呼ばれても、成績は増えない
     await testRoute(server.base, code, 'alarm');
     await testRoute(server.base, code, 'alarm');
     const fin = await testRoute(server.base, code, 'state');
-    expect(fin.score).toEqual([0, 0, 1]);
+    expect(fin.score).toEqual([0, 1, 0]);
     expect(fin.phase).toBe('result');
     expect(a.of('result').length).toBe(1);
     a.close();
@@ -74,8 +77,8 @@ describe('再開', () => {
   it('開発サーバーを起動し直しても、入り直した人の接続で保存した刻みから続き、成績は1回だけ足される', async () => {
     const timing = { tickMs: 20, revealMs: 200, maxTicks: 700, setupMs: 30_000, watchdogMs: 1000 };
     const { A, B, code } = await setupPair(server.base, timing);
-    A.send({ type: 'ready', army: holdArmy() });
-    B.send({ type: 'ready', army: holdArmy() });
+    A.send({ type: 'ready', army: shieldWallArmy() });
+    B.send({ type: 'ready', army: loneArcherArmy() });
     await A.waitMsg((m) => m.type === 'snap' && m.tick >= 100, { ms: 20_000 });
     const lastTickBefore = A.last('snap').tick;
     const dir = server.persistDir;
@@ -94,11 +97,42 @@ describe('再開', () => {
     expect(first.tick).toBeGreaterThanOrEqual(lastTickBefore - SAVE_SLACK);
     expect(first.tick).toBeLessThanOrEqual(lastTickBefore + 30);
     const r = await A2.waitMsg((m) => m.type === 'result', { ms: 30_000 });
-    expect(r.score).toEqual([0, 0, 1]);
+    expect(r.winner).toBe(1);
+    expect(r.score).toEqual([0, 1, 0]);
     await sleep(300);
-    expect((await testRoute(server.base, code, 'state')).score).toEqual([0, 0, 1]);
+    expect((await testRoute(server.base, code, 'state')).score).toEqual([0, 1, 0]);
     A2.close();
     B2.close();
+  });
+
+  it('保存した膠着の時計は、再開のあとも続く：守備どうしを時計の途中で作り直しても、開戦から 10 秒（刻み 99）で膠着の引き分けになる', async () => {
+    // 時計を作り直しのときに 0 に戻すと、終わるのは「再開した刻み + 100」になる。保存した時計が続けば、刻み 99 で終わる
+    const timing = { tickMs: 50, revealMs: 200, maxTicks: 1800, setupMs: 30_000, watchdogMs: 1000 };
+    const { A, B, code } = await setupPair(server.base, timing);
+    A.send({ type: 'ready', army: holdArmy() });
+    B.send({ type: 'ready', army: holdArmy() });
+    await A.waitMsg((m) => m.type === 'snap' && m.tick >= 45, { ms: 20_000 });
+    const before = await testRoute(server.base, code, 'state');
+    const lastTickBefore = A.last('snap').tick;
+    expect(lastTickBefore).toBeLessThan(80);
+    await testRoute(server.base, code, 'abort');
+    const abortedAt = Date.now();
+    const a = await ensureConnected(server.base, A);
+    const b = await ensureConnected(server.base, B);
+    const firstAfter = await a.waitMsg((m) => m.type === 'snap' && m.receivedAt > abortedAt, { ms: 10_000 });
+    const after = await testRoute(server.base, code, 'state');
+    expect(after.instance).not.toBe(before.instance);
+    // 作り直しのあと、保存した刻み（20刻みごと）から続いている。まだ決着していない
+    expect(firstAfter.tick).toBeGreaterThanOrEqual(lastTickBefore - SAVE_SLACK);
+    expect(firstAfter.tick).toBeLessThan(100);
+    expect(firstAfter.outcome).toBeNull();
+    const r = await a.waitMsg((m) => m.type === 'result', { ms: 30_000 });
+    expect(r.winner).toBe('draw');
+    expect(r.reason).toBe('stalemate');
+    expect(r.summary.seconds).toBe(10);
+    expect(a.last('snap').outcome).toEqual({ winner: 'draw', reason: 'stalemate', tick: 99 });
+    a.close();
+    b.close();
   });
 });
 
