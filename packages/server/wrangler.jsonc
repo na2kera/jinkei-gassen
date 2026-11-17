@@ -8,9 +8,9 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
   // 送信元（IP）ごとの回数の上限。部屋の作成の連打と、4桁のコードの総当たりを抑える。
-  // 拠点（Cloudflare の場所）ごとのおおよその数で、厳密ではない。namespace_id はこのアカウントの中で一意な整数
+  // 拠点（Cloudflare の場所）ごとのおおよその数で、厳密ではない。namespace_id はこのアカウントの中で一意な整数。同じ番号をほかの Worker が使うと回数を共有してしまうので、ほかのプロジェクトと重ならない番号にする
   "ratelimits": [
-    { "name": "CREATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
-    { "name": "JOIN_LIMITER", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } }
+    { "name": "CREATE_LIMITER", "namespace_id": "742101", "simple": { "limit": 10, "period": 60 } },
+    { "name": "JOIN_LIMITER", "namespace_id": "742102", "simple": { "limit": 30, "period": 60 } }
   ]
 }
