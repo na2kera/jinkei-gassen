@@ -19,7 +19,10 @@ export function runStage(stage: Stage, placements: Placement[], seed: number, on
 export interface StageStats {
   wins: number;
   starsMean: number;
+  /** 判定に使う割合（remaining）の平均 */
   remainingMean: number;
+  /** 星に使う割合（remainingForStars。呼ばなかった遊軍を無傷として数える。design §7.5）の平均 */
+  remainingForStarsMean: number;
   secondsMean: number;
 }
 
@@ -27,15 +30,17 @@ export function stageStats(stage: Stage, placements: Placement[], seeds = STAGE_
   let wins = 0;
   let stars = 0;
   let rem = 0;
+  let remS = 0;
   let sec = 0;
   for (const seed of seeds) {
     const sm = summarize(runStage(stage, placements, seed, undefined, myOrders));
     if (sm.winner === 0) wins++;
     stars += starsFor(sm, 0);
     rem += sm.remaining[0];
+    remS += sm.remainingForStars[0];
     sec += sm.seconds;
   }
-  return { wins, starsMean: stars / seeds.length, remainingMean: rem / seeds.length, secondsMean: sec / seeds.length };
+  return { wins, starsMean: stars / seeds.length, remainingMean: rem / seeds.length, remainingForStarsMean: remS / seeds.length, secondsMean: sec / seeds.length };
 }
 
 /** 見本の配置と見本の号令で */

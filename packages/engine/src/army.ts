@@ -8,6 +8,7 @@ import {
   type Field,
   type Kind,
   type Placement,
+  type ReserveSetup,
   type Side,
   type Stance,
   type Wing,
@@ -78,6 +79,19 @@ export function stanceAllowed(kind: Kind, stance: Stance): boolean {
   return true;
 }
 
+/**
+ * 遊軍の値を調べる（design §7.2）。誤りがなければ空の配列。engine・面・server のどこからも、これを呼ぶ。
+ * オブジェクトであること、兵種が本陣以外の4つのどれか、方針が知っている文字列で、その兵種が選べること。
+ * stanceAllowed は本陣以外ならいつも true を返すので、isStance で知らない文字列を先に落とす。
+ */
+export function reserveErrors(reserve: unknown): ArmyError[] {
+  if (!isObject(reserve) || !isKind(reserve.kind) || reserve.kind === 'hq') return [{ code: 'invalid_kind', message: '遊軍の兵種が正しくない（本陣は遊軍にできない）' }];
+  if (!isStance(reserve.stance) || !stanceAllowed(reserve.kind, reserve.stance)) {
+    return [{ code: 'invalid_stance', message: '遊軍の方針が正しくない' }];
+  }
+  return [];
+}
+
 /** 配置の値段の合計。costs を省略すると DEFAULT_COSTS（assumptions S1）を使う */
 export function armyCost(placements: readonly Placement[], costs: Partial<Record<Kind, number>> = DEFAULT_COSTS): number {
   let sum = 0;
@@ -95,13 +109,17 @@ export function inZone(col: number, row: number, zone: Zone): boolean {
 /**
  * 配置を検査する。誤りがなければ空の配列。
  * 見るもの：兵種・方針・マスの値が正しいか、エリアの内か、マスの重なり、本陣の数、予算、部隊数。
+ * limits.reserve（遊軍）があれば、その値も調べ（reserveErrors）、部隊数と予算に含めて数える。本陣以外の部隊の下限は、戦場の部隊だけで数える。
  */
 export function validateArmy(placements: readonly Placement[], zone: Zone, limits: ArmyLimits): ArmyError[] {
   // どんな値が来ても例外を投げない。配列の形と数の上限を、要素を走査する前に調べる
   if (!isDenseArray(placements)) return [{ code: 'invalid_cell', message: '配置は穴のない配列で書く' }];
   const lim: Partial<ArmyLimits> = isObject(limits) ? limits : {};
   const maxUnits = isInt(lim.maxUnits) && lim.maxUnits >= 0 ? lim.maxUnits : MAX_UNITS;
-  if (placements.length > maxUnits) return [{ code: 'too_many_units', message: `部隊が多すぎる: ${placements.length} > ${maxUnits}` }];
+  // 遊軍は null と省略を「なし」とする。値があれば、正しくなくても1部隊として数える（数の上限を先に調べるため）
+  const reserve: unknown = lim.reserve ?? null;
+  const total = placements.length + (reserve === null ? 0 : 1);
+  if (total > maxUnits) return [{ code: 'too_many_units', message: `部隊が多すぎる: ${total} > ${maxUnits}` }];
   const z: Zone | null =
     isObject(zone) && isInt(zone.col) && isInt(zone.row) && isInt(zone.width) && isInt(zone.height) ? zone : null;
   const errors: ArmyError[] = [];
@@ -138,9 +156,11 @@ export function validateArmy(placements: readonly Placement[], zone: Zone, limit
   if (others < minUnits) {
     errors.push({ code: 'too_few_units', message: `本陣以外の部隊が少なすぎる: ${others} < ${minUnits}` });
   }
+  if (reserve !== null) errors.push(...reserveErrors(reserve));
   if (lim.budget !== undefined && errors.length === 0) {
     const costs = isObject(lim.costs) ? lim.costs : DEFAULT_COSTS;
-    const cost = armyCost(placements, costs);
+    const r = reserve as ReserveSetup | null;
+    const cost = armyCost(r ? [...placements, { kind: r.kind, col: 0, row: 0, stance: r.stance }] : placements, costs);
     if (!(typeof lim.budget === 'number' && cost <= lim.budget)) errors.push({ code: 'over_budget', message: `予算を超えている: ${cost} > ${String(lim.budget)}` });
   }
   return errors;

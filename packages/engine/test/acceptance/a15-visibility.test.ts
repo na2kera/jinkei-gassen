@@ -10,6 +10,7 @@ const EVENT_KEYS: Record<BattleEvent['type'], string[]> = {
   destroyed: ['type', 'tick', 'unit'],
   impact: ['type', 'tick', 'attacker', 'defender', 'facing'],
   end: ['type', 'tick', 'winner', 'reason'],
+  reserve: ['type', 'tick', 'side', 'unit', 'from'],
 };
 
 describe('A15 隠す情報が漏れない', () => {

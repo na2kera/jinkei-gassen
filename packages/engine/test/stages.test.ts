@@ -132,7 +132,7 @@ describe('validateStageArmy', () => {
 });
 
 describe('starsFor', () => {
-  const sum = (winner: 0 | 1 | 'draw', r0: number): BattleSummary => ({ winner, reason: 'wipeout', seconds: 10, remaining: [r0, 0.2], units: [], firstBroken: [null, null] });
+  const sum = (winner: 0 | 1 | 'draw', r0: number): BattleSummary => ({ winner, reason: 'wipeout', seconds: 10, remaining: [r0, 0.2], units: [], firstBroken: [null, null], unusedReserve: [null, null], remainingForStars: [r0, 0.2] });
   it('勝ったときだけ星が付く。残った兵の割合 0.7 以上で3、0.5 以上で2、それ未満で1（境目）', () => {
     expect(STAR_THRESHOLDS).toEqual([0.5, 0.7]);
     expect(starsFor(sum(0, 0.7), 0)).toBe(3);

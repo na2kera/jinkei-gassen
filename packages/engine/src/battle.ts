@@ -10,7 +10,8 @@ import { hasTerrain, terrainAllowsImpact, terrainArcherRange, terrainArrowClear,
 import { collapseBesideGate, pathLength, pushOutOfWalls, readWalls, routeTo, sideOfWall, wallsOfGate, type WallInfo } from './walls.ts';
 import { DT, KIND_STATS, T } from './tuning.ts';
 import { isDenseArray, isInt, isObject, isOrderKind, isOrderTarget, isSide, isTerrain, MAX_FIELD_SIDE, MAX_ORDERS_PER_STEP, MAX_SCRIPTED_ORDERS } from './input.ts';
-import { wingOf } from './army.ts';
+import { reserveErrors, wingOf } from './army.ts';
+import { isReserveFrom, reservesOf, summonReserve } from './reserve.ts';
 import {
   ORDER_KINDS,
   ORDER_TARGETS,
@@ -23,11 +24,16 @@ import {
   type Field,
   type OrderInput,
   type Placement,
+  type ReserveFrom,
+  type ReserveInput,
+  type ReserveState,
   type Result,
   type ScriptedOrder,
   type Side,
+  type Stance,
   type Unit,
   type UnitKind,
+  type Wing,
   type Zone,
 } from './types.ts';
 import type { KindStats } from './tuning.ts';
@@ -79,6 +85,46 @@ function leftSignX(side: Side): number {
 }
 
 /**
+ * 開戦時の部隊（と、呼ばれた遊軍・門）の初めの値。向きは敵の方向、持ち場はいまの位置。
+ * 迂回の端（flankEdgeX）は 0 にしておき、作った側で決める。項目の並びは状態の JSON の形になるので、変えない
+ */
+export function freshUnit(id: number, side: Side, kind: UnitKind, wing: Wing, x: number, y: number, stance: Stance, men: number): Unit {
+  const f = frontOf(side);
+  return {
+    id,
+    side,
+    kind,
+    wing,
+    x,
+    y,
+    fx: f.x,
+    fy: f.y,
+    men,
+    maxMen: men,
+    morale: T.moraleMax,
+    stance,
+    home: { x, y },
+    status: 'active',
+    goneReason: null,
+    target: null,
+    attacking: null,
+    order: null,
+    stats: { dealt: 0, taken: 0, flankDealt: 0, routsCaused: 0 },
+    flankPhase: 1,
+    flankEdgeX: 0,
+    runup: 0,
+    huntMoves: [],
+    huntStuckOn: null,
+    slideSign: 0,
+    advMoves: [],
+    detourX: null,
+    detourTicks: 0,
+    lastHitTick: null,
+    routTick: null,
+  };
+}
+
+/**
  * 戦闘を作る。setup はどんな値でもよく、正しくなければ例外を投げずにエラーを返す。
  * 作った状態は、決まった鍵だけでできていて、JSON にして戻しても同じになる。
  */
@@ -101,6 +147,27 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
       return bad('予定された号令が正しくない');
     }
     scripted.push({ tick: o.tick, side: o.side, target: o.target, kind: o.kind });
+  }
+  // 遊軍（§7.2）：長さ2の配列で、要素は null か reserveErrors を通るもの。書かなければ両方 null
+  const rawReserves: unknown = setup.reserves === undefined ? [null, null] : setup.reserves;
+  if (!isDenseArray(rawReserves) || rawReserves.length !== 2) return bad('遊軍は陣営ごとに1つ（長さ2の配列）で書く');
+  const reserves: [ReserveState | null, ReserveState | null] = [null, null];
+  for (const side of [0, 1] as const) {
+    const r: unknown = rawReserves[side];
+    if (r === null) continue;
+    if (reserveErrors(r).length > 0) return bad(`陣営${side}の遊軍が正しくない`);
+    const ok = r as { kind: ReserveState['kind']; stance: Stance };
+    reserves[side] = { kind: ok.kind, stance: ok.stance, used: false, unit: null, auto: null };
+  }
+  // 予定された遊軍：陣営ごとに1つまで、その陣営に遊軍がいること。開戦 5 秒より前の予定は、5 秒として扱う
+  const rawScriptedReserves: unknown = setup.scriptedReserves === undefined ? [] : setup.scriptedReserves;
+  if (!isDenseArray(rawScriptedReserves)) return bad('予定された遊軍は配列で書く');
+  for (const o of rawScriptedReserves) {
+    if (!isObject(o) || !isInt(o.tick) || o.tick < 0 || !isSide(o.side) || !isReserveFrom(o.from)) return bad('予定された遊軍が正しくない');
+    const r = reserves[o.side];
+    if (!r) return bad(`陣営${o.side}には遊軍がいないので、予定を書けない`);
+    if (r.auto) return bad(`陣営${o.side}の予定された遊軍は1つまで`);
+    r.auto = { tick: Math.max(o.tick, T.reserveMinTick), from: o.from };
   }
   const requireHq = setup.requireHq ?? true;
   // 城壁と門の形（§3.8）：城壁は戦場を横切る1行だけ、その行の1マスだけが切れ目で、そこに門を置く
@@ -125,7 +192,8 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
   if (gate) taken.set(`${gate.col},${gate.row}`, gate.side);
   for (const side of [0, 1] as const) {
     const zone = setup.skipZoneCheck === side ? whole : field.zones[side];
-    const errors = validateArmy(setup.armies[side] as Placement[], zone, { maxUnits: MAX_UNITS, requireHq });
+    // 部隊数の上限は、戦場の部隊 + 遊軍で数える（§7.2）
+    const errors = validateArmy(setup.armies[side] as Placement[], zone, { maxUnits: MAX_UNITS, requireHq, reserve: reserves[side] });
     if (errors.length === 0) {
       // 城壁のマスには置けない。両軍のマス（と門のマス）も重ならない
       (setup.armies[side] as Placement[]).forEach((pl, index) => {
@@ -144,41 +212,9 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
   for (const side of [0, 1] as const) {
     for (const p of setup.armies[side]) {
       const stats = statsOf(p.kind);
-      const f = frontOf(side);
       const x = p.col + 0.5;
       const y = p.row + 0.5;
-      units.push({
-        id: units.length,
-        side,
-        kind: p.kind,
-        wing: wingOf(p.col, field, side),
-        x,
-        y,
-        fx: f.x,
-        fy: f.y,
-        men: stats.men,
-        maxMen: stats.men,
-        morale: T.moraleMax,
-        stance: p.stance,
-        home: { x, y },
-        status: 'active',
-        goneReason: null,
-        target: null,
-        attacking: null,
-        order: null,
-        stats: { dealt: 0, taken: 0, flankDealt: 0, routsCaused: 0 },
-        flankPhase: 1,
-        flankEdgeX: 0,
-        runup: 0,
-        huntMoves: [],
-        huntStuckOn: null,
-        slideSign: 0,
-        advMoves: [],
-        detourX: null,
-        detourTicks: 0,
-        lastHitTick: null,
-        routTick: null,
-      });
+      units.push(freshUnit(units.length, side, p.kind, wingOf(p.col, field, side), x, y, p.stance, stats.men));
     }
   }
 
@@ -222,40 +258,10 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
   if (gate) {
     const gx = gate.col + 0.5;
     const gy = gate.row + 0.5;
-    const f = frontOf(gate.side);
     gateState = { ...gate, id: units.length };
-    units.push({
-      id: units.length,
-      side: gate.side,
-      kind: 'gate',
-      wing: 'center',
-      x: gx,
-      y: gy,
-      fx: f.x,
-      fy: f.y,
-      men: T.gateMen,
-      maxMen: T.gateMen,
-      morale: T.moraleMax,
-      stance: 'hold',
-      home: { x: gx, y: gy },
-      status: 'active',
-      goneReason: null,
-      target: null,
-      attacking: null,
-      order: null,
-      stats: { dealt: 0, taken: 0, flankDealt: 0, routsCaused: 0 },
-      flankPhase: 1,
-      flankEdgeX: gx,
-      runup: 0,
-      huntMoves: [],
-      huntStuckOn: null,
-      slideSign: 0,
-      advMoves: [],
-      detourX: null,
-      detourTicks: 0,
-      lastHitTick: null,
-      routTick: null,
-    });
+    const g = freshUnit(units.length, gate.side, 'gate', 'center', gx, gy, 'hold', T.gateMen);
+    g.flankEdgeX = gx;
+    units.push(g);
   }
 
   const state: BattleState = {
@@ -276,6 +282,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
     brokenLastTick: [],
     flankY,
     gate: gateState,
+    reserves,
   };
   return { ok: true, value: state };
 }
@@ -1115,12 +1122,14 @@ function pushEvent(events: BattleEvent[], e: BattleEvent): void {
  * state は「createBattle が作り、step だけが書き換え、JSON にして戻しただけのもの」を前提とし、中身の全検査はしない
  * （サーバーは利用者から状態を受け取らない）。orders は利用者の入力なので、配列でない・先頭の
  * MAX_ORDERS_PER_STEP 件より後ろ・形や名前が正しくない号令は無視し、状態を変えない。
+ * summons（遊軍を呼ぶ入力。§7.3）も号令と同じに扱う。省略すれば、いままでと同じ。
  */
-export function step(state: BattleState, orders: readonly OrderInput[]): BattleEvent[] {
+export function step(state: BattleState, orders: readonly OrderInput[], summons?: readonly ReserveInput[]): BattleEvent[] {
   const events: BattleEvent[] = [];
   if (state.outcome) return events;
   const t = state.tick;
-  const n = state.units.length;
+  // 遊軍（§7.2）がない古い状態は、両方 null として扱う
+  if (!Array.isArray(state.reserves) || state.reserves.length !== 2) state.reserves = [null, null];
   // 回り込みの項目（§3.6.6）がない古い状態は、空・null・0 として扱う
   for (const u of state.units) {
     if (!Array.isArray(u.advMoves)) u.advMoves = [];
@@ -1129,6 +1138,22 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
   }
   // 膠着の時計（§3.6.4）がない古い状態は、0 から数える。null（決まりを切った戦い）は null のまま
   if (typeof state.quietTicks !== 'number' && state.quietTicks !== null) state.quietTicks = 0;
+
+  // ⓪ 遊軍を呼ぶ（§7.3。予定された遊軍を先に、続けて渡された入力を配列の順に）。号令を受け付けるより前に、
+  // 部隊ごとの配列（moraleDelta・snap・decisions など）を作るより前に state.units を伸ばす。これより後ろで state.units を伸ばしてはいけない
+  for (const side of [0, 1] as const) {
+    const r = state.reserves[side];
+    // 現れるマスがなくて呼べなかったときは、次の刻みにもう一度試す（used のままにならないので、そのまま毎刻み試すことになる）
+    if (r && !r.used && r.auto && t >= r.auto.tick) summonReserve(state, side, r.auto.from, events);
+  }
+  if (Array.isArray(summons)) {
+    const k = Math.min(summons.length, MAX_ORDERS_PER_STEP);
+    for (let i = 0; i < k; i++) {
+      const o: unknown = summons[i];
+      if (isObject(o) && isSide(o.side) && isReserveFrom(o.from)) summonReserve(state, o.side, o.from, events);
+    }
+  }
+  const n = state.units.length;
   const moraleDelta = new Array<number>(n).fill(0);
 
   // ① 号令を受け付ける（予定された号令を先に、続けて渡された号令を配列の順に）
@@ -1460,11 +1485,14 @@ export function step(state: BattleState, orders: readonly OrderInput[]): BattleE
 
 /**
  * 静かな刻み（§3.6.4）：だれも攻撃しておらず（門への攻撃も数える）、戦場にいる部隊（active と routing。門は除く）の
- * ③で決めた動く向き（回り込みを決めたあと）がすべて 0 で、刻みの終わりに active な部隊に効いている号令がなく、予定された号令も残っていない。
+ * ③で決めた動く向き（回り込みを決めたあと）がすべて 0 で、刻みの終わりに active な部隊に効いている号令がなく、予定された号令も、まだ呼んでいない予定された遊軍も残っていない。
  * 動いた距離ではなく、動こうとしたかで見る（味方に引っかかって少しずつ進む部隊を、止まっていると数えないため）。
  */
 function isQuietTick(state: BattleState, decisions: Decision[]): boolean {
   if (state.scriptedNext < state.scriptedOrders.length) return false;
+  // 予定された遊軍がまだ呼ばれていないあいだも、静かな刻みと数えない（§7.5。面の敵が遊軍を出す前に、膠着で終わらないように）。
+  // 予定のない呼ばない遊軍は、時計を止めない
+  for (const r of reservesOf(state)) if (r && r.auto && !r.used) return false;
   for (const u of state.units) {
     if (u.attacking !== null) return false;
     if (u.status === 'active' && u.order !== null) return false;
