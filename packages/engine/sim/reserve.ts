@@ -1,6 +1,7 @@
 // 遊軍の強さの測定（design §7.9 の R13）。
-//   pnpm sim reserve a [--free] [--jobs 8]        1人用：15 面の見本の配置から、本陣以外の1部隊を遊軍に回す
-//   pnpm sim reserve b [--jobs 8]                 対戦：ふるい（種 5）→ 上位を別の種 20 で測り直す → (c) 号令との組み合わせ
+//   pnpm sim reserve a [--jobs 8]      1人用：15 面の見本の配置から、本陣以外の1部隊を遊軍に回す（面の方針の制限を外した表も出す）
+//   pnpm sim reserve b [--jobs 8]      対戦：ふるい（種 2・陣営0だけ）→ 上位を別の種 20 で測り直す → 両軍が同じ使い方・(c) 号令との組み合わせ（種 5）
+//   pnpm sim reserve all               a と b の両方。--quick は道具を確かめるための小さな測定
 // 結果は --out のディレクトリ（既定は .reserve-out）に JSON で書き、表を画面に出す。
 //
 // 比べる相手（対照）は、いつも「同じ配置で、その部隊を遊軍に回さず、そのまま置いたとき」。
@@ -198,7 +199,7 @@ function stageRows(st: Stage, free: boolean): { control: StageControl; rows: Sta
 // ---------------------------------------------------------------- (b) 対戦
 
 /** 対戦の予算（36）に収まる配置。標準の手持ちから騎兵を1つ減らした PVP_RULES.standardRoster（値段 36 ちょうど）をひな形で並べる */
-function pvpArmy(t: TemplateId, field: Field, side: Side): Placement[] {
+export function pvpArmy(t: TemplateId, field: Field, side: Side): Placement[] {
   return applyTemplate(t, PVP_RULES.standardRoster, field.zones[side], side);
 }
 
@@ -206,7 +207,7 @@ function pvpArmy(t: TemplateId, field: Field, side: Side): Placement[] {
  * 抜く部隊を選ぶ。前の列は敵にいちばん近い行、後ろの列はいちばん遠い行、端は中央の列からいちばん離れた列。
  * 同じなら、前と後ろは中央の列に近いほう、端は前の行。それも同じなら、その陣営から見て左
  */
-function pickUnit(army: Placement[], kind: Kind, pos: Pos, side: Side, width: number): number {
+export function pickUnit(army: Placement[], kind: Kind, pos: Pos, side: Side, width: number): number {
   const fwd = (p: Placement): number => (side === 0 ? -p.row : p.row); // 大きいほど前
   const off = (p: Placement): number => Math.abs(p.col + 0.5 - width / 2);
   const left = (p: Placement): number => (side === 0 ? -p.col : p.col); // 大きいほど左
