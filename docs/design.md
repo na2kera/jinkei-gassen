@@ -1058,20 +1058,22 @@ export interface ScriptedReserve { tick: number; side: Side; from: ReserveFrom }
 
 // BattleSetup に足す
 reserves?: [ReserveSetup | null, ReserveSetup | null];
-scriptedReserves?: ScriptedReserve[]; // 面の敵（と、見本・測定の自軍）が呼ぶ予定。tick の昇順に並べ替えて持つ
+scriptedReserves?: ScriptedReserve[]; // 面の敵（と、見本・測定の自軍）が呼ぶ予定。陣営ごとに1つまで
 
 // BattleState に足す
 reserves: [ReserveState | null, ReserveState | null];
-scriptedReserves: ScriptedReserve[];
-scriptedReserveNext: number;
 
-/** used が true なら呼んだあと（unit は現れた部隊の id）。呼ぶ前は unit が null */
-export interface ReserveState { kind: Kind; stance: Stance; used: boolean; unit: number | null }
+/**
+ * used が true なら呼んだあと（unit は現れた部隊の id）。呼ぶ前は unit が null。
+ * auto は予定された遊軍（なければ null）。tick になったら from から呼ぶ
+ */
+export interface ReserveState { kind: Kind; stance: Stance; used: boolean; unit: number | null; auto: null | { tick: number; from: ReserveFrom } }
 
 // BattleEvent に足す
 | { type: 'reserve'; tick: number; side: Side; unit: number; from: ReserveFrom }
 
-// BattleView に足す（見る人の陣営のぶんだけ。viewer が 'both' なら両方。相手のぶんは項目ごと入れない）
+// BattleView に足す。見る人の陣営のぶんだけ値を入れ、相手のぶんはいつも null（viewer が 'both' なら両方入れる）。
+// 入れる値が1つもないとき（遊軍のない戦い、相手だけが遊軍を持つ戦い）は、項目ごと入れない（遊軍のない戦いの場面の形を、いままでと同じに保つ。A15）
 reserve?: [ReserveView | null, ReserveView | null];
 /** state: 'waiting' はまだ呼べない（開戦 5 秒まで）、'ready' は呼べる、'used' は呼んだあと */
 export interface ReserveView { kind: Kind; stance: Stance; state: 'waiting' | 'ready' | 'used' }
@@ -1084,9 +1086,10 @@ remainingForStars: [number, number];
 ```
 
 - `T.reserveMinTick = 50`（開戦から 5 秒）を `tuning.ts` に足す。いまある数字は変えない。
-- `createBattle` の検査：`reserves` は長さ2の配列で、要素は null か、兵種が本陣以外の4つ・方針が `stanceAllowed(kind, stance)` を満たすもの。`scriptedReserves` は配列（上限は予定された号令と同じ件数）で、tick は 0 以上の整数、side と from が正しい値。正しくなければ `invalid_setup`。
+- 遊軍の値の検査は、1つの関数（`reserveErrors(reserve)`）にまとめ、engine・面・server のどこからも同じものを呼ぶ：オブジェクトである、兵種が本陣以外の4つのどれか、方針が `isStance` を満たす（`stanceAllowed` は本陣以外ならいつも true を返すので、これだけでは知らない文字列を落とせない）、`stanceAllowed(kind, stance)` を満たす。
+- `createBattle` の検査：`reserves` は長さ2の配列で、要素は null か、上の検査を通るもの。`scriptedReserves` は配列で、陣営ごとに1つまで、その陣営に遊軍がいること、tick は 0 以上の整数、side と from が正しい値。正しくなければ `invalid_setup`。tick が `T.reserveMinTick` より小さい予定は、`T.reserveMinTick` として扱う。
 - 部隊数の上限（`MAX_UNITS`）は、戦場の部隊 + 遊軍で数える。`createBattle` は、戦場の部隊の数 + 遊軍の数が上限を超えたら `invalid_army`（`too_many_units`）を返す。
-- 古い状態（`reserves` のない保存された状態）は、`step` の初めに `reserves = [null, null]`、`scriptedReserves = []`、`scriptedReserveNext = 0` として扱う（`quietTicks` と同じやり方）。
+- 古い状態（`reserves` のない保存された状態）は、`step` の初めに `reserves = [null, null]` として扱う（`quietTicks` と同じやり方）。
 
 ### 7.3 呼ぶ
 
@@ -1095,7 +1098,7 @@ remainingForStars: [number, number];
 ```ts
 /** 遊軍を呼べるか（状態は変えない）。呼べないときは理由を返す */
 export function canSummon(state: BattleState, side: Side, from: ReserveFrom): Result<true>;
-/** 場面だけから、呼べるかを判定する（対戦の画面用。canOrderView と同じ考え方） */
+/** 場面だけから、呼べそうかを判定する（対戦の画面用）。見るのは、決着していないことと、自分の遊軍が 'ready' であることだけ。現れるマスがあるかまでは分からないので、押したあとに server から no_spawn_cell が返ることがある */
 export function canSummonView(view: BattleView, side: Side): boolean;
 /** step に遊軍の入力を足す。省略すれば、いままでと同じ */
 export function step(state: BattleState, orders: readonly OrderInput[], summons?: readonly ReserveInput[]): BattleEvent[];
@@ -1104,7 +1107,8 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
 - 呼べる条件：決着していない、その陣営に遊軍がいて `used` が false、`state.tick >= T.reserveMinTick`、現れるマスが見つかる（§7.4）。
 - エラーコードを足す：`no_reserve`（遊軍がいない・呼んだあと）、`reserve_not_ready`（開戦 5 秒まで）、`no_spawn_cell`（現れるマスがない）。from が正しくなければ `invalid_order`。
 - `step` の中の順番：**①号令を受け付ける前**に、遊軍を呼ぶ（予定された遊軍を先に、続けて渡された入力を配列の順に。1刻みに受け取る入力の数の上限は号令と同じ）。同じ刻みに両軍が呼んだときは、この順に1つずつ現れる（先に現れた部隊は、あとの部隊の「空いているマス」の判定に入る）。
-  - 先に呼ぶ理由：`moraleDelta` や `decisions` など部隊ごとの配列を作る前に `state.units` を伸ばすため（`n` と `moraleDelta` は、遊軍を足したあとに作る）。同じ刻みの号令は、現れたばかりの遊軍にもかかる。
+  - 先に呼ぶ理由：`moraleDelta`・`snap`・`decisions`・`anchors`・`newPos` など部隊ごとの配列を作る前に `state.units` を伸ばすため（`n` と `moraleDelta` は、遊軍を足したあとに作る。**これらを作ったあとに `state.units` を伸ばしてはいけない**）。門を末尾へ置き直す必要はない（いまある id は変わらない）。
+  - 同じ刻みに engine へ渡った号令は、現れたばかりの遊軍にもかかる（全軍あて、出た側の翼あて）。ただし、号令を受け付ける側（server の `canOrder`、1人用の `LocalBattleSource`、対戦の `canOrderView`）は、**その時点で戦場にいる部隊**で調べる。だれもいない翼へ遊軍を呼び、同じ刻みにその翼あての号令を出しても、号令は受け付けられない（遊軍が現れた次の刻みから受け付ける）。この 0.1 秒の差は、そのままにする。
 - 現れた部隊の値：
   - `id = state.units.length`、`side`、`kind`、`stance` は遊軍の設定どおり。`men = maxMen =` その兵種の初期値、`morale = T.moraleMax`、`status = 'active'`。
   - 位置は、現れるマスの中心。向きは、`frontOf(side)`（開戦時の部隊と同じく敵の方向）。
@@ -1112,11 +1116,12 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
   - `home` は現れた位置。`flankPhase = 2`、`flankEdgeX = 現れた x`（迂回の方針なら、すでに端にいるので「端に沿って進む」から始める）。そのほかの項目（`runup`、`huntMoves`、`advMoves`、`detourX` など）は、開戦時の部隊と同じ初期値。
   - `state.initialMen[side]` に、その兵数を足す（§7.5）。
   - `state.reserves[side]` を `used: true, unit: id` にし、出来事 `{ type: 'reserve', … }` を出す。
-- 呼べなかった入力は、黙って捨てる（号令と同じ。出来事を出さない）。予定された遊軍が、その刻みに呼べなかった（マスがない）ときは、次の刻みにもう一度試す（呼べるまで、毎刻み）。
+- 呼べなかった入力は、黙って捨てる（号令と同じ。出来事を出さない）。
+- 予定された遊軍（`auto`）：`state.tick >= auto.tick` で、まだ呼んでいなければ、毎刻み試す。現れるマスがなくて呼べなかったときだけ、次の刻みにもう一度試す。陣営ごとに別々に試す（片方が呼べなくても、もう片方を止めない）。人の入力で先に呼ばれたら、予定は使わない。
 
 ### 7.4 現れるマス
 
-- 行の候補：その陣営の「中央の線のすぐ自陣側」の行から、自陣の奥へ向かって順に。陣営0（下の側）は `row = height / 2` から `height − 1` へ、陣営1（上の側）は `row = height / 2 − 1` から `0` へ。
+- 行の候補：その陣営の「中央の線のすぐ自陣側」の行から、自陣の奥へ向かって順に。陣営0（下の側）は `row = Math.ceil(height / 2)` から `height − 1` へ、陣営1（上の側）は `row = Math.floor(height / 2) − 1` から `0` へ。高さが奇数の戦場では、まん中の行はどちらの候補にもならない。両軍の候補は、戦場を 180° 回すと重なる。
 - 列：その陣営から見た左右を、戦場の列に直す。陣営0の左は `col = 0`、右は `col = width − 1`。陣営1は逆（左が `width − 1`、右が `0`）。`wingOf` と同じ向き。
 - 候補のマスを上の順に見て、次をすべて満たす最初のマスに現れる：
   - 城壁（`wall`）のマスでない。
@@ -1131,7 +1136,8 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
 - 星（`starsFor`）：`summary.remainingForStars[side]` を読むように変える。`remainingForStars = (active な部隊の兵数の合計 + 呼ばなかった遊軍の兵数) ÷ (initialMen + 呼ばなかった遊軍の兵数)`。遊軍のない戦いでは `remaining` と同じ値になる。
 - `summary.remaining` の意味は変えない（判定に使う割合）。結果の画面の「残った兵」の表示は `remainingForStars` を使う（星の数と表示が食い違わないように）。
 - 全滅の判定（wipeout）と本陣の判定は変えない。戦場の部隊で決まる。呼ばなかった遊軍がいても、決着を止めない。
-- 膠着の時計（`isQuietTick`）：呼ばなかった遊軍は時計を止めない。ただし、**予定された遊軍が残っているあいだ**は、静かな刻みと数えない（予定された号令が残っているあいだと同じ扱い。面の敵が遊軍を出す前に、膠着で終わらないように）。
+- 膠着の時計（`isQuietTick`）：呼ばなかった遊軍は時計を止めない。ただし、**予定された遊軍（`auto`）がまだ呼ばれていないあいだ**は、静かな刻みと数えない（予定された号令が残っているあいだと同じ扱い。面の敵が遊軍を出す前に、膠着で終わらないように）。マスがふさがって呼べない状態が続いても、戦いは時間切れで終わる。
+- `starsFor` と結果の画面は、`remainingForStars` がない振り返り（古い形で保存された結果）では、`remaining` を使う。
 - `summary.units` には、呼んだ遊軍が入る（`state.units` にいるので）。呼ばなかった遊軍は `summary.unusedReserve` に入る。
 
 ### 7.6 面と配置の検査（engine）
@@ -1139,22 +1145,26 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
 - `validateStageArmy(stage, placements, reserve?)`：`reserve` があるとき、兵種ごとの数（手持ち）と部隊数の上限を、戦場の部隊 + 遊軍で数える。遊軍の兵種が本陣なら `invalid_kind`、方針がその面で選べなければ `invalid_stance`（index は付けない）。本陣以外の部隊の下限（1つ以上）は、戦場の部隊だけで数える（遊軍だけ残して戦場を本陣だけにはできない）。
 - `stageSetupWith(stage, placements, seed, myOrders, reserve?, myReserve?)`：`reserve` は自軍の遊軍、`myReserve` は見本・測定用の「何秒にどちらから呼ぶか」（`{ atSec, from }`）。面のデータ `Stage` に、敵の遊軍 `enemyReserve?: { kind, stance, atSec, from }` を足せるようにする（いまの15面には書かない）。
 - 対戦の配置の検査（予算・手持ち・部隊数）も、戦場の部隊 + 遊軍で数える。`validateArmy` の `ArmyLimits` に `reserve?: ReserveSetup | null` を足し、予算と部隊数に含める。
-- ひな形（`applyTemplate`）は遊軍を作らない。
+- ひな形（`applyTemplate`）は遊軍を作らない。配置の画面でひな形を選んだら、遊軍の枠は空に戻す（ひな形は手持ちの全部隊を並べるので、枠を残すと二重に数えることになる）。
+- `pnpm sim` の面の集計は、判定に使う割合（`remaining`）と星に使う割合（`remainingForStars`）を別々に出す。
 
 ### 7.7 server
 
 - 受け取るメッセージ：
   - `draft` と `ready` に `reserve?: { kind, stance } | null` を足す（省略と null は「遊軍なし」）。検査は §7.6。正しくなければ、いまの配置の誤りと同じ形でエラーを返す。
-  - `{ type: 'reserve'; battleNo: number; from: 'left' | 'right' }` を足す。受け付けの条件と回数の制限は、号令と同じ作り（戦闘中だけ、battleNo が合うこと、次の刻みで engine に渡す）。呼べないときは、号令と同じ形のエラーを本人にだけ返す。
+  - **配置と遊軍は、いつも一組で扱う。** 下書き（`draft`）、最後に検査を通った配置（`lastValid`）、確定した配置、時間切れのときに使う配置、復帰のときに返す配置は、どれも `{ army, reserve }` の組で持ち、組ごと検査して、組ごと入れ替える（古い配置に新しい遊軍が付くことがないように）。`ready` で `army` を省略したときは、いまの下書きの組をそのまま使い、`reserve` の値は見ない。`army` を付けたときは、同じメッセージの `reserve`（省略なら「なし」）と組にする。
+  - `{ type: 'reserve'; battleNo: number; from: 'left' | 'right' }` を足す。受け付けの条件は、号令と同じ作り（戦闘中だけ、battleNo が合うこと、`canSummon` を通ること、次の刻みで engine に渡す）。まだ engine に渡していない遊軍の入力は、陣営ごとに1つまで（2つ目は捨てる）。呼べないときは、エラーを本人にだけ返す。エラーには `op: 'reserve'` を付けて、号令のエラーと見分けられるようにする（client は、号令の「送って返事待ち」の数を、遊軍のエラーで減らさない）。
+- **遊軍を使える部屋かどうか**：client は、つなぐときの URL に `cv=2`（遊軍を知っている版）を付ける。server は、席ごとにこれを覚え、**両方の席が `cv=2` 以上のときだけ** `room.rules.reserve = true` を送る。そうでない部屋では、`draft` / `ready` の遊軍を「この部屋では遊軍を使えない」というエラーで落とし、`reserve` のメッセージも受け付けない。古い画面（開いたままのタブ）は、途中で増えた部隊の絵を作れないため。配置の段階の途中で、古い画面の人が入り直して `cv` が変わったら、その時点の下書きの遊軍を外して、両者に `room` を送り直す。
 - 送るメッセージ：
   - `room`：自分の下書きの遊軍（`myReserve`）を、自分にだけ入れる。
   - `reveal`：自分の遊軍だけ入れる。**相手の遊軍は、あるかないかも含めて入れない。**
   - `snap`：`reserve`（自分のぶんの `ReserveView`。なければ null）を足す。相手のぶんは入れない。現れた遊軍は、ふつうの部隊として `units` に入り、出来事 `reserve` が両者に届く。
-  - `result`：振り返り（`summary`）の `unusedReserve` は、**相手のぶんを null にしてから**送る。`remainingForStars` も、相手のぶんは `remaining` と同じ値に置き換える（呼ばなかった遊軍がいたことを、戦いのあとも相手に知らせない）。
+  - `result`：振り返り（`summary`）の `unusedReserve` は、**相手のぶんを null にしてから**送る。`remainingForStars` も、相手のぶんは `remaining` と同じ値に置き換える（呼ばなかった遊軍がいたことを、戦いのあとも相手に知らせない）。いまは決着のときも、結果の画面に入り直したときも、同じ1つのメッセージを両者に送っているので、**見る人ごとに作って送る**形に変える。保存してある振り返りそのものは書き換えない。
 - 上下を返す処理（`flip.ts`）：`from` は「その陣営から見た左右」なので返さない。現れた部隊の座標と、出来事 `reserve` は、ほかの部隊・出来事と同じに扱う。
 - もう一戦に入るとき、下書きの遊軍も消す（配置と同じ）。
-- 途中で落ちて戻る処理（状態の保存と復元）は、`BattleState` が JSON のままなので、項目が増えるだけ。保存した入力の再生に、遊軍の入力を含める。
-- 古い client（遊軍を知らない）と新しい server：遊軍を送ってこないだけなので、そのまま動く。相手の遊軍が現れると、`snap.units` に知らない id が増える。新しい client はこれを受けて絵を足す（§7.8）。古い client が壊れないかは、公開の前に確かめる（壊れるなら、client を先に公開する順番にする）。
+- 途中で落ちて戻る処理：server は入力を再生せず、保存した `BattleState` から再開する。いまは号令の出来事が出た刻みにすぐ保存し、ほかは 20 刻みごとに保存している。**遊軍が現れた刻み（出来事 `reserve`）も、すぐ保存する**（保存してから `snap` を送る）。そうしないと、相手に見せた遊軍が、落ちて戻ったときに消えて、もう一度呼べてしまう。
+- 古い client（遊軍を知らない）と新しい server：上の `cv` の決まりで、古い画面のいる部屋では遊軍が使えない。通信の形は、項目が増えるだけなので、古い client でも読める。
+- `snap` の `reserve` は、自分のぶんの `ReserveView`（なければ null）を1つだけ入れる。client の `RemoteBattleSource` は、これを `BattleView.reserve` の自分の側に入れ、相手の側を null にして組み立てる。
 
 ### 7.8 client
 
@@ -1162,7 +1172,8 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
 - `BattleSource` に足す：`reserve(): ReserveView | null`（自分の遊軍）、`canSummon(): boolean`、`summon(from: ReserveFrom): void`。1人用（`LocalBattleSource`）は engine をそのまま呼び、対戦（`RemoteBattleSource`）は `snap.reserve` と `canSummonView` を使ってメッセージを送る。
 - 配置の画面（`DeployScene`）：
   - 手持ちの並びのそばに「遊軍」の枠を1つ。手持ちの兵種（本陣以外）を選んだ状態で枠を押すと、その兵種の1部隊が遊軍になる（手持ちの数が1つ減る）。枠に部隊が入っているとき、枠を押すと小さな箱が出て、方針の切り替えと「外す」ができる（戦場の自軍を押したときと同じ箱）。
-  - 遊軍は、面ごとの最後の配置と一緒に保存する（`save.ts`：`reserves: Record<面の id, ReserveSetup>` と `pvpReserve`）。保存した陣形（`SavedFormation`）に `reserve?: ReserveSetup` を足し、呼び出したときに、手持ちに足りていれば遊軍の枠に入れる。
+  - 遊軍は、面ごとの最後の配置と一緒に保存する（`save.ts`：`reserves: Record<面の id, ReserveSetup>` と `pvpReserve`）。保存した陣形（`SavedFormation`）に `reserve?: ReserveSetup` を足し、呼び出したときに、手持ちに足りていれば遊軍の枠に入れる。型だけでなく、読み込みの掃除（`sanitize`）・保存・読み戻しのすべてで遊軍を扱う（いまは、決まった項目だけを写しているので、足さないと消える）。
+  - 対戦では、`room.rules.reserve` が true の部屋でだけ、遊軍の枠を出す。
   - 対戦では、下書き（`draft`）と準備完了（`ready`）に遊軍を入れて送る。公開の画面（`RevealScene`）には、自分の遊軍だけを枠で見せる。相手の遊軍は出さない。
 - 戦闘の画面（`BattleScene`）：
   - 号令のボタンのそばに「遊軍 左から」「遊軍 右から」。自分に遊軍がいる戦いだけ出す。`waiting`（開戦 5 秒まで）と `used`（呼んだあと）は、押せない色。
@@ -1177,16 +1188,16 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
 |---|---|
 | R1 | 遊軍のない戦い：T10 と、いまある全テストが、記録も期待値も変えずに通る。`reserves` を `[null, null]` と書いた設定と、書かない設定で、全刻みの状態が一致する（総当たりから 6 組 × 種 3） |
 | R2 | 呼べる条件：tick 49 では `reserve_not_ready`、tick 50 から呼べる。2回目は `no_reserve`。遊軍のない陣営は `no_reserve`。決着後は `battle_over` |
-| R3 | 現れた部隊：位置（陣営0の左は列 0・行 8、右は列 11・行 8。陣営1の左は列 11・行 7、右は列 0・行 7。平原）、翼、兵数、士気、方針、id が末尾。出来事 `reserve` が1つ出る。乱数の状態が、呼ばなかった場合と同じ（同じ刻みで比べる） |
+| R3 | 現れた部隊：位置（陣営0の左は列 0・行 8、右は列 11・行 8。陣営1の左は列 11・行 7、右は列 0・行 7。平原）、翼、兵数、士気、方針、id が末尾。出来事 `reserve` が1つ出る。高さ 15 の戦場では、陣営0が行 8、陣営1が行 6。呼ぶ処理が乱数を引かないこと：だれも攻撃しない場面（両軍が離れていて全部隊が守備）で、呼んだ刻みの乱数の状態が、呼ばなかった場合と同じ |
 | R4 | マスがふさがっているとき：候補の最初のマスに部隊を置いた設定で、次の行に現れる。城壁の面（3-2 の戦場）で、自陣側の行に現れ、城壁の向こうには現れない。端の列がすべてふさがっていれば `no_spawn_cell` で、状態は変わらない |
 | R5 | 現れたあと、ふつうに戦う：騎兵の遊軍（前進）を、歩兵どうしが戦っている横から出すと、横からの攻撃（facing が side か rear の `impact`）が出る。迂回・本陣狙い・守備の方針でも、例外なく最後まで進む（7 つのひな形 × 4 兵種 × 4 方針 × 左右 × 種 2 を、呼ぶ刻み 50 と 300 で回し、落ちない・NaN が出ない・部隊が戦場の外に出ない） |
-| R6 | 号令：現れた遊軍に、同じ刻みの号令と、あとの号令（出た側の翼あて・全軍あて）がかかる。反対の翼あてはかからない |
+| R6 | 号令：現れた遊軍に、同じ刻みに engine へ渡した号令（全軍あて・出た側の翼あて）と、あとの号令がかかる。反対の翼あてはかからない。だれもいない翼に遊軍を呼ぶ前は、その翼あての `canOrder` が `no_target_units`、現れた次の刻みからは通る |
 | R7 | 判定：呼ばなかった遊軍は `remainingRatio` に入らない（遊軍のない同じ戦場の配置と、全刻みで勝ち負け・終わる刻みが一致する）。呼んだあとは `initialMen` に入る |
 | R8 | 星：`remainingForStars` は、呼ばなかった遊軍を無傷として数える。遊軍のない戦いでは `remaining` と一致する（15 面の見本 × 種 20） |
-| R9 | 膠着：両軍が全部隊守備で、片方に呼ばない遊軍がいても、10 秒で膠着になる。予定された遊軍が残っているあいだは膠着にならず、現れたあとに戦いが動く |
-| R10 | 隠す情報：`viewFor(state, 0)` に、陣営1の呼ぶ前の遊軍が、どの項目にも出ない（JSON にして兵種の名前と `reserve` を探す）。現れたあとは `units` に出る |
+| R9 | 膠着：両軍が全部隊守備で、片方に呼ばない遊軍がいても、10 秒で膠着になる。予定された遊軍が残っているあいだは膠着にならず、現れたあとに戦いが動く。予定された遊軍：tick が 50 より小さい予定は 50 に現れる。マスがふさがっていれば、空いた刻みに現れる。片方が呼べなくても、もう片方は現れる。遊軍のない陣営への予定・同じ陣営に2つの予定は `invalid_setup` |
+| R10 | 隠す情報：戦場の配置が同じで、陣営1の遊軍だけを「なし／騎兵・前進／弓兵・守備」に変えた3つの戦いで、呼ぶ前の `viewFor(state, 0)` が、全刻みで完全に一致する（JSON の文字列で比べる）。陣営を入れ替えても同じ。遊軍のない戦いの場面には `reserve` の項目がない。現れたあとは `units` に出る |
 | R11 | 古い状態：`reserves` の項目を消した状態を `step` に渡しても、落ちずに進む |
 | R12 | 両軍が同じ刻みに呼ぶ：どちらも現れ、結果が入力の順で決まる（同じ入力なら同じ結果） |
-| R13 | **強さの測定**（`pnpm sim reserve`。結果を balance.md に書く）：(a) 15 面の見本の配置から、本陣以外の1部隊を遊軍に回したもの（兵種ごとに、方針は 前進・迂回・本陣狙い、呼ぶ時刻は 5 秒・15 秒・30 秒、左右）× 種 20 の、勝ち数と星を、見本のままと比べる。(b) 7 つのひな形の総当たり（42 組 × 種 10）で、片方だけが騎兵1部隊を遊軍に回したとき（方針と時刻と左右は同じ組み合わせ）の得点率を、回さないときと比べる。**とくに「騎兵・本陣狙い（または迂回）・5 秒」が、ほかを大きく上回らないか**を見る |
-| R14 | server：相手の遊軍が、`reveal`・すべての `snap`・`result`・エラーのどれにも出ない（現れる前）。現れたあとは両者の `snap` に出る。もう一戦で下書きが消える。配置の検査（予算・手持ち・部隊数に遊軍を含める） |
+| R13 | **強さの測定**（`pnpm sim reserve`。結果を balance.md に書く）。比べる相手は、いつも「同じ配置で、その部隊を遊軍に回さず、そのまま置いたとき」。<br>(a) **1人用**：15 面の見本の配置から、本陣以外の1部隊を遊軍に回す。どの部隊を抜くか（全部隊を1つずつ）× 方針（その面で選べるものすべて）× 呼ぶ時刻（5・6・8・10・15・30・60 秒と、呼ばない）× 左右 × 種 20。勝ち数、星、判定の割合と星の割合を出す。面の方針の制限を外した測定は、別の表にする。<br>(b) **対戦**：対戦の予算（36）に収まる配置で測る（いまの総当たりの標準の手持ちは値段 40 で予算を超えるので、ひな形から予算に収まるよう部隊を減らした配置を作る）。7 つのひな形の総当たり（同じひな形どうしを含む 49 組）× 対戦の地図 4 つ × 遊軍を持つ側（陣営0だけ・陣営1だけ・両方）× 抜く部隊（兵種ごとに、前の列・後ろの列・端）× 方針 4 つ × 呼ぶ時刻（上と同じ）× 左右 × 種 5。組み合わせが多いので、まず種 5 でふるいにかけ、得点率の上がり方が大きい上位 30 通りを、別の種 20 で測り直す。<br>(c) **号令との組み合わせ**：(b) の上位 30 通りに、現れた刻みの突撃（全軍・出た側の翼）と堅守を足して測る。<br>**ユーザーに数字を見せる線**：(b) の平均の得点率の上がり方が +0.10 を超える使い方がある、または、1つのひな形の組で +0.25 を超える使い方がある、または (a) で星が1つ以上増える面が 15 面中 5 面以上ある。超えたら、client の実装に入る前に報告する |
+| R14 | server：(a) 隠す情報：相手の遊軍だけを「なし／騎兵・前進／弓兵・守備」に変えた3つの対戦で、呼ぶ前に自分へ届くメッセージ（`room`・`reveal`・`snap`・エラー。入り直したときのものも）が一致する。呼ばないまま終わった `result` も一致する（決着のときと、結果の画面に入り直したとき）。(b) 現れたあとは両者の `snap` に出る。(c) もう一戦で下書きの組が消える。(d) 配置の検査：予算ちょうど、予算を遊軍で超える、戦場 16 部隊 + 遊軍、本陣を遊軍に、知らない方針。(e) 一組で扱う：正しい組のあとに正しくない下書きを送って時間切れ → 最後に検査を通った組（配置と遊軍）が使われる。(f) 遊軍が現れた直後（定期の保存の前）に落として戻す → 遊軍は現れたまま、もう一度は呼べない。(g) `cv`：片方が古い画面の部屋では `rules.reserve` が false で、遊軍つきの `ready` と `reserve` が落ちる。(h) 遊軍のエラーに `op: 'reserve'` が付く。engine に渡す前の入力は陣営ごとに1つまで |
 | R15 | ブラウザ：1人用（配置で遊軍に回す → 戦闘で左右から呼ぶ → 結果）と、対戦（2枚のタブ。自分の遊軍だけ見える、呼ぶと相手にも現れる、もう一戦）を、実際のクリック操作で通す。4つの視点で、現れた部隊が正しい位置に出る |
