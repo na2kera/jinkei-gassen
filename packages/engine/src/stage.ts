@@ -171,8 +171,8 @@ export const STAR_THRESHOLDS: readonly [number, number] = [0.5, 0.7];
 export function starsFor(summary: BattleSummary, side: Side): 0 | 1 | 2 | 3 {
   if (!isObject(summary) || summary.winner !== side) return 0;
   // 呼ばなかった遊軍を無傷として数える割合（§7.5）。それがない振り返り（古い形で保存された結果）では remaining を使う
-  const forStars: unknown = summary.remainingForStars?.[side];
-  const r = typeof forStars === 'number' ? forStars : summary.remaining?.[side];
+  // 項目はあるのに値が数でないときは、remaining に逃げず星1つにする
+  const r: unknown = summary.remainingForStars === undefined ? summary.remaining?.[side] : (summary.remainingForStars as unknown[] | null)?.[side];
   if (typeof r !== 'number' || !Number.isFinite(r)) return 1;
   if (r >= STAR_THRESHOLDS[1]) return 3;
   if (r >= STAR_THRESHOLDS[0]) return 2;

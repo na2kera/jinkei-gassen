@@ -106,6 +106,8 @@ describe('値の検査', () => {
       { reserves: [cav] },
       { reserves: [cav, null, null] },
       { reserves: {} },
+      { reserves: null },
+      { reserves: [cav, null], scriptedReserves: null },
       { reserves: [{ kind: 'hq', stance: 'hold' }, null] },
       { reserves: [{ kind: 'cavalry', stance: 'x' }, null] },
       { reserves: [undefined, null] },
@@ -555,6 +557,9 @@ describe('R8 星', () => {
     const won = { ...sm, winner: 0 as const, remaining: [0.6, 0] as [number, number], remainingForStars: [0.75, 0] as [number, number] };
     expect(starsFor(won, 0)).toBe(3);
     const old = { ...won } as Partial<typeof won>;
+    // 項目はあるのに値が数でないときは、remaining に逃げず星1つ
+    expect(starsFor({ ...won, remaining: [0.8, 0], remainingForStars: [null, 0] } as never, 0)).toBe(1);
+    expect(starsFor({ ...won, remaining: [0.8, 0], remainingForStars: null } as never, 0)).toBe(1);
     delete old.remainingForStars;
     delete old.unusedReserve;
     expect(starsFor(old as typeof won, 0)).toBe(2);

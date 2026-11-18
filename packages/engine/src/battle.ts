@@ -149,7 +149,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
     scripted.push({ tick: o.tick, side: o.side, target: o.target, kind: o.kind });
   }
   // 遊軍（§7.2）：長さ2の配列で、要素は null か reserveErrors を通るもの。書かなければ両方 null
-  const rawReserves: unknown = setup.reserves ?? [null, null];
+  const rawReserves: unknown = setup.reserves === undefined ? [null, null] : setup.reserves;
   if (!isDenseArray(rawReserves) || rawReserves.length !== 2) return bad('遊軍は陣営ごとに1つ（長さ2の配列）で書く');
   const reserves: [ReserveState | null, ReserveState | null] = [null, null];
   for (const side of [0, 1] as const) {
@@ -160,7 +160,7 @@ export function createBattle(setup: BattleSetup): Result<BattleState> {
     reserves[side] = { kind: ok.kind, stance: ok.stance, used: false, unit: null, auto: null };
   }
   // 予定された遊軍：陣営ごとに1つまで、その陣営に遊軍がいること。開戦 5 秒より前の予定は、5 秒として扱う
-  const rawScriptedReserves: unknown = setup.scriptedReserves ?? [];
+  const rawScriptedReserves: unknown = setup.scriptedReserves === undefined ? [] : setup.scriptedReserves;
   if (!isDenseArray(rawScriptedReserves)) return bad('予定された遊軍は配列で書く');
   for (const o of rawScriptedReserves) {
     if (!isObject(o) || !isInt(o.tick) || o.tick < 0 || !isSide(o.side) || !isReserveFrom(o.from)) return bad('予定された遊軍が正しくない');
