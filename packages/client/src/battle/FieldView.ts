@@ -82,6 +82,14 @@ export class FieldView {
     return false;
   }
 
+  /**
+   * 旗と号令の印を、実際に描く矩形（旗のはためく 1px を含む）が uiBounds に収まるよう寄せるか。
+   * 真上と斜めは false（§5.8 の前の判定のまま。旗が 1px はみ出すことがあるのも、そのまま残す）
+   */
+  get fitMarks(): boolean {
+    return this.mode !== 'top' && this.mode !== 'oblique';
+  }
+
   /** 高さのある地形の絵の組（art/tallArt.ts で、絵の鍵と置き方を選ぶ） */
   get art(): ArtKind {
     return this.mode === 'top' ? 'flat' : this.mode === 'side' ? 'side' : 'oblique';

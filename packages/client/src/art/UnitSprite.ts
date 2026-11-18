@@ -160,19 +160,28 @@ export class UnitSprite {
     const standing = this.fv.standing;
     const poleH = standing ? (hq ? 30 : 26) * scale : hq ? 24 : 20;
     let poleTop = standing ? (hq ? -34 : -30) * scale : hq ? -22 : -18;
-    // 戦場の右端からはみ出すなら、旗を竿の左に付け替える。上端からはみ出すなら、竿ごと下げる
+    // 戦場の右端からはみ出すなら、旗を竿の左に付け替える。上端からはみ出すなら、竿ごと下げる。
+    // fitMarks のときは、旗の右の端（竿の右 2px + 旗の幅 + はためく 1px）で判定する（真上・斜めは前の判定のまま）
     let mirror = false;
     const b = look.bounds;
+    const fit = this.fv.fitMarks;
     if (b) {
-      if (cx + 11 + flagW > b.x + b.w) mirror = true;
+      if (cx + (fit ? 13 : 11) + flagW > b.x + b.w) mirror = true;
       if (cy + poleTop < b.y) poleTop = b.y - cy;
+    }
+    // 号令の印（7 × 7）の左上。fitMarks のときは、uiBounds に収まるよう寄せる
+    let orderX = -12;
+    let orderY = standing ? -26 * scale : -12;
+    if (b && fit) {
+      orderX = Math.min(Math.max(orderX, b.x - cx), b.x + b.w - 7 - cx);
+      orderY = Math.min(Math.max(orderY, b.y - cy), b.y + b.h - 7 - cy);
     }
     const m = Math.max(0, Math.min(100, look.morale)) / 100;
     // 旗の位置は 2px 単位に揃える。士気が下がるほど旗が下がる
     const fy = poleTop + Math.round(((1 - m) * (poleH - flagH)) / 2) * 2;
     const wave = look.wave ? Math.floor(time / 120) % 2 : 0;
     const key = alive
-      ? [look.highlight ? 1 : 0, look.rout > 0 ? 1 : 0, fy, poleTop, mirror ? 1 : 0, wave, look.order ?? '', look.stance ?? ''].join('|')
+      ? [look.highlight ? 1 : 0, look.rout > 0 ? 1 : 0, fy, poleTop, mirror ? 1 : 0, wave, look.order ?? '', look.stance ?? '', orderX, orderY].join('|')
       : 'dead';
     g.setPosition(cx, cy);
     if (key === this.marksKey) return;
@@ -219,7 +228,7 @@ export class UnitSprite {
         g.fillRect((mirror ? poleX - w : poleX + 2) + (i > 0 ? shift : 0), fy + i * 2, w, 2);
       }
     }
-    if (look.order) drawOrderIcon(g, look.order, -12, standing ? -26 * scale : -12);
+    if (look.order) drawOrderIcon(g, look.order, orderX, orderY);
     if (look.stance) drawStanceIcon(g, look.stance, -12, 5);
   }
 

@@ -174,6 +174,69 @@ test('V2 真上と斜め：toScreen・cellRect・rect・toField が変更前と�
 });
 
 // ---- 変更前の兵の並び（UnitSprite.apply の計算を写したもの）と、いまの並びが同じ px に置かれるか ----
+// 向きの選び方（dirOf）と兵の並び（slotsOf）も、§5.8 の前の UnitSprite.ts から写して固定する
+// （いまの実装の関数を使うと、両方が同じに変わったときに比べられないため）
+
+/** 変更前の dirOf */
+function oldDirOf(dx: number, dy: number): number {
+  if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 1 : 3;
+  return dy < 0 ? 0 : 2;
+}
+
+/** 変更前の兵の並び。歩兵・盾兵・弓兵は 3×3（前の列から）、騎兵は 2×2、本陣は将と四隅の護衛 */
+const OLD_FOOT: { lx: number; ly: number }[] = [];
+for (const ly of [-4, 0, 4]) for (const lx of [-5, 0, 5]) OLD_FOOT.push({ lx, ly });
+const OLD_SLOTS: Record<'hq' | 'infantry' | 'shield' | 'archer' | 'cavalry', { lx: number; ly: number }[]> = {
+  infantry: OLD_FOOT,
+  shield: OLD_FOOT,
+  archer: OLD_FOOT,
+  cavalry: [
+    { lx: -3, ly: -4 },
+    { lx: 3, ly: -4 },
+    { lx: -3, ly: 4 },
+    { lx: 3, ly: 4 },
+  ],
+  hq: [
+    { lx: 0, ly: 0 },
+    { lx: -5, ly: -4 },
+    { lx: 5, ly: -4 },
+    { lx: -5, ly: 4 },
+    { lx: 5, ly: 4 },
+  ],
+};
+
+test('兵の並びと向きの選び方が、変更前と同じ（等号の境目を含む）', () => {
+  for (const kind of ['hq', 'infantry', 'shield', 'archer', 'cavalry'] as const) {
+    assert.deepEqual(
+      slotsOf(kind).map((s) => ({ lx: s.lx, ly: s.ly })),
+      OLD_SLOTS[kind],
+      kind,
+    );
+  }
+  // 横と縦が同じ大きさ（dx = dy、dx = −dy）や 0 のときは、縦の向き（下が 2、上が 0）を選ぶ
+  const cases: [number, number, number][] = [
+    [1, 1, 2],
+    [-1, -1, 0],
+    [1, -1, 0],
+    [-1, 1, 2],
+    [Math.SQRT1_2, Math.SQRT1_2, 2],
+    [-Math.SQRT1_2, Math.SQRT1_2, 2],
+    [Math.SQRT1_2, -Math.SQRT1_2, 0],
+    [0, 0, 2],
+    [-0, -0, 2],
+    [1, 0, 1],
+    [-1, 0, 3],
+    [0, 1, 2],
+    [0, -1, 0],
+    [0.6, -0.8, 0],
+    [0.8, -0.6, 1],
+    [-0.8, 0.6, 3],
+  ];
+  for (const [dx, dy, want] of cases) {
+    assert.equal(oldDirOf(dx, dy), want, `old ${dx},${dy}`);
+    assert.equal(dirOf(dx, dy), want, `new ${dx},${dy}`);
+  }
+});
 
 /** 変更前：画面の向き d に並びを回し、縦だけ yScale で縮める。戻り値は兵の絵の左上（整数の px）と、選ぶ4方向 */
 function oldSoldier(old: OldView, x: number, y: number, fx: number, fy: number, lx: number, ly: number, w: number, h: number): [number, number, number] {
@@ -184,7 +247,7 @@ function oldSoldier(old: OldView, x: number, y: number, fx: number, fy: number, 
   const wx = p.x + lx * rx - ly * d.x;
   const wy = p.y + (lx * ry - ly * d.y) * old.yScale;
   const top = old.oblique ? Math.round(wy - h + 1) : Math.round(wy - h / 2);
-  return [Math.round(wx - w / 2), top, dirOf(d.x, d.y)];
+  return [Math.round(wx - w / 2), top, oldDirOf(d.x, d.y)];
 }
 
 function newSoldier(fv: FieldView, x: number, y: number, fx: number, fy: number, lx: number, ly: number, w: number, h: number): [number, number, number] {
@@ -236,11 +299,11 @@ test('真上と斜め：兵の絵の位置（整数の px）と4方向の絵が�
           }
           for (const pos of positions) {
             for (const [fx, fy] of facings) {
-              for (const kind of ['hq', 'infantry', 'cavalry'] as const) {
+              for (const kind of ['hq', 'infantry', 'shield', 'archer', 'cavalry'] as const) {
                 // 敗走中の広がり（1 + 1.2 × 進み具合）。1.6 と 3:4 の向きでは、兵のずれの2つの項がちょうど打ち消し合い、
                 // 絵の左上がちょうど半 px に来る。足す順まで変更前と同じでないと 1px 変わるので、その場合も試す
                 for (const spread of [1, 1.6, 1 + 1.2 * 0.37]) {
-                  for (const s of slotsOf(kind)) {
+                  for (const s of OLD_SLOTS[kind]) {
                     // 敗走で散らばるときと、近接で前へ 1px 突くときも試す
                     const lx = s.lx * spread;
                     const ly = s.ly * spread - (s.ly < 0 ? 1 : 0);
