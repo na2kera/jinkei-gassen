@@ -1,5 +1,5 @@
 // 部隊の中の兵の並び（design §5.3、§5.8.1）。Phaser を使わない計算だけにして、画面なしで確かめられるようにする。
-// 兵ごとのずれ（lx, ly。px で書いてある）は、戦場の座標の上で部隊の向きに回してから、FieldView.vecToScreen で画面に直す
+// 兵ごとのずれ（lx, ly。px で書いてある）は、戦場の座標の上で部隊の向きに回してから、FieldView.shiftOnScreen で画面に直す
 // （画面に直したあとの向きから直角の向きを作らない。縮みの比が縦横で違うと、並びがゆがむため）。
 
 import type { Kind } from '@jinkei/engine';
@@ -54,14 +54,14 @@ export function unitReach(kind: Kind): number {
 }
 
 /**
- * 兵1人の、部隊の中心からのずれ（画面の px）。at は部隊の中心（戦場の座標）、(fx, fy) は部隊の向き（戦場の座標の単位ベクトル）。
- * 並びの「右」は、前を時計回りに 90° 回した向き
+ * 兵1人の足もとの画面の px。c は部隊の中心（画面の px）、at は同じ点の戦場の座標、
+ * (fx, fy) は部隊の向き（戦場の座標の単位ベクトル）。並びの「右」は、前を時計回りに 90° 回した向き。
+ * 戦場の上でのずれは「右へ lx」−「前へ ly」で、2つの項のまま FieldView.shiftOnScreen に渡す
  */
-export function soldierOffset(fv: FieldView, at: Point, fx: number, fy: number, lx: number, ly: number): Point {
+export function soldierPoint(fv: FieldView, c: Point, at: Point, fx: number, fy: number, lx: number, ly: number): Point {
   const rx = -fy;
   const ry = fx;
-  // 戦場の座標の上でのずれ（px）。画面に直すのは FieldView.offsetToScreen（vecToScreen で 1/CELL したものと同じ）
-  return fv.offsetToScreen(at.x, at.y, lx * rx - ly * fx, lx * ry - ly * fy);
+  return fv.shiftOnScreen(c.x, c.y, at.x, at.y, lx * rx, lx * ry, ly * fx, ly * fy);
 }
 
 /** 部隊の足もとから、数字の箱の下の端までの離れ（立った兵は絵の高さの分だけ上に離す） */

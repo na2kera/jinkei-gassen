@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { dirOf, slotsOf, soldierOffset, unitLift } from '../src/art/formation.ts';
+import { dirOf, slotsOf, soldierPoint, unitLift } from '../src/art/formation.ts';
 import { groundTerrain, placeTall, tallArt } from '../src/art/tallArt.ts';
 import { sideArtColors, sideArtRows } from '../src/art/textures.ts';
 import { centeredFieldView, type FieldView, type PickTarget, type Point } from '../src/battle/FieldView.ts';
@@ -127,6 +127,9 @@ for (const { mode, skip } of MODE_TABLE) {
           const a = fv.toScreen(p.x, p.y);
           const b = fv.toScreen(p.x + vx, p.y + vy);
           assert.ok(Math.abs(v.x - (b.x - a.x)) < 1e-9 && Math.abs(v.y - (b.y - a.y)) < 1e-9);
+          // px で書いたずれを2つの項で渡しても、同じ所に動く
+          const s = fv.shiftOnScreen(a.x, a.y, p.x, p.y, vx * CELL * 2, vy * CELL * 2, vx * CELL, vy * CELL);
+          assert.ok(Math.abs(s.x - b.x) < 1e-9 && Math.abs(s.y - b.y) < 1e-9);
         }
       }
     }
@@ -187,9 +190,7 @@ function oldSoldier(old: OldView, x: number, y: number, fx: number, fy: number, 
 function newSoldier(fv: FieldView, x: number, y: number, fx: number, fy: number, lx: number, ly: number, w: number, h: number): [number, number, number] {
   const p = fv.toScreen(x, y);
   const at = fv.toField(p.x, p.y);
-  const off = soldierOffset(fv, at, fx, fy, lx, ly);
-  const wx = p.x + off.x;
-  const wy = p.y + off.y;
+  const { x: wx, y: wy } = soldierPoint(fv, p, at, fx, fy, lx, ly);
   const top = fv.standing ? Math.round(wy - h + 1) : Math.round(wy - h / 2);
   const f = fv.facingOnScreen(at.x, at.y, fx, fy);
   return [Math.round(wx - w / 2), top, dirOf(f.x, f.y)];
@@ -236,11 +237,9 @@ test('真上と斜め：兵の絵の位置（整数の px）と4方向の絵が�
           for (const pos of positions) {
             for (const [fx, fy] of facings) {
               for (const kind of ['hq', 'infantry', 'cavalry'] as const) {
-                // 敗走中の広がり（1 + 1.2 × 進み具合）は連続した値。広がりが 1 でないときは、決まった向き（3:4 の向きなど）で
-                // 兵のずれの2つの項がちょうど打ち消し合い、絵の左上がちょうど半 px に来ることがあり、そのときだけ
-                // 足す順の違い（変更前は (x + a) - b、いまは x + (a - b)）の丸めの誤差で 1px 変わる。
-                // 向きも広がりも連続した値なので実際の戦いでは起きないとみなし、広がりのある場合は、乱数の向きだけで試す
-                for (const spread of FACINGS.some(([a, b]) => a === fx && b === fy) ? [1] : [1, 1 + 1.2 * 0.37]) {
+                // 敗走中の広がり（1 + 1.2 × 進み具合）。1.6 と 3:4 の向きでは、兵のずれの2つの項がちょうど打ち消し合い、
+                // 絵の左上がちょうど半 px に来る。足す順まで変更前と同じでないと 1px 変わるので、その場合も試す
+                for (const spread of [1, 1.6, 1 + 1.2 * 0.37]) {
                   for (const s of slotsOf(kind)) {
                     // 敗走で散らばるときと、近接で前へ 1px 突くときも試す
                     const lx = s.lx * spread;
@@ -441,7 +440,9 @@ for (const { mode, skip } of MODE_TABLE) {
         const h = fv.vecToScreen(at.x, at.y, fx, fy);
         for (const kind of ['infantry', 'cavalry', 'hq'] as const) {
           for (const s of slotsOf(kind)) {
-            const off = soldierOffset(fv, at, fx, fy, s.lx, s.ly);
+            const c = fv.toScreen(at.x, at.y);
+            const w = soldierPoint(fv, c, at, fx, fy, s.lx, s.ly);
+            const off = { x: w.x - c.x, y: w.y - c.y };
             const dot = off.x * h.x + off.y * h.y;
             // (a) 前の列（ly が負）は向きの側、後ろの列は反対側
             if (s.ly < 0) assert.ok(dot > 0, `${mode} ${flipped} ${fx},${fy} 前`);

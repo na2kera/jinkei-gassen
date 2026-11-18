@@ -9,7 +9,7 @@ import type { Kind, OrderKind, Stance } from '@jinkei/engine';
 import Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
 import type { Rect } from '../layout.ts';
-import { dirOf, SCATTER, slotsOf, soldierOffset, type Slot } from './formation.ts';
+import { dirOf, SCATTER, slotsOf, soldierPoint, type Slot } from './formation.ts';
 import { drawOrderIcon, drawStanceIcon } from './icons.ts';
 import { ART, COLOR, SIDE_COLOR } from './palette.ts';
 import { soldierKey, soldierSize, standKey, standSize, type Dir4, type SoldierShape } from './textures.ts';
@@ -122,9 +122,7 @@ export class UnitSprite {
       const lx = slot.lx * spread + sc.x * jitter;
       const ly = slot.ly * spread + sc.y * jitter - forward;
       // 並びは戦場の座標で回してから、画面に直す
-      const off = soldierOffset(fv, at, look.fx, look.fy, lx, ly);
-      const wx = look.x + off.x;
-      const wy = look.y + off.y;
+      const { x: wx, y: wy } = soldierPoint(fv, look, at, look.fx, look.fy, lx, ly);
       if (fv.standing) {
         // 立った兵は、足もとを並びの位置に置く。奥の兵ほど上に描かれ、depth（並べる値）の順で手前が上に重なる
         const size = standSize(slot.shape);

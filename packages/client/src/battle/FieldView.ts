@@ -134,16 +134,28 @@ export class FieldView {
   }
 
   /**
-   * 戦場の上で px で書いたずれ（1マス = CELL px。兵の並びのずれ）を、画面の px のずれに直す。
-   * vecToScreen(x, y, px / CELL, py / CELL) と同じ値。遠近のない視点では、割り算と掛け算の丸めの誤差で
-   * 兵の絵の位置が 1px ずれないよう、CELL で割らずに直接出す
+   * 画面の点 (sx, sy)（戦場の座標では (x, y)）を、戦場の上で px で書いたずれ p − q（1マス = CELL px。兵の並びのずれ）
+   * だけ動かした画面の点。sx + vecToScreen(x, y, (p − q) / CELL) と同じ値。
+   * 真上と斜めでは、§5.8 の前の UnitSprite と足す順まで同じにして出す（横は (sx + p) − q、縦は sy + (p − q) × 縮み）。
+   * 割って掛ける丸めや、足す順の違いの丸めで、兵の絵の位置が 1px も変わらないようにするため
    */
-  offsetToScreen(x: number, y: number, px: number, py: number): Point {
-    if (this.mode !== 'top' && this.mode !== 'oblique' && this.mode !== 'side') return this.vecToScreen(x, y, px / CELL, py / CELL);
-    const ux = this.flipped ? -px : px;
-    const uy = this.flipped ? -py : py;
-    if (this.mode === 'side') return { x: -uy * SIDE_X, y: ux * SIDE_Y };
-    return { x: ux, y: uy * this.yScale };
+  shiftOnScreen(sx: number, sy: number, x: number, y: number, px: number, py: number, qx: number, qy: number): Point {
+    if (this.mode === 'top' || this.mode === 'oblique') {
+      const upx = this.flipped ? -px : px;
+      const uqx = this.flipped ? -qx : qx;
+      const dy = py - qy;
+      const uy = this.flipped ? -dy : dy;
+      return { x: sx + upx - uqx, y: sy + uy * this.yScale };
+    }
+    const dx = px - qx;
+    const dy = py - qy;
+    if (this.mode === 'side') {
+      const ux = this.flipped ? -dx : dx;
+      const uy = this.flipped ? -dy : dy;
+      return { x: sx + -uy * SIDE_X, y: sy + ux * SIDE_Y };
+    }
+    const v = this.vecToScreen(x, y, dx / CELL, dy / CELL);
+    return { x: sx + v.x, y: sy + v.y };
   }
 
   /**
