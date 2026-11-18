@@ -13,6 +13,7 @@ export {
   stanceAllowed,
   armyCost,
   validateArmy,
+  reserveErrors,
   MAX_UNITS,
   STANDARD_WIDTH,
   STANDARD_HEIGHT,
@@ -20,6 +21,7 @@ export {
 } from './army.ts';
 export { createBattle, step, remainingRatio } from './battle.ts';
 export { canOrder, canOrderView } from './orders.ts';
+export { canSummon, canSummonView } from './reserve.ts';
 export { viewFor, summarize } from './view.ts';
 export { listTemplates, applyTemplate } from './templates.ts';
 
@@ -28,7 +30,7 @@ export const STANDARD_ROSTER = { hq: 1, infantry: 5, shield: 3, cavalry: 3, arch
 export { PVP_RULES, pvpArmyLimits } from './pvp.ts';
 export { recognizeFormation, formationScores, FORMATION_MIN_SCORE, FORMATION_MIN_MARGIN } from './formation.ts';
 export { STAR_THRESHOLDS, stageSetup, stageSetupWith, validateStageArmy, starsFor, stageEnemyVisible, stageLineArmy, stanceAllowedInStage, STAGE_MAX_TICKS } from './stage.ts';
-export type { Stage, StageAllow, StageEnemyOrder, StageEnemyView } from './stage.ts';
+export type { Stage, StageAllow, StageEnemyOrder, StageEnemyView, StageReserveCall } from './stage.ts';
 export { STAGES } from './stages.ts';
 export { PVP_MAPS, pvpField } from './maps.ts';
 export type { PvpMapId } from './maps.ts';
