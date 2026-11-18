@@ -6,7 +6,8 @@
 import type { Field } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
-import { gateKey, RUBBLE_KEY, tallGateKey } from './textures.ts';
+import { placeTall, tallArt } from './tallArt.ts';
+import { RUBBLE_KEY } from './textures.ts';
 
 export class GateSprite {
   private readonly img: Phaser.GameObjects.Image;
@@ -22,11 +23,12 @@ export class GateSprite {
     readonly row: number,
     private readonly layer: Phaser.GameObjects.Container,
   ) {
-    const r = fv.cellRect(col, row);
-    // 斜めのときは、高さのある門の絵を、マスの手前の端に下の端を合わせて立てる（奥のものから描けるよう depth を付ける）
-    this.img = fv.oblique
-      ? scene.add.image(r.x, r.y + r.h, tallGateKey(0)).setOrigin(0, 1).setDepth(r.y + r.h)
-      : scene.add.image(r.x, r.y, gateKey(0)).setOrigin(0, 0);
+    // 絵と置き方は視点の絵の組で決まる（真上は平たく敷き、立てる視点では、マスの手前の端に下の端を合わせて立てる）。
+    // 奥のものから描く視点では、並べる値を depth に入れる
+    const a = tallArt(fv.art, 'gate')!;
+    const at = placeTall(a, fv.cellRect(col, row));
+    this.img = scene.add.image(at.x, at.y, a.key).setOrigin(a.originX, a.originY);
+    if (fv.depthSorted) this.img.setDepth(at.depth);
     layer.add(this.img);
   }
 
@@ -35,7 +37,7 @@ export class GateSprite {
     const stage: 0 | 1 | 2 = ratio > 2 / 3 ? 0 : ratio > 1 / 3 ? 1 : 2;
     if (stage === this.stage) return;
     this.stage = stage;
-    this.img.setTexture(this.fv.oblique ? tallGateKey(stage) : gateKey(stage));
+    this.img.setTexture(tallArt(this.fv.art, 'gate', { stage })!.key);
   }
 
   get isBroken(): boolean {
@@ -54,7 +56,7 @@ export class GateSprite {
       // 門のマスと、両隣のうち城壁のマスだけ（field は開戦時のものなので、崩れる前の城壁が入っている）
       if (c !== this.col && t !== 'wall') continue;
       const r = this.fv.cellRect(c, this.row);
-      // 瓦礫は平たい絵なので、斜めのときも縮めて敷き、どの部隊よりも下に描く
+      // 瓦礫は平たい絵なので、立てる視点でもマスの矩形に合わせて敷き、どの部隊よりも下に描く
       const img = this.scene.add.image(r.x, r.y, RUBBLE_KEY).setOrigin(0, 0).setDisplaySize(r.w, r.h).setDepth(-1e6);
       this.layer.add(img);
       this.rubble.push(img);

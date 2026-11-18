@@ -163,7 +163,7 @@ export interface BattlePanel {
   targets: Rect[];
   /** 突撃・堅守・後退 */
   orders: Rect[];
-  /** 視点（真上・斜め）の切り替え（design §5.7） */
+  /** 視点（真上・斜め・横から）の切り替え（design §5.7、§5.8） */
   view: Rect;
 }
 
