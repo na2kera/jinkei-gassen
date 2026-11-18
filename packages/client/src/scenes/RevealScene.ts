@@ -79,11 +79,10 @@ export class RevealScene extends Phaser.Scene {
       reveal.armies.forEach((army, side) => {
         const team = side === room.you ? 0 : 1;
         for (const p of army) {
-          const s = new UnitSprite(this, team, p.kind, id++, this.soldiers, this.marks);
+          const s = new UnitSprite(this, team, p.kind, id++, this.soldiers, this.marks, this.fv);
           const c = this.fv.cellCenter(p.col, p.row);
           // 自軍は上を、敵軍は下を向いて並ぶ（どちらの人にも自軍が下に見える）
-          const d = this.fv.dirToScreen(0, team === 0 ? -1 : 1);
-          s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
+          s.apply({ x: c.x, y: c.y, fx: 0, fy: team === 0 ? -1 : 1, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
         }
       });
     }

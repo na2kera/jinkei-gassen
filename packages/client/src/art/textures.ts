@@ -310,6 +310,7 @@ export function buildTextures(scene: Phaser.Scene): void {
   }
   buildStage4Textures(scene);
   buildStage5Textures(scene);
+  buildSideTextures(scene);
 }
 
 /** 地形のタイルの見本を返す（段階4の確かめ用。開発用の口から使う） */
@@ -525,4 +526,163 @@ export function buildStage5Textures(scene: Phaser.Scene): void {
   makeCanvasTexture(scene, TALL_FENCE, TILE, 12, paintTallFence);
   makeCanvasTexture(scene, TALL_WALL, TILE, 22, paintTallWall);
   for (const s of [0, 1, 2] as const) makeCanvasTexture(scene, tallGateKey(s), TILE, 22, (ctx) => paintTallGate(ctx, s));
+}
+
+// ---- 横からの視点の絵（design §5.8.4）：柵・城壁・門 ----
+// 柵と城壁は、戦場では横（x の向き）に伸びるので、横からでは画面の縦（奥行き）に伸びる。
+// 1マスぶんの絵（幅 18px）を、下の端をマスの手前の端に合わせて立て、奥のマスから順に描くと、1本につながって見える。
+// 絵の上の 15 行が、高さぶん持ち上がった上の面、その下が手前に見える面（小口）。手前のマスの上の面が、奥のマスの小口を隠す。
+// マスの縦は丸めで 14px と 15px が交じるので、上の面は 15 行にして、隙間を出さない。
+
+export const SIDE_FENCE = 'side-fence';
+export const SIDE_WALL = 'side-wall';
+export function sideGateKey(stage: 0 | 1 | 2): string {
+  return `side-gate-${stage}`;
+}
+
+/** 横から用の絵の色。T・t 城壁の上の面、f・j 城壁の手前の面、K・W・V・I・N 門、P・C・w 柵（どれも斜めの絵と同じ色） */
+const SIDE_COLORS: Record<string, number> = {
+  T: 0x8a867c,
+  t: 0x77736a,
+  f: 0x4a4640,
+  j: 0x6a6660,
+  K: 0x2a1c0e,
+  W: 0x8a5a2a,
+  V: 0x6e4620,
+  I: 0x45464e,
+  N: 0xdcdcd2,
+  P: 0x3a2a14,
+  C: 0xb07a3a,
+  w: ART.wood,
+};
+
+/** 柵（18 × 18）：奥へ伸びる横木と、杭が1本。下の 3 行は空けて、柵の高さぶん持ち上げる */
+const SIDE_FENCE_ROWS = [
+  '........ww........',
+  '........ww........',
+  '........ww........',
+  '.......CCCC.......',
+  '.......PPPP.......',
+  '.......PPPP.......',
+  '.......PPPP.......',
+  '.......PPPP.......',
+  '.......PPPP.......',
+  '.......PPPP.......',
+  '.......PPPP.......',
+  '........ww........',
+  '........ww........',
+  '........ww........',
+  '........ww........',
+  '..................',
+  '..................',
+  '..................',
+];
+
+/** 城壁（18 × 24）：上の面（明るい石、15 行）と、手前の面（石積み、9 行） */
+const SIDE_WALL_ROWS = [
+  'tTTTTTTTTTTTTTTTTt',
+  'tTTTTTTTtTTTTTTTTt',
+  'tTTTTTTTtTTTTTTTTt',
+  'tTTTTTTTtTTTTTTTTt',
+  'tttttttttttttttttt',
+  'tTTTtTTTTTTTTtTTTt',
+  'tTTTtTTTTTTTTtTTTt',
+  'tTTTtTTTTTTTTtTTTt',
+  'tTTTtTTTTTTTTtTTTt',
+  'tttttttttttttttttt',
+  'tTTTTTTTtTTTTTTTTt',
+  'tTTTTTTTtTTTTTTTTt',
+  'tTTTTTTTtTTTTTTTTt',
+  'tTTTTTTTtTTTTTTTTt',
+  'tttttttttttttttttt',
+  'ffffffffffffffffff',
+  'fjjjjjjjffjjjjjjjf',
+  'ffffffffffffffffff',
+  'ffffffffffffffffff',
+  'jjjjffjjjjjjjffjjj',
+  'ffffffffffffffffff',
+  'ffffffffffffffffff',
+  'fjjjjjjjffjjjjjjjf',
+  'ffffffffffffffffff',
+];
+
+/** 門（18 × 24）：上の面は木の扉に鉄の帯（15 行）、手前の面は木の小口（9 行） */
+const SIDE_GATE_ROWS = [
+  'KKKKKKKKKKKKKKKKKK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KINIIIIIIIIIIIINIK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KINIIIIIIIIIIIINIK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KINIIIIIIIIIIIINIK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KWWWWWWWVWWWWWWWWK',
+  'KKKKKKKKKKKKKKKKKK',
+  'KVVVVVVVVVVVVVVVVK',
+  'KVVVVVVVVVVVVVVVVK',
+  'KVVVVVVVVVVVVVVVVK',
+  'KVVVVVVVVVVVVVVVVK',
+  'KVVVVVVVVVVVVVVVVK',
+  'KVVVVVVVVVVVVVVVVK',
+  'KVVVVVVVVVVVVVVVVK',
+  'KVVVVVVVVVVVVVVVVK',
+  'KKKKKKKKKKKKKKKKKK',
+];
+
+/** 門の壊れ具合で抜ける所（[x, y, 幅, 高さ]）。1 で板が抜けて角が欠け、2 で真ん中が大きく割れる */
+const SIDE_GATE_HOLES: Record<1 | 2, readonly (readonly [number, number, number, number])[]> = {
+  1: [
+    [3, 4, 4, 3],
+    [11, 8, 4, 2],
+    [14, 1, 3, 1],
+  ],
+  2: [
+    [7, 1, 3, 8],
+    [5, 9, 8, 2],
+    [8, 11, 2, 3],
+  ],
+};
+
+/** 文字の並びの、矩形の所を ch で塗りかえる */
+function carveRows(rows: readonly string[], holes: readonly (readonly [number, number, number, number])[], ch: string): string[] {
+  const out = rows.map((r) => [...r]);
+  for (const [x, y, w, h] of holes) {
+    for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) if (out[j]?.[i] !== undefined) out[j]![i] = ch;
+  }
+  return out.map((r) => r.join(''));
+}
+
+/** 横から用の門の並び（壊れ具合ごと） */
+function sideGateRows(stage: 0 | 1 | 2): string[] {
+  let rows = [...SIDE_GATE_ROWS];
+  if (stage >= 1) rows = carveRows(rows, SIDE_GATE_HOLES[1], 'K');
+  if (stage >= 2) rows = carveRows(rows, SIDE_GATE_HOLES[2], 'K');
+  return rows;
+}
+
+/** 横から用の絵の並び（確かめ用。どれも矩形で、知らない文字がないか） */
+export function sideArtRows(): Record<string, readonly string[]> {
+  return {
+    [SIDE_FENCE]: SIDE_FENCE_ROWS,
+    [SIDE_WALL]: SIDE_WALL_ROWS,
+    [sideGateKey(0)]: sideGateRows(0),
+    [sideGateKey(1)]: sideGateRows(1),
+    [sideGateKey(2)]: sideGateRows(2),
+  };
+}
+
+/** 横から用の絵の文字 → 色（確かめ用） */
+export function sideArtColors(): Readonly<Record<string, number>> {
+  return SIDE_COLORS;
+}
+
+export function buildSideTextures(scene: Phaser.Scene): void {
+  for (const [key, rows] of Object.entries(sideArtRows())) {
+    makeCanvasTexture(scene, key, rows[0]?.length ?? 0, rows.length, (ctx) => paintRows(ctx, rows, SIDE_COLORS));
+  }
 }

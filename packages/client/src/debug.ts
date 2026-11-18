@@ -23,7 +23,7 @@ import {
 import type Phaser from 'phaser';
 import { effectCounts } from './art/effects.ts';
 import { LocalBattleSource } from './battle/LocalBattleSource.ts';
-import { unitReach } from './art/UnitSprite.ts';
+import { unitReach } from './art/formation.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
 import { runEventDedup } from './net/eventDedup.ts';
 import { overflows, type Overflow } from './ui/overflow.ts';
