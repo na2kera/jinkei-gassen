@@ -31,8 +31,10 @@ import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
 import { runEventDedup } from './net/eventDedup.ts';
 import { overflows, type Overflow } from './ui/overflow.ts';
 import { client, pvp, pvpLocal } from './net/pvp.ts';
-import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug } from './save.ts';
+import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug, setTutorialDoneForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
+import { startTutorial, tutorialPaused } from './tutorial/run.ts';
+import type { TutorialAction, TutorialRun } from './tutorial/steps.ts';
 
 interface DebugHooks {
   scene: string;
@@ -66,6 +68,10 @@ interface DebugHooks {
   summon: ((from: ReserveFrom) => boolean) | null;
   /** 矢を飛ばした組（射手の id と、その刻みの attacking）。最後の 50 組 */
   arrows: [number, number][];
+  /** チュートリアル（design §8.8）：TutorialAction を、いまの画面の操作と同じ道筋で当てはめる。受け付けたら true */
+  tutorialAct: ((a: TutorialAction) => boolean) | null;
+  /** チュートリアルの「飛ばす」と同じ */
+  tutorialSkip: (() => void) | null;
 }
 
 export const debug: DebugHooks = {
@@ -89,6 +95,8 @@ export const debug: DebugHooks = {
   summon: null,
   toggleView: null,
   arrows: [],
+  tutorialAct: null,
+  tutorialSkip: null,
 };
 
 export function pushCapped<T>(arr: T[], v: T, cap: number): void {
@@ -430,6 +438,29 @@ export function installDebug(game: Phaser.Game): void {
       if (!debug.retry) return false;
       debug.retry();
       return true;
+    },
+    /** チュートリアルのいまの進み具合（なければ null）と、戦闘が止まっているか（design §8.8） */
+    get tutorial(): { run: TutorialRun | null; paused: boolean } {
+      return { run: session.tutorial ? (JSON.parse(JSON.stringify(session.tutorial)) as TutorialRun) : null, paused: tutorialPaused() };
+    },
+    /** チュートリアルを始める（from は 'auto' か 'list'。終えたあとの行き先が変わる） */
+    tutorialStart(from: TutorialRun['from'] = 'list'): boolean {
+      startTutorial(from);
+      return api.goScene('Deploy', { stageId: 'tutorial' });
+    },
+    /** TutorialAction を、画面の操作と同じ道筋で当てはめる（受け付けたら true） */
+    tutorialAct(action: TutorialAction): boolean {
+      return debug.tutorialAct ? debug.tutorialAct(action) : false;
+    },
+    /** 「飛ばす」と同じ */
+    tutorialSkip(): boolean {
+      if (!debug.tutorialSkip) return false;
+      debug.tutorialSkip();
+      return true;
+    },
+    /** 済みの印を付ける・外す */
+    setTutorialDone(v: boolean): void {
+      setTutorialDoneForDebug(v);
     },
   };
   (window as unknown as { __jg: typeof api }).__jg = api;

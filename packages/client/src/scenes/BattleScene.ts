@@ -1,6 +1,7 @@
 // 戦闘の画面。BattleSource から届く場面と出来事だけを描く（engine の状態は読まない。design §2、§5.2）。
 // 向きが変わっても source と補間はそのままにして、表示物だけを組み直す（作り直すと戦いが最初に戻るため）。
 // 演出（火花・矢・突入・敗走・全滅・号令の旗）も、場面と出来事から見た目だけを作る。場面の値は変えない。
+// チュートリアル（design §8.6）では、進み具合（session.tutorial）を毎フレーム見て、指示の一行と押せるボタンを直す。
 
 import {
   DT,
@@ -8,6 +9,7 @@ import {
   ORDER_KINDS,
   ROUT_TICKS,
   ORDER_TARGETS,
+  TUTORIAL_ORDER,
   type BattleEvent,
   type BattleSummary,
   type Field,
@@ -45,7 +47,7 @@ import { nextView, usableView, type ViewMode } from '../battle/viewMode.ts';
 import { followInspect, type Inspect } from '../battle/inspect.ts';
 import { FrameInterpolator, type UnitSample } from '../battle/interp.ts';
 import { debug, pushCapped } from '../debug.ts';
-import { battlePanel, battleReserveButtons, CELL, getLayout, LAYOUT_EVENT, type Rect } from '../layout.ts';
+import { battlePanel, battleReserveButtons, CELL, getLayout, LAYOUT_EVENT, tutorialLine, tutorialNext, type Rect } from '../layout.ts';
 import { reserveNoticeAt, summonShown } from '../battle/reserveUi.ts';
 import { pvp } from '../net/pvp.ts';
 import { savedView, saveView } from '../save.ts';
@@ -56,6 +58,9 @@ import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
 import { unitBoxAt } from '../ui/unitBox.ts';
 import { addText } from '../ui/text.ts';
+import { checkFit } from '../ui/overflow.ts';
+import { blinkOn, resumeTutorialBattle, tutorialAct } from '../tutorial/run.ts';
+import { line, lit, type TutorialAction } from '../tutorial/steps.ts';
 
 /** 号令の表示を出しておく長さ（ミリ秒） */
 const ANNOUNCE_MS = 2000;
@@ -105,6 +110,11 @@ export interface BattleSceneData {
    * 省略したときや、絵を読めなかったときは、空の色のべた塗り
    */
   backdrop?: string;
+  /**
+   * チュートリアルの戦い（design §8.6）。視点は真上に固定し、視点・倍速・遊軍のボタンを隠し、「やめる」の場所に「飛ばす」を出す。
+   * 号令は進み具合（session.tutorial）が許すものだけ。決着のあとは結果を残さず、onFinished を呼ぶ
+   */
+  tutorial?: boolean;
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -154,6 +164,11 @@ export class BattleScene extends Phaser.Scene {
   private endShownAt = 0;
   private summary: BattleSummary | null = null;
   private inspect: Inspect | null = null;
+  private tutorial = false;
+  /** 最後に画面へ映したチュートリアルの手順（変わったら、一行とボタンを直す） */
+  private tutorialShown = '';
+  private tutorialText: Phaser.GameObjects.Text | null = null;
+  private nextButton: Button | null = null;
 
   // 表示物（向きが変わると作り直す）
   private fv!: FieldView;
@@ -194,8 +209,10 @@ export class BattleScene extends Phaser.Scene {
     this.fogCleared = this.fog.length === 0;
     this.survive = data.survive ?? false;
     this.backdrop = data.backdrop;
-    // 回す順に入っていない視点が保存されていたら、真上として扱う（いまは4つとも回す順に入っている）
-    this.mode = usableView(savedView());
+    this.tutorial = data.tutorial === true && session.tutorial !== null;
+    // 回す順に入っていない視点が保存されていたら、真上として扱う（いまは4つとも回す順に入っている）。
+    // チュートリアルは真上に固定し、保存した視点は読まない
+    this.mode = this.tutorial ? 'top' : usableView(savedView());
     this.stageId = data.stageId ?? '';
   }
 
@@ -252,8 +269,12 @@ export class BattleScene extends Phaser.Scene {
       debug.setSpeed = null;
       debug.toggleView = null;
       debug.summon = null;
+      debug.tutorialAct = null;
+      debug.tutorialSkip = null;
     });
     debug.order = (t, k) => {
+      // チュートリアルの号令は、tutorialAct の口から（画面と同じ道筋で）だけ
+      if (this.tutorial) return false;
       if (!this.source || !this.source.canOrder(t, k)) return false;
       this.source.order(t, k);
       return true;
@@ -265,6 +286,10 @@ export class BattleScene extends Phaser.Scene {
       this.summon(from);
       return true;
     };
+    if (this.tutorial) {
+      debug.tutorialAct = (a) => this.tutorialInput(a);
+      debug.tutorialSkip = () => this.onQuit(this);
+    }
   }
 
   // ---- 表示物の組み立て ----
@@ -322,19 +347,25 @@ export class BattleScene extends Phaser.Scene {
     this.root.add([this.timeText, this.marks]);
     this.lastMarksLeft = -1;
     addMuteButton(this, panel.mute).addTo(this.root);
-    // 早送りは、source が対応しているときだけ出す（対戦では出さない）
-    this.speedButton = this.source?.setSpeed
+    // 早送りは、source が対応しているときだけ出す（対戦では出さない。チュートリアルは1倍に固定する）
+    this.speedButton = this.source?.setSpeed && !this.tutorial
       ? new Button(this, panel.speed, '', () => this.setSpeed(this.speed === 1 ? 2 : 1)).addTo(this.root)
       : null;
-    // やめる：1回目は「やめる？」に変わるだけで、猶予のうちにもう一度押すと抜ける
-    this.quitButton = new Button(this, panel.quit, this.quitLabel, () => this.pressQuit()).addTo(this.root);
-    // 視点の切り替え（各自の画面だけに効く。戦闘の中身は変わらない）
-    this.viewButton = new Button(this, panel.view, VIEW_LABEL[this.mode], () => this.toggleView()).addTo(this.root);
+    // やめる：1回目は「やめる？」に変わるだけで、猶予のうちにもう一度押すと抜ける。
+    // チュートリアルの「飛ばす」は確かめずに1度で抜ける（決着の表示の間も、done でも押せる。design §8.10-3）
+    this.quitButton = this.tutorial
+      ? new Button(this, panel.quit, '飛ばす', () => this.onQuit(this)).addTo(this.root)
+      : new Button(this, panel.quit, this.quitLabel, () => this.pressQuit()).addTo(this.root);
+    // 視点の切り替え（各自の画面だけに効く。戦闘の中身は変わらない）。チュートリアルでは出さない
+    this.viewButton = this.tutorial ? null : new Button(this, panel.view, VIEW_LABEL[this.mode], () => this.toggleView()).addTo(this.root);
     this.targetButtons = new Map();
     this.orderButtons = new Map();
     this.reserveButtons = new Map();
-    // 号令を教える前の面では、号令の欄を出さない
-    if (this.ordersShown) this.buildOrders(panel);
+    this.nextButton = null;
+    this.tutorialText = null;
+    this.tutorialShown = '';
+    // 号令を教える前の面では、号令の欄を出さない。チュートリアルの done では号令のボタンを消し、「次へ」を出す
+    if (this.ordersShown && !(this.tutorial && session.tutorial?.step === 'done')) this.buildOrders(panel);
 
     this.announceBox = this.add.graphics();
     this.announceText = addText(this, 0, 0, '').setOrigin(0, 0.5);
@@ -346,19 +377,87 @@ export class BattleScene extends Phaser.Scene {
     this.noticeBox = this.add.graphics();
     this.noticeTexts = [];
     this.root.add([this.announceBox, this.announceText, this.noticeBox, this.infoBox, this.infoText, this.endBox, this.endText]);
+    if (this.tutorial) {
+      // 指示の一行：視点のボタンがあった行に、左寄せで
+      const r = tutorialLine(layout, 'battle');
+      this.tutorialText = addText(this, r.x, Math.round(r.y + r.h / 2), '', 16, COLOR.cream).setOrigin(0, 0.5);
+      this.root.add(this.tutorialText);
+      this.syncTutorial();
+    }
 
     this.refreshControls();
     this.render();
+  }
+
+  // ---- チュートリアル（design §8.6、§8.10） ----
+
+  /** 手順が変わっていたら、一行・号令のボタン・「次へ」・決着の表示を、いまの手順に合わせる */
+  private syncTutorial(): void {
+    const run = session.tutorial;
+    if (!this.tutorial || !run || !this.tutorialText) return;
+    const key = `${run.step}:${run.targetPicked}`;
+    if (key === this.tutorialShown) return;
+    this.tutorialShown = key;
+    const text = line(run);
+    this.tutorialText.setText(text);
+    const r = tutorialLine(getLayout(), 'battle');
+    checkFit(this.scene.key, text, this.tutorialText.width, this.tutorialText.height, r.w + 8, r.h + 4);
+    if (run.step === 'done' && !this.nextButton) {
+      // 決着の表示（「勝ち」の箱）を片付け、号令のボタンの代わりに「次へ」を出す（design §8.10-4）
+      this.endBox.clear();
+      this.endText.setVisible(false);
+      for (const b of this.targetButtons.values()) b.destroy();
+      for (const b of this.orderButtons.values()) b.destroy();
+      this.targetButtons = new Map();
+      this.orderButtons = new Map();
+      this.selectedTarget = null;
+      this.nextButton = new Button(this, tutorialNext(getLayout()), '次へ', () => this.onQuit(this), { primary: true }).addTo(this.root);
+    }
+    this.refreshControls();
+  }
+
+  /** 毎フレーム：目立たせるボタンを 0.5 秒ごとに、ふつうの見た目と選択中の見た目で入れ替える */
+  private blinkTutorial(): void {
+    const run = session.tutorial;
+    if (!this.tutorial || !run) return;
+    const on = blinkOn(this.time.now);
+    const l = lit(run);
+    for (const [t, b] of this.targetButtons) b.setSelected(this.selectedTarget === t || (on && l.targets.includes(t)));
+    for (const [k, b] of this.orderButtons) b.setSelected(on && l.orders.includes(k));
+    this.nextButton?.setSelected(on && l.next);
+  }
+
+  /** 号令の翼のボタンを押した */
+  private pressTarget(t: OrderTarget): void {
+    if (this.tutorial) {
+      if (!tutorialAct({ type: 'target', target: t })) return;
+      this.selectedTarget = t;
+      this.refreshControls();
+      return;
+    }
+    this.selectedTarget = this.selectedTarget === t ? null : t;
+    this.refreshControls();
+  }
+
+  /** 開発用の口：TutorialAction を、画面の操作と同じ道筋で当てはめる。受け付けたら true */
+  private tutorialInput(a: TutorialAction): boolean {
+    const before = session.tutorial;
+    if (!before) return false;
+    if (a.type === 'target') {
+      const b = this.targetButtons.get(a.target);
+      if (b?.isEnabled) this.pressTarget(a.target);
+    } else if (a.type === 'order') {
+      const b = this.orderButtons.get(a.kind);
+      if (b?.isEnabled) this.giveOrder(a.kind);
+    }
+    return session.tutorial !== before;
   }
 
   private buildOrders(panel: ReturnType<typeof battlePanel>): void {
     ORDER_TARGETS.forEach((t, i) => {
       const r = panel.targets[i];
       if (!r) return;
-      const b = new Button(this, r, TARGET_LABEL[t], () => {
-        this.selectedTarget = this.selectedTarget === t ? null : t;
-        this.refreshControls();
-      }).addTo(this.root);
+      const b = new Button(this, r, TARGET_LABEL[t], () => this.pressTarget(t)).addTo(this.root);
       this.targetButtons.set(t, b);
     });
     ORDER_KINDS.forEach((k, i) => {
@@ -391,7 +490,8 @@ export class BattleScene extends Phaser.Scene {
     this.effects = null;
     this.root.destroy();
     this.build();
-    if (this.endShownAt > 0) this.drawEnd();
+    // チュートリアルの done では、決着の表示は戻さない（design §8.10-4）
+    if (this.endShownAt > 0 && !(this.tutorial && session.tutorial?.step === 'done')) this.drawEnd();
   }
 
   // ---- 場面の受け取り ----
@@ -494,9 +594,12 @@ export class BattleScene extends Phaser.Scene {
     else if (s.winner === this.viewer) playWin();
     else playLose();
     this.time.delayedCall(END_DELAY_MS, () => {
-      const units = this.interp.latest?.view.units ?? [];
-      session.result = { stageId: this.stageId, summary: s, viewer: this.viewer, units };
-      debug.result = session.result;
+      // チュートリアルは結果を残さない（design §8.10-4）
+      if (!this.tutorial) {
+        const units = this.interp.latest?.view.units ?? [];
+        session.result = { stageId: this.stageId, summary: s, viewer: this.viewer, units };
+        debug.result = session.result;
+      }
       if (this.onFinished) this.onFinished(this);
       else this.scene.start('Result');
     });
@@ -519,6 +622,8 @@ export class BattleScene extends Phaser.Scene {
   // ---- 操作 ----
 
   private setSpeed(n: number): void {
+    // チュートリアルは1倍に固定する（design §8.4）
+    if (this.tutorial) return;
     this.speed = n;
     this.source?.setSpeed?.(n);
     this.refreshControls();
@@ -533,7 +638,7 @@ export class BattleScene extends Phaser.Scene {
 
   /** 自分に遊軍がいる戦いだけ、「遊軍 左から」「遊軍 右から」を作る（対戦では最初の場面が届いてから分かる） */
   private ensureReserveButtons(): void {
-    if (this.reserveButtons.size > 0 || !this.source || !summonShown(this.source.reserve())) return;
+    if (this.tutorial || this.reserveButtons.size > 0 || !this.source || !summonShown(this.source.reserve())) return;
     const [left, right] = battleReserveButtons(getLayout());
     for (const [from, r] of [['left', left], ['right', right]] as const) {
       this.reserveButtons.set(from, new Button(this, r, RESERVE_FROM_LABEL[from], () => this.summon(from)).addTo(this.root));
@@ -543,6 +648,15 @@ export class BattleScene extends Phaser.Scene {
   private giveOrder(kind: OrderKind): void {
     const t = this.selectedTarget;
     if (!t || !this.source || !this.source.canOrder(t, kind)) return;
+    if (this.tutorial) {
+      if (!tutorialAct({ type: 'order', kind })) return;
+      // 号令は、止まっていた刻みの次の step に渡る（再開しても、まだ渡していない号令は残る）
+      this.source.order(t, kind);
+      resumeTutorialBattle();
+      this.selectedTarget = null;
+      this.refreshControls();
+      return;
+    }
     this.source.order(t, kind);
     this.selectedTarget = null;
     this.refreshControls();
@@ -550,6 +664,8 @@ export class BattleScene extends Phaser.Scene {
 
   /** 部隊を押している間だけ、その部隊の兵数と士気を出す */
   private onDown(pointer: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]): void {
+    // チュートリアルでは、部隊の長押し（情報の箱）は効かない（押した瞬間の入口で止める。design §8.10-8）
+    if (this.tutorial) return;
     if (this.inspect || over.length > 0 || !inRect(this.fv.uiBounds(this.area), pointer.x, pointer.y)) return;
     // 押した位置にいちばん近い部隊を選ぶ（選び方は視点ごとに FieldView.pick が決める）
     const units = this.interp
@@ -568,18 +684,23 @@ export class BattleScene extends Phaser.Scene {
   private refreshControls(): void {
     // まだ build していないときは何もしない
     if (!this.root) return;
-    this.quitButton?.setEnabled(!this.ended);
+    // チュートリアルの「飛ばす」は、決着のあとも押せる
+    this.quitButton?.setEnabled(this.tutorial || !this.ended);
     this.speedButton?.setText(`${this.speed}倍`).setEnabled(!this.ended);
     const src = this.source;
+    // チュートリアルでは、order の手順のときだけ「全軍」、押したあとは「突撃」だけが押せる
+    const run = this.tutorial ? session.tutorial : null;
+    const tutorialOrder = !this.tutorial || run?.step === 'order';
     for (const [t, b] of this.targetButtons) {
       // 相手は、どれかの号令がかかるときだけ選べる
-      const any = !this.ended && !!src && ORDER_KINDS.some((k) => src.canOrder(t, k));
+      const any = !this.ended && !!src && tutorialOrder && (!this.tutorial || t === TUTORIAL_ORDER.target) && ORDER_KINDS.some((k) => src.canOrder(t, k));
       b.setEnabled(any).setSelected(this.selectedTarget === t);
       if (!any && this.selectedTarget === t) this.selectedTarget = null;
     }
     for (const [k, b] of this.orderButtons) {
       const t = this.selectedTarget;
-      b.setEnabled(!this.ended && !!src && !!t && src.canOrder(t, k));
+      const ok = !this.tutorial || (!!run?.targetPicked && k === TUTORIAL_ORDER.kind);
+      b.setEnabled(!this.ended && !!src && !!t && ok && tutorialOrder && src.canOrder(t, k));
     }
     // 遊軍：開戦 5 秒まで・呼んだあと・返事待ちの間・決着のあとは、押せない色（呼んだあとも出したまま）
     this.ensureReserveButtons();
@@ -593,6 +714,10 @@ export class BattleScene extends Phaser.Scene {
     if (!this.source && !this.summary) return;
     this.interp.advance(delta, this.speed);
     this.render();
+    if (this.tutorial) {
+      this.syncTutorial();
+      this.blinkTutorial();
+    }
   }
 
   private render(): void {
@@ -893,6 +1018,8 @@ export class BattleScene extends Phaser.Scene {
 
   /** 視点を 真上 → 斜め → 横から → 将軍 → 真上 と回す（battle/viewMode.ts）。表示物だけを作り直すので、戦いの途中でも位置は飛ばない */
   private toggleView(): void {
+    // チュートリアルは真上に固定し、保存した視点を書き換えない
+    if (this.tutorial) return;
     this.mode = nextView(this.mode);
     saveView(this.mode);
     this.rebuild();

@@ -1,7 +1,8 @@
 // ステージ選択。章ごとに面を並べ、取った星を示す。前の面を勝つと次の面が開き、開いていない面は押せない。
 // 章は STAGES にあるものだけを出す。章が2つ以上になったら、見出しの所に章を切り替えるボタンを並べる。
+// 第1章の一覧の先頭には、チュートリアルの「遊び方」の行を置く（面の id も星もなく、いつも押せる。design §8.6）。
 
-import { STAGES } from '@jinkei/engine';
+import { STAGES, TUTORIAL_STAGE } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { drawStar, STAR_SIZE } from '../art/icons.ts';
 import { COLOR } from '../art/palette.ts';
@@ -12,6 +13,7 @@ import { chapters, isUnlocked, orderedStages, session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { checkFit } from '../ui/overflow.ts';
 import { addText } from '../ui/text.ts';
+import { startTutorial } from '../tutorial/run.ts';
 
 /** 章の見出し */
 function chapterLabel(n: number): string {
@@ -37,7 +39,10 @@ export class StageSelectScene extends Phaser.Scene {
     }
     const chapter = shownChapter;
     const stages = orderedStages().filter((s) => s.chapter === chapter);
-    const l = stageSelectLayout(layout, stages.length);
+    // チュートリアルの行は、その章（第1章）の先頭に1行足す
+    const withTutorial = chapter === TUTORIAL_STAGE.chapter;
+    const l = stageSelectLayout(layout, stages.length + (withTutorial ? 1 : 0));
+    const rows = withTutorial ? l.stages.slice(1) : l.stages;
 
     new Button(this, l.back, '戻る', () => this.scene.start('Title'));
 
@@ -54,9 +59,19 @@ export class StageSelectScene extends Phaser.Scene {
       addText(this, l.heading.x, l.heading.y + 8, chapterLabel(chapter), 16, COLOR.muted);
     }
 
+    const tr = withTutorial ? l.stages[0] : undefined;
+    if (tr) {
+      new Button(this, tr, '', () => {
+        startTutorial('list');
+        this.scene.start('Deploy', { stageId: TUTORIAL_STAGE.id });
+      });
+      const name = addText(this, tr.x + 14, tr.y + tr.h / 2, TUTORIAL_STAGE.name, 16, COLOR.cream).setOrigin(0, 0.5).setDepth(1);
+      checkFit(this.scene.key, name.text, name.width, name.height, tr.w - 14 * 2 + 8, tr.h);
+    }
+
     const g = this.add.graphics().setDepth(1);
     stages.forEach((stage, i) => {
-      const r = l.stages[i];
+      const r = rows[i];
       if (!r) return;
       const open = isUnlocked(stage);
       // 名前は左に寄せ、星を右に置くため、ボタンの文字は空にして別に書く
