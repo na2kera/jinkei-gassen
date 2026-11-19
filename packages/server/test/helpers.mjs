@@ -103,14 +103,22 @@ export async function postRoom(base, body, { rlKey = randomKey() } = {}) {
 }
 
 /** 部屋を作る。map は選ぶ戦場（既定は平原に固定して、テストの結果がぶれないようにする。null ならランダム） */
-export async function createRoom(base, pid, timing, codes, map = 'plain') {
+export async function createRoom(base, pid, timing, codes, map = 'plain', seed = undefined) {
   const body = { pid };
   if (map !== null) body.map = map;
   if (timing !== undefined) body.timing = timing;
   if (codes !== undefined) body.codes = codes;
+  if (seed !== undefined) body.seed = seed;
   const r = await postRoom(base, body);
   if (r.status !== 201) throw new Error(`createRoom failed: ${r.status} ${JSON.stringify(r.body)}`);
   return r.body.code;
+}
+
+/** 刻みを n 回進める（timing.testManualTicks が 1 の部屋だけ）。進めたあとの刻みを返す */
+export async function stepTicks(base, code, n = 1) {
+  const r = await fetch(`${base}/api/rooms/${code}/test/step?n=${n}`, { method: 'POST' });
+  if (r.status !== 200) throw new Error(`test/step: ${r.status}`);
+  return (await r.json()).tick;
 }
 
 /** テスト用の経路を呼ぶ */
@@ -249,9 +257,9 @@ export class Client {
 }
 
 /** 部屋を作り、2人を入れて setup まで進める */
-export async function setupPair(base, timing, { names = ['A', 'B'], map = 'plain', cv = [undefined, undefined] } = {}) {
+export async function setupPair(base, timing, { names = ['A', 'B'], map = 'plain', cv = [undefined, undefined], seed = undefined } = {}) {
   const A = new Client(base, '', { name: names[0], cv: cv[0] });
-  const code = await createRoom(base, A.pid, timing, undefined, map);
+  const code = await createRoom(base, A.pid, timing, undefined, map, seed);
   A.code = code;
   const B = new Client(base, code, { name: names[1], cv: cv[1] });
   await A.connect();

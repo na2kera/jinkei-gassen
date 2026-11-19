@@ -8,10 +8,12 @@
 // 4桁のコードの総当たりで友達より先に空席を取られることと、作成の連打で予約と Durable Object の呼び出しを起こされることを抑える。
 //
 // テストのときだけ（開発サーバーに --var JINKEI_TEST_MODE:1 を渡したとき）:
-//   POST /api/rooms の本文に { timing: {...} } を付けて秒数を差し替え、{ codes: [...] } で試すコードの順を、{ map } で戦場を決められる
+//   POST /api/rooms の本文に { timing: {...} } を付けて秒数を差し替え、{ codes: [...] } で試すコードの順を、{ map } で戦場を、
+//   { seed } で戦いの乱数の種を決められる
 //   POST /api/rooms/:code/test/alarm     アラームの処理をいま実行する（2回鳴った場合の確認）
 //   POST /api/rooms/:code/test/abort     Durable Object を作り直させる（再開の確認）
 //   POST /api/rooms/:code/test/state     保存した段階・成績・刻みと、インスタンスの識別子を返す
+//   POST /api/rooms/:code/test/step?n=…  刻みを n 回進める（timing.testManualTicks が 1 の部屋だけ）。{ tick } を返す
 //   回数の上限の鍵を、見出し X-Test-Rl-Key か、入室の ?rlkey= で差し替える（テストごとに別の送信元として数えるため）
 
 import { DEFAULT_TIMING, parseTimingOverride, type Timing } from './timing.ts';
@@ -102,7 +104,7 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   }
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return json({ error: 'body must be an object' }, 400);
   const b = body as Record<string, unknown>;
-  const allowed = isTestMode(env) ? ['pid', 'timing', 'codes', 'map'] : ['pid'];
+  const allowed = isTestMode(env) ? ['pid', 'timing', 'codes', 'map', 'seed'] : ['pid'];
   if (Object.keys(b).some((k) => !allowed.includes(k))) return json({ error: 'unknown fields' }, 400);
   const pid = b['pid'];
   if (!isPid(pid)) return json({ error: 'pid must be 32 lowercase hex characters' }, 400);
@@ -125,10 +127,17 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
     if (!isMapId(b['map'])) return json({ error: 'invalid map' }, 400);
     map = b['map'];
   }
+  // テストでは、戦いの乱数の種を決めておける（同じ戦いを部屋をまたいで比べるため）
+  let seed: number | null = null;
+  if (b['seed'] !== undefined) {
+    const v = b['seed'];
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 0xffffffff) return json({ error: 'invalid seed' }, 400);
+    seed = v;
+  }
   const tries = codes ?? Array.from({ length: MAX_CODE_TRIES }, randomCode);
   for (const code of tries) {
     const stub = env.ROOM.getByName(code);
-    if (await stub.create(code, pid, timing, map)) {
+    if (await stub.create(code, pid, timing, map, seed)) {
       const res: CreateRoomResponse = { code };
       return json(res, 201);
     }
@@ -147,7 +156,7 @@ export default {
         if (!(await withinLimit(env.CREATE_LIMITER, limitKey(request, url, env)))) return json({ error: 'rate_limited' }, 429);
         return await createRoom(request, env);
       }
-      const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state)$/.exec(path);
+      const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state|test\/step)$/.exec(path);
       if (m !== null) {
         const code = m[1] ?? '';
         if (m[2] === 'ws') {
@@ -178,6 +187,11 @@ export default {
             // 期待どおり
           }
           return json({ ok: true });
+        }
+        if (m[2] === 'test/step') {
+          const n = Number(url.searchParams.get('n') ?? '1');
+          if (!Number.isInteger(n) || n < 1 || n > 100) return json({ error: 'invalid n' }, 400);
+          return json({ tick: await stub.stepNow(n) });
         }
         return json(await stub.debugState());
       }

@@ -104,10 +104,10 @@ export type PvpRulesView = {
   standardRoster: Roster;
   /**
    * この部屋で遊軍（design §7）を使えるか。両方の席が cv>=2 でつないでいるときだけ true（相手を待っている間は false）。
-   * 席の人が入れ替わる・入り直すたびに変わりうる（変わると room が送り直される）。false の間は、遊軍つきの draft / ready と
-   * reserve のメッセージが error（reserve_disabled）で断られる。setup の途中で false になったら、両者の下書き（と確定した組）の
-   * 遊軍は外され（確定はそのまま。外れたことは myReserve が null になることで分かる）、両者に room が送り直される。
-   * reveal・battle の途中で false になっても、始まった戦いの遊軍は消えないが、reserve のメッセージは断られる。
+   * 席の cv は下げない（同じ人が cv なしで入り直しても、大きいほうのまま）ので、同じ顔ぶれのあいだは true から false に変わらない。
+   * false から true には変わりうる（古い画面の人が新しい画面で入り直したとき。変わると room が送り直される）。
+   * false の間は、遊軍つきの draft / ready が error（reserve_disabled）で断られる。
+   * 戦闘中の reserve のメッセージは、その戦いを作った時点（公開に入るとき）の可否で受け付け、戦いが終わるまで変わらない。
    * 古い server は項目自体を送らないので、ない場合は false として読む。
    */
   reserve?: boolean;

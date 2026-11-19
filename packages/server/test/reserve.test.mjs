@@ -2,7 +2,7 @@
 // 現れた直後の作り直し、cv（古い画面の混じる部屋）、遊軍のエラーの op と、渡す前の入力は陣営ごとに1つまで、同じ刻みの遊軍と号令。
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client, army, collectEvents, holdArmy, loneArcherArmy, setupPair, sleep, startServer, testRoute, unpack } from './helpers.mjs';
+import { Client, army, collectEvents, holdArmy, loneArcherArmy, setupPair, sleep, startServer, stepTicks, testRoute, unpack } from './helpers.mjs';
 
 let server;
 beforeAll(async () => {
@@ -148,11 +148,32 @@ describe('隠す情報（R14 a）', () => {
   });
 });
 
-describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令）', () => {
-  it('現れた遊軍は両者の snap に出る。現れた直後に作り直しても消えず、二度は呼べない。渡す前の入力は1つまで', async () => {
+/** 刻みを手で進める部屋（timing.testManualTicks: 1）で、target の刻みまで進める */
+async function stepTo(code, target) {
+  let tick = await stepTicks(server.base, code, 1);
+  while (tick !== null && tick < target) {
+    const next = await stepTicks(server.base, code, Math.min(100, target - tick));
+    if (next === tick) break;
+    tick = next;
+  }
+  return tick;
+}
+
+/** 決着するまで刻みを進める（決着すると stepTicks が同じ刻みを返す） */
+async function stepToEnd(code, chunk = 20) {
+  let prev = -1;
+  for (;;) {
+    const t = await stepTicks(server.base, code, chunk);
+    if (t === prev || t === null) return t;
+    prev = t;
+  }
+}
+
+describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令。刻みを手で進める）', () => {
+  it('現れた遊軍は両者の snap に出る。現れた直後に作り直しても消えず、二度は呼べない。渡す前の入力は1つまで。同じ刻みの号令もかかる', async () => {
     // A（陣営0）は本陣と弓兵1（どちらも中央の翼。左翼と右翼はだれもいない）、遊軍は騎兵・守備。
     // B（陣営1）は盾兵11の壁（守備）、遊軍は歩兵・守備。弓兵が撃ち続けるので膠着にならず、時間切れまで続く
-    const timing = { tickMs: 100, revealMs: 300, maxTicks: 260, setupMs: 30_000, watchdogMs: 1000 };
+    const timing = { tickMs: 100, revealMs: 300, maxTicks: 400, setupMs: 30_000, watchdogMs: 1000, testManualTicks: 1 };
     let { A, B, code } = await setupPair(server.base, timing, { cv: [2, 2] });
     const wall = army([['hq', 5, 15, 'hold'], ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((c) => ['shield', c, 10, 'hold'])]);
     const aReserve = { kind: 'cavalry', stance: 'hold' };
@@ -162,14 +183,15 @@ describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令）', 
     const revA = await A.waitMsg((m) => m.type === 'reveal');
     expect(revA.myReserve).toEqual(aReserve);
     expect((await B.waitMsg((m) => m.type === 'reveal')).myReserve).toEqual(bReserve);
-    const first = await A.waitMsg((m) => m.type === 'snap');
-    expect(first.reserve).toEqual({ ...aReserve, state: 'waiting' });
+    await A.waitRoom((r) => r.phase === 'battle', 5000, 'battle');
     const battleNo = A.room.battleNo;
+    expect(await stepTo(code, 10)).toBe(10);
+    const first = await A.waitMsg((m) => m.type === 'snap' && m.tick === 10);
+    expect(first.reserve).toEqual({ ...aReserve, state: 'waiting' });
     const nUnits = first.units.length;
     expect(nUnits).toBe(loneArcherArmy().length + wall.length);
 
     // 開戦 5 秒まで（刻み 50 より前）は呼べない。エラーは本人にだけ、op: 'reserve' 付きで返る
-    expect(first.tick).toBeLessThan(40);
     B.send({ type: 'reserve', battleNo, from: 'left' });
     const early = await B.waitMsg((m) => m.type === 'error');
     expect(early).toMatchObject({ type: 'error', reason: 'invalid_reserve', op: 'reserve', code: 'reserve_not_ready' });
@@ -180,16 +202,25 @@ describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令）', 
     expect(B.of('error')).toHaveLength(1);
     expect(A.of('error')).toHaveLength(0);
 
-    // --- B が左から呼ぶ（号令は出さない）。定期の保存（20刻みごと）から離れた刻みで呼ぶ
-    const go = await B.waitMsg((m) => m.type === 'snap' && m.tick >= 52 && m.tick % 20 >= 2 && m.tick % 20 <= 8, { label: 'tick to summon' });
-    expect(go.reserve.state).toBe('ready');
+    // --- 刻み 62 で、B が左から呼ぶ（号令は出さない）。2つ目の入力は、渡す前なので断られる（断りが届けば、1つ目も処理済み）
+    expect(await stepTo(code, 62)).toBe(62);
+    await B.waitMsg((m) => m.type === 'snap' && m.tick === 62);
     const fromA = A.messages.length;
+    const fromB = B.messages.length;
     B.send({ type: 'reserve', battleNo, from: 'left' });
+    B.send({ type: 'reserve', battleNo, from: 'left' });
+    expect(await B.waitMsg((m) => m.type === 'error', { from: fromB })).toMatchObject({ reason: 'invalid_reserve', op: 'reserve', code: 'no_reserve' });
+    // 1刻み進める（刻み 63 は奇数なので snap は出ない）。現れた刻みはすぐ保存している（定期の保存は 20 刻みごと）
+    expect(await stepTicks(server.base, code, 1)).toBe(63);
+    const st = await testRoute(server.base, code, 'state');
+    expect(st.savedTick).toBe(63);
+    expect(await stepTicks(server.base, code, 1)).toBe(64);
     const isReserveEv = (side) => (m) => m.type === 'snap' && m.events.some((e) => e.type === 'reserve' && e.side === side);
-    const sb = await B.waitMsg(isReserveEv(1), { label: 'B reserve event' });
+    const sb = await B.waitMsg(isReserveEv(1), { from: fromB, label: 'B reserve event' });
     const sa = await A.waitMsg(isReserveEv(1), { from: fromA, label: 'B reserve event at A' });
+    expect(sb.tick).toBe(64);
     const ev = sb.events.find((e) => e.type === 'reserve');
-    expect(ev).toMatchObject({ side: 1, unit: nUnits, from: 'left' });
+    expect(ev).toEqual({ type: 'reserve', tick: 62, side: 1, unit: nUnits, from: 'left' });
     expect(sa.events.find((e) => e.type === 'reserve')).toEqual(ev);
     expect(sb.reserve).toEqual({ ...bReserve, state: 'used' });
     // 現れた部隊は、ふつうの部隊として両者の units に入る。B から見て左（自分が下の座標で列 0・行 8）、A から見て右上（列 11・行 7）
@@ -201,53 +232,49 @@ describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令）', 
     expect(unitA).toMatchObject({ side: 1, kind: 'infantry', wing: 'left', stance: null });
     expect(Math.abs(unitA.x - 11.5)).toBeLessThan(0.6);
     expect(Math.abs(unitA.y - 7.5)).toBeLessThan(0.6);
-    // 現れた刻みは、すぐ保存している（定期の保存の刻みより後で、次の定期の保存より前）
-    const st = await testRoute(server.base, code, 'state');
-    const lastPeriodic = Math.floor(ev.tick / 20) * 20;
-    expect(st.savedTick).toBeGreaterThan(lastPeriodic);
-    expect(st.savedTick).toBeLessThan(lastPeriodic + 20);
 
-    // --- 作り直す。戻っても遊軍は現れたまま、もう一度は呼べない
+    // --- 作り直す（保存は刻み 64 より前の 63 のまま。定期の保存は 60 なので、すぐ保存していなければ遊軍は消える）。
+    // 戻っても遊軍は現れたまま、もう一度は呼べない
     await testRoute(server.base, code, 'abort');
-    const abortedAt = Date.now();
     await sleep(300);
     A = await rejoin(A);
     B = await rejoin(B);
-    const back = await B.waitMsg((m) => m.type === 'snap' && m.receivedAt > abortedAt, { ms: 10_000, label: 'snap after abort' });
-    expect(back.tick).toBeGreaterThanOrEqual(ev.tick);
+    const back = await B.waitMsg((m) => m.type === 'snap', { label: 'snap after abort' });
+    expect(back.tick).toBe(63);
     expect(back.reserve).toEqual({ ...bReserve, state: 'used' });
     expect(back.units.map(unpack).some((u) => u.id === nUnits && u.kind === 'infantry' && u.side === 1)).toBe(true);
     B.send({ type: 'reserve', battleNo, from: 'right' });
     expect(await B.waitMsg((m) => m.type === 'error')).toMatchObject({ reason: 'invalid_reserve', op: 'reserve', code: 'no_reserve' });
 
-    // --- A：同じ刻みに遊軍（左から）と号令。2つ目の遊軍の入力は断られ、だれもいない左翼への号令は、遊軍が現れる前に調べるので断られる
-    await A.waitMsg((m) => m.type === 'snap' && m.reserve?.state === 'ready', { label: 'A ready' });
+    // --- 刻み 70 で、A が同じ刻みに遊軍（左から）と号令。4通を送り、2通の断りが届いたら、4通とも処理済み
+    expect(await stepTo(code, 70)).toBe(70);
+    await A.waitMsg((m) => m.type === 'snap' && m.tick === 70);
     const fromA2 = A.messages.length;
     A.send({ type: 'reserve', battleNo, from: 'left' });
-    A.send({ type: 'reserve', battleNo, from: 'right' });
-    A.send({ type: 'order', battleNo, target: 'left', kind: 'brace' });
     A.send({ type: 'order', battleNo, target: 'all', kind: 'brace' });
-    const withA = await A.waitMsg(isReserveEv(0), { from: fromA2, label: 'A reserve event' });
-    await sleep(400);
+    A.send({ type: 'reserve', battleNo, from: 'right' });
+    // だれもいない左翼への号令は、遊軍が現れる前（受け取った時点の戦場）で調べるので断られる
+    A.send({ type: 'order', battleNo, target: 'left', kind: 'brace' });
+    await A.waitFor(() => (A.messages.slice(fromA2).filter((m) => m.type === 'error').length >= 2 ? true : undefined), 10_000, 'two errors');
     const errs = A.messages.slice(fromA2).filter((m) => m.type === 'error');
     expect(errs).toHaveLength(2);
-    expect(errs).toContainEqual(expect.objectContaining({ reason: 'invalid_reserve', op: 'reserve', code: 'no_reserve' }));
+    expect(errs[0]).toMatchObject({ reason: 'invalid_reserve', op: 'reserve', code: 'no_reserve' });
     // 号令のエラーには op を付けない
-    const orderErr = errs.find((e) => e.reason === 'invalid_order');
-    expect(orderErr).toBeDefined();
-    expect(orderErr.op).toBeUndefined();
-    const evs = A.messages.slice(fromA2).filter((m) => m.type === 'snap').flatMap((m) => m.events);
-    const rEv = evs.find((e) => e.type === 'reserve' && e.side === 0);
-    const oEvs = evs.filter((e) => e.type === 'order' && e.side === 0);
-    expect(rEv).toMatchObject({ unit: nUnits + 1, from: 'left' });
-    expect(oEvs.map((e) => e.target)).toEqual(['all']);
-    expect(oEvs[0].tick).toBe(rEv.tick);
+    expect(errs[1].reason).toBe('invalid_order');
+    expect(errs[1].op).toBeUndefined();
+    expect(await stepTicks(server.base, code, 2)).toBe(72);
+    const withA = await A.waitMsg((m) => m.type === 'snap' && m.tick === 72, { from: fromA2 });
+    const rEv = withA.events.find((e) => e.type === 'reserve' && e.side === 0);
+    const oEvs = withA.events.filter((e) => e.type === 'order' && e.side === 0);
+    expect(rEv).toEqual({ type: 'reserve', tick: 70, side: 0, unit: nUnits + 1, from: 'left' });
+    expect(oEvs.map((e) => [e.tick, e.target])).toEqual([[70, 'all']]);
     // 現れたばかりの遊軍にも、同じ刻みの全軍あての号令がかかる
     const cav = withA.units.map(unpack).find((u) => u.id === nUnits + 1);
     expect(cav).toMatchObject({ side: 0, kind: 'cavalry', wing: 'left', order: 'brace', stance: 'hold' });
     expect(withA.ordersLeft[0]).toBe(2);
 
-    const [ra, rb] = await Promise.all([A.waitMsg((m) => m.type === 'result', { ms: 40_000 }), B.waitMsg((m) => m.type === 'result', { ms: 40_000 })]);
+    await stepToEnd(code, 50);
+    const [ra, rb] = await Promise.all([A.waitMsg((m) => m.type === 'result', { ms: 20_000 }), B.waitMsg((m) => m.type === 'result', { ms: 20_000 })]);
     // 呼んだ遊軍は振り返りの部隊に入り、呼ばなかった遊軍はない
     for (const r of [ra, rb]) {
       expect(r.summary.unusedReserve).toEqual([null, null]);
@@ -261,6 +288,67 @@ describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令）', 
     expect(A.of('error').length).toBe(nErr);
     A.close();
     B.close();
+  });
+});
+
+describe('隠す情報：届く列そのもの（R14 a。刻みを手で進め、種を決める）', () => {
+  it('相手の遊軍だけを変えた3つの対戦で、届くメッセージの数・順・中身が一致する。兵が減る戦いでも、相手の星の割合は判定の割合に置き換わる', async () => {
+    // A（陣営0）が攻める。B（陣営1）は守備で、遊軍を呼ばないまま兵が減る
+    const timing = { tickMs: 100, revealMs: 300, maxTicks: 600, setupMs: 30_000, testManualTicks: 1 };
+    const attack = army([
+      ['hq', 5, 15, 'hold'],
+      ['infantry', 2, 10, 'advance'],
+      ['infantry', 4, 10, 'advance'],
+      ['infantry', 6, 10, 'advance'],
+      ['infantry', 8, 10, 'advance'],
+      ['cavalry', 0, 11, 'hunt'],
+      ['cavalry', 11, 11, 'hunt'],
+      ['archer', 5, 12, 'advance'],
+    ]);
+    const run = async (variant) => {
+      const { A, B, code } = await setupPair(server.base, timing, { cv: [2, 2], seed: 20261119 });
+      A.send({ type: 'ready', army: attack });
+      await B.waitRoom((r) => r.seats[0].ready === true, 5000, 'A ready');
+      B.send({ type: 'ready', army: holdArmy(), reserve: variant });
+      await A.waitMsg((m) => m.type === 'reveal');
+      await A.waitRoom((r) => r.phase === 'battle', 5000, 'battle');
+      // 2刻みずつ進め、そのたびに A に snap が届くのを待つ（届く列が実時間に左右されないように）
+      for (;;) {
+        const t = await stepTicks(server.base, code, 2);
+        await A.waitMsg((m) => (m.type === 'snap' && m.tick === t) || m.type === 'result', { label: `snap ${t}` });
+        if (A.of('result').length > 0) break;
+      }
+      await B.waitMsg((m) => m.type === 'result');
+      // 結果の画面に入り直す
+      const A2 = await rejoin(A);
+      await A2.waitMsg((m) => m.type === 'result');
+      const B2 = await rejoin(B);
+      await B2.waitMsg((m) => m.type === 'result');
+      const out = { a: [...A.messages, ...A2.messages].map(norm), b: B.last('result'), b2: B2.last('result') };
+      for (const c of [A, A2, B, B2]) c.close();
+      return out;
+    };
+    const runs = await Promise.all([run(null), run(CAV), run(ARCH)]);
+    const [r0, r1, r2] = runs;
+    // 列そのもの（数・順・中身）が一致する
+    expect(r0.a.filter((m) => m.type === 'snap').length).toBeGreaterThan(10);
+    expect(r1.a).toEqual(r0.a);
+    expect(r2.a).toEqual(r0.a);
+    // 兵が減る戦い：相手（B）の判定の割合は 1 より小さく、A に届く星の割合はそれと同じ値（決着のときも、入り直したときも）
+    const aResults = r0.a.filter((m) => m.type === 'result');
+    expect(aResults).toHaveLength(2);
+    expect(aResults[1]).toEqual(aResults[0]);
+    const sum = aResults[0].summary;
+    expect(sum.remaining[1]).toBeLessThan(1);
+    expect(sum.remainingForStars[1]).toBe(sum.remaining[1]);
+    expect(sum.unusedReserve).toEqual([null, null]);
+    // 対照：遊軍を持つ B 本人には、呼ばなかった遊軍を無傷として数えた割合が届く（決着のときも、入り直したときも）
+    for (const r of [r1, r2]) {
+      expect(r.b.summary.remainingForStars[1]).toBeGreaterThan(r.b.summary.remaining[1]);
+      expect(r.b.summary.unusedReserve[1]).not.toBeNull();
+      expect(norm(r.b2)).toEqual(norm(r.b));
+    }
+    expect(r0.b.summary.remainingForStars[1]).toBe(r0.b.summary.remaining[1]);
   });
 });
 
@@ -384,60 +472,51 @@ describe('古い画面の混じる部屋（R14 g）', () => {
     B.close();
   });
 
-  it('setup の途中で古い画面で入り直すと、両者の遊軍が外れて room が送り直される。確定はそのまま', async () => {
-    const timing = { tickMs: 20, revealMs: 300, maxTicks: 200, setupMs: 30_000 };
-    let { A, B } = await setupPair(server.base, timing, { cv: [2, 2] });
+
+  it('両者 cv=2 で始めたあと、同じ人が cv なしで入り直しても席の cv は下がらない（setup 中・戦闘中）。相手の確定と遊軍は残り、呼べる', async () => {
+    const timing = { tickMs: 100, revealMs: 300, maxTicks: 300, setupMs: 30_000, testManualTicks: 1 };
+    let { A, B, code } = await setupPair(server.base, timing, { cv: [2, 2] });
     A.send({ type: 'ready', army: holdArmy(), reserve: CAV });
     B.send({ type: 'draft', army: holdArmy(), reserve: ARCH });
     await B.waitRoom((r) => r.seats[0].ready === true, 5000, 'A ready');
-    const fromA = A.messages.length;
-    // B が古い画面（cv なし）で入り直す
+    await A.waitRoom((r) => r.seats[0].ready === true, 5000, 'A ready at A');
+    await sleep(200);
+    const roomsA = A.of('room').length;
+    // --- setup 中に、B が古い画面（cv なし）を装って入り直す
     B = await rejoin(B, { cv: undefined });
-    const roomA = await A.waitMsg((m) => m.type === 'room' && m.rules.reserve === false, { from: fromA, label: 'room with reserve off' });
-    expect(roomA.myReserve).toBeNull();
-    expect(roomA.myArmy).toEqual(holdArmy());
-    expect(roomA.seats[0].ready).toBe(true);
-    expect(B.room.rules.reserve).toBe(false);
-    expect(B.room.myReserve).toBeNull();
-    // B が新しい画面で入り直すと、また使えるようになるが、外れた遊軍は戻らない
-    B = await rejoin(B, { cv: 2 });
-    await A.waitRoom((r) => r.rules.reserve === true, 5000, 'reserve on again');
-    expect(A.room.myReserve).toBeNull();
-    expect(B.room.myReserve).toBeNull();
+    expect(B.room.rules.reserve).toBe(true);
+    // B の下書きの組（遊軍を含む）も残っている（検査を通っているので lastValid になっている）
+    expect(B.room.myReserve).toEqual(ARCH);
+    await sleep(300);
+    // A には何も変わっていないので room は送り直されない。確定と遊軍はそのまま
+    expect(A.of('room').length).toBe(roomsA);
+    expect(A.room.rules.reserve).toBe(true);
+    expect(A.room.myReserve).toEqual(CAV);
+    expect(A.room.seats[0].ready).toBe(true);
     // army を付けない ready は、reserve の値を（形が違っても）見ず、いまの下書きの組で確定する
     B.send({ type: 'ready', reserve: 'not a reserve' });
     const [revA, revB] = await Promise.all([A.waitMsg((m) => m.type === 'reveal'), B.waitMsg((m) => m.type === 'reveal')]);
-    expect(revA.myReserve).toBeNull();
-    expect(revB.myReserve).toBeNull();
-    const snap = await A.waitMsg((m) => m.type === 'snap');
-    expect(snap.reserve).toBeNull();
+    expect(revA.myReserve).toEqual(CAV);
+    expect(revB.myReserve).toEqual(ARCH);
+    await A.waitRoom((r) => r.phase === 'battle', 5000, 'battle');
+    const battleNo = A.room.battleNo;
+    expect(await stepTo(code, 60)).toBe(60);
+    // --- 戦闘中に、B がもう一度 cv なしで入り直す。A はそのまま呼べる
+    B = await rejoin(B, { cv: undefined });
+    expect(B.room.rules.reserve).toBe(true);
+    expect(A.room.rules.reserve).toBe(true);
+    const fromA = A.messages.length;
+    A.send({ type: 'reserve', battleNo, from: 'right' });
+    A.send({ type: 'reserve', battleNo, from: 'right' });
+    expect(await A.waitMsg((m) => m.type === 'error', { from: fromA })).toMatchObject({ reason: 'invalid_reserve', code: 'no_reserve' });
+    expect(await stepTicks(server.base, code, 2)).toBe(62);
+    const s = await A.waitMsg((m) => m.type === 'snap' && m.tick === 62, { from: fromA });
+    expect(s.events.find((e) => e.type === 'reserve')).toMatchObject({ side: 0, from: 'right' });
+    expect(s.reserve).toEqual({ ...CAV, state: 'used' });
+    // B（cv なしで入り直した接続）にも、現れた遊軍が届く
+    const sb = await B.waitMsg((m) => m.type === 'snap' && m.tick === 62);
+    expect(sb.units.map(unpack).some((u) => u.side === 0 && u.kind === 'cavalry')).toBe(true);
     A.close();
     B.close();
-  });
-
-  it('遊軍が外れるとき、相手（古い画面で入り直した人）に届くものは、遊軍があってもなくても同じ', async () => {
-    const timing = { tickMs: 20, revealMs: 300, maxTicks: 200, setupMs: 30_000 };
-    const run = async (reserve) => {
-      let { A, B } = await setupPair(server.base, timing, { cv: [2, 2] });
-      A.send({ type: 'ready', army: holdArmy(), reserve });
-      await B.waitRoom((r) => r.seats[0].ready === true, 5000, 'A ready');
-      const Bs = [B];
-      Bs.push(await rejoin(B, { cv: undefined }));
-      await A.waitRoom((r) => r.rules.reserve === false, 5000, 'reserve off');
-      await sleep(300);
-      Bs.push(await rejoin(Bs.at(-1), { cv: 2 }));
-      await A.waitRoom((r) => r.rules.reserve === true, 5000, 'reserve on');
-      await sleep(300);
-      // A の確定はそのまま（遊軍を持っていたかどうかで、相手に見える確定の様子が変わらない）
-      expect(A.room.seats[0].ready).toBe(true);
-      expect(A.room.myReserve).toBeNull();
-      const msgs = Bs.flatMap((c) => c.messages).map(norm);
-      A.close();
-      Bs.forEach((c) => c.close());
-      return msgs;
-    };
-    const [withReserve, without] = await Promise.all([run(CAV), run(null)]);
-    expect(withReserve.some((m) => m.type === 'room' && m.rules.reserve === false)).toBe(true);
-    expect(withReserve).toEqual(without);
   });
 });
