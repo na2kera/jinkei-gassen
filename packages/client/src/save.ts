@@ -2,8 +2,13 @@
 // 読み書きはすべて try/catch で包み、localStorage が使えない環境（プライベートブラウズなど）でも遊べるようにする。
 // 形が合わないデータは、その項目だけ捨てて初期値にする（古い形や壊れたデータで起動できなくなるのを防ぐため）。
 
-import { KINDS, STANCES, type Placement } from '@jinkei/engine';
-import { parseView, type ViewMode } from './battle/viewMode.ts';
+import type { Placement, ReserveSetup } from '@jinkei/engine';
+import type { ViewMode } from './battle/viewMode.ts';
+import { cleanReserve, copyFormation, emptySave, MAX_FORMATIONS, sanitizeSave, type SaveData, type SavedFormation } from './saveFormat.ts';
+
+// 形と掃除は saveFormat.ts（画面なしで確かめるため）。ここからも同じ名前で読めるようにしておく
+export { MAX_FORMATIONS };
+export type { SaveData, SavedFormation };
 
 /**
  * 保存の鍵。開発時だけ、URL に ?save=b のように付けると別の鍵（jinkei-gassen/v1:b）を使う。
@@ -22,99 +27,6 @@ function saveKey(): string {
   }
 }
 
-export interface SaveData {
-  v: 1;
-  /** 面ごとの最高の星（0〜3） */
-  stars: Record<string, number>;
-  /** 面ごとの最後の配置（同じ面をやり直すときに戻すため） */
-  placements: Record<string, Placement[]>;
-  /** 音を切っているか */
-  muted: boolean;
-  /** 対戦の席に戻るための合言葉（16進の小文字32文字）。相手には送られない */
-  pid: string | null;
-  /** 対戦で使う名前（1〜12文字） */
-  name: string;
-  /** 最後に入っていた部屋のコード（読み込み直したときに「前の部屋に戻る」を出すため） */
-  roomCode: string | null;
-  /**
-   * 対戦の最後の配置（自分が下の座標）。読み込み直したあとの次の戦いでも、前の配置から始められるようにする。
-   * サーバーは新しい配置の段階に入ると下書きを消すので、手元に残しておかないと、読み込み直した人の配置が空になるため
-   */
-  pvpArmy: Placement[];
-  /** 保存した陣形（design §5.6。8つまで） */
-  formations: SavedFormation[];
-  /** 戦闘の画面の視点（design §5.7、§5.8）。4つの値を受け付ける（使えない視点は戦闘の画面で真上として扱う） */
-  view: ViewMode;
-}
-
-/**
- * 保存した陣形。配置は、配置エリアの左上を原点にした列と行で持つ（面や陣営が変わっても同じ形で呼び出せるように）。
- * width は保存したときの配置エリアの幅（幅の違う戦場で呼び出すと、外になる部隊は飛ばす）
- */
-export interface SavedFormation {
-  name: string;
-  width: number;
-  units: Placement[];
-}
-
-/** 陣形の数の上限 */
-export const MAX_FORMATIONS = 8;
-
-function empty(): SaveData {
-  return { v: 1, stars: {}, placements: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], formations: [], view: 'top' };
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function isPlacement(v: unknown): v is Placement {
-  if (!isRecord(v)) return false;
-  return (
-    KINDS.includes(v.kind as Placement['kind']) &&
-    STANCES.includes(v.stance as Placement['stance']) &&
-    Number.isInteger(v.col) &&
-    Number.isInteger(v.row)
-  );
-}
-
-/** 読んだ値を、正しい形の項目だけ残して SaveData に直す */
-function sanitize(raw: unknown): SaveData {
-  const data = empty();
-  if (!isRecord(raw) || raw.v !== 1) return data;
-  if (isRecord(raw.stars)) {
-    for (const [id, n] of Object.entries(raw.stars)) {
-      if (typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 3) data.stars[id] = n;
-    }
-  }
-  if (isRecord(raw.placements)) {
-    for (const [id, list] of Object.entries(raw.placements)) {
-      if (Array.isArray(list) && list.length <= 16 && list.every(isPlacement)) {
-        data.placements[id] = list.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
-      }
-    }
-  }
-  if (typeof raw.muted === 'boolean') data.muted = raw.muted;
-  if (typeof raw.pid === 'string' && /^[0-9a-f]{32}$/.test(raw.pid)) data.pid = raw.pid;
-  if (typeof raw.name === 'string' && [...raw.name].length <= 12) data.name = raw.name;
-  if (typeof raw.roomCode === 'string' && /^\d{4}$/.test(raw.roomCode)) data.roomCode = raw.roomCode;
-  if (Array.isArray(raw.formations)) {
-    for (const f of raw.formations) {
-      if (!isRecord(f) || typeof f.name !== 'string' || !Number.isInteger(f.width) || !Array.isArray(f.units)) continue;
-      const len = [...f.name].length;
-      if (len < 1 || len > 8 || (f.width as number) < 1 || (f.width as number) > 12) continue;
-      if (f.units.length > 16 || !f.units.every(isPlacement)) continue;
-      if (data.formations.length >= MAX_FORMATIONS) break;
-      data.formations.push({ name: f.name, width: f.width as number, units: (f.units as Placement[]).map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance })) });
-    }
-  }
-  // 知らない値は真上
-  data.view = parseView(raw.view);
-  if (Array.isArray(raw.pvpArmy) && raw.pvpArmy.length <= 16 && raw.pvpArmy.every(isPlacement)) {
-    data.pvpArmy = raw.pvpArmy.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
-  }
-  return data;
-}
 
 let cache: SaveData | null = null;
 
@@ -122,9 +34,9 @@ export function loadSave(): SaveData {
   if (cache) return cache;
   try {
     const text = window.localStorage.getItem(SAVE_KEY);
-    cache = text ? sanitize(JSON.parse(text)) : empty();
+    cache = text ? sanitizeSave(JSON.parse(text)) : emptySave();
   } catch {
-    cache = empty();
+    cache = emptySave();
   }
   return cache;
 }
@@ -155,8 +67,18 @@ export function savedPlacements(stageId: string): Placement[] | null {
   return list ? list.map((p) => ({ ...p })) : null;
 }
 
-export function savePlacements(stageId: string, placements: readonly Placement[]): void {
-  loadSave().placements[stageId] = placements.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
+/** 面ごとの最後の遊軍（なければ null） */
+export function savedReserve(stageId: string): ReserveSetup | null {
+  return cleanReserve(loadSave().reserves[stageId]);
+}
+
+/** 面ごとの最後の配置と遊軍を、一緒に書く（枠が空なら遊軍の鍵を消す。古い遊軍が新しい配置に付いて残らないように） */
+export function savePlacements(stageId: string, placements: readonly Placement[], reserve: ReserveSetup | null = null): void {
+  const data = loadSave();
+  data.placements[stageId] = placements.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
+  const r = cleanReserve(reserve);
+  if (r) data.reserves[stageId] = r;
+  else delete data.reserves[stageId];
   write();
 }
 
@@ -177,7 +99,7 @@ export function setStarsForDebug(stageId: string, stars: number): void {
 
 /** 開発用：記録を消す */
 export function clearSave(): void {
-  cache = empty();
+  cache = emptySave();
   try {
     window.localStorage.removeItem(SAVE_KEY);
   } catch {
@@ -224,13 +146,20 @@ export function savedPvpArmy(): Placement[] {
   return loadSave().pvpArmy.map((p) => ({ ...p }));
 }
 
-export function savePvpArmy(list: readonly Placement[]): void {
-  loadSave().pvpArmy = list.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
+export function savedPvpReserve(): ReserveSetup | null {
+  return cleanReserve(loadSave().pvpReserve);
+}
+
+/** 対戦の最後の配置と遊軍を、一緒に書く */
+export function savePvpArmy(list: readonly Placement[], reserve: ReserveSetup | null = null): void {
+  const data = loadSave();
+  data.pvpArmy = list.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
+  data.pvpReserve = cleanReserve(reserve);
   write();
 }
 
 export function savedFormations(): SavedFormation[] {
-  return loadSave().formations.map((f) => ({ ...f, units: f.units.map((p) => ({ ...p })) }));
+  return loadSave().formations.map(copyFormation);
 }
 
 /**
@@ -240,7 +169,7 @@ export function savedFormations(): SavedFormation[] {
 export function saveFormation(f: SavedFormation, replaceIndex?: number): boolean {
   const list = loadSave().formations;
   const same = list.findIndex((x) => x.name === f.name);
-  const copy = { name: f.name, width: f.width, units: f.units.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance })) };
+  const copy = copyFormation(f);
   if (same >= 0) list[same] = copy;
   else if (list.length < MAX_FORMATIONS) list.push(copy);
   else if (replaceIndex !== undefined && replaceIndex >= 0 && replaceIndex < list.length) list[replaceIndex] = copy;

@@ -9,8 +9,9 @@ import { COLOR } from '../art/palette.ts';
 import { UnitSprite } from '../art/UnitSprite.ts';
 import { centeredFieldView, FieldView } from '../battle/FieldView.ts';
 import { debug } from '../debug.ts';
-import { getLayout, LAYOUT_EVENT } from '../layout.ts';
+import { deployReserveSlot, getLayout, LAYOUT_EVENT } from '../layout.ts';
 import { client, pvp } from '../net/pvp.ts';
+import { KIND_LABEL, RESERVE_LABEL } from '../ui/labels.ts';
 import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
 
@@ -85,6 +86,13 @@ export class RevealScene extends Phaser.Scene {
           s.apply({ x: c.x, y: c.y, fx: 0, fy: team === 0 ? -1 : 1, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
         }
       });
+    }
+    // 自分の遊軍だけを、配置の画面と同じ場所の枠で見せる（相手の遊軍は届かないので出さない。design §7.8）
+    const mine = reveal.myReserve;
+    if (mine) {
+      const r = deployReserveSlot(getLayout(), true);
+      drawBox(this.add.graphics(), r);
+      addText(this, Math.round(r.x + r.w / 2), Math.round(r.y + r.h / 2), `${RESERVE_LABEL} ${KIND_LABEL[mine.kind]}`, 16, COLOR.cream).setOrigin(0.5, 0.5);
     }
     // 数え下げの箱を部隊より上に出す
     this.children.bringToTop(this.countBox);

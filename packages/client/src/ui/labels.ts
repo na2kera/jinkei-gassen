@@ -52,6 +52,15 @@ export function wingForViewer<T extends Wing | OrderTarget>(wing: T, side: 0 | 1
   return wing;
 }
 
+/** 遊軍（design §7、decisions §15）。配置の枠と、現れたときの知らせの文字 */
+export const RESERVE_LABEL = '遊軍';
+
+/** 戦闘の画面の遊軍のボタン。左右は見ている人から見た左右（engine の from と同じ向き。返さずに渡す） */
+export const RESERVE_FROM_LABEL: Record<'left' | 'right', string> = {
+  left: '遊軍 左から',
+  right: '遊軍 右から',
+};
+
 /** 視点のボタンの文字（design §5.8.1） */
 export const VIEW_LABEL: Record<ViewMode, string> = {
   top: '視点：真上',

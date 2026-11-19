@@ -5,6 +5,7 @@
 
 import type { Side } from '@jinkei/engine';
 import Phaser from 'phaser';
+import { remainingShown } from '../battle/reserveUi.ts';
 import { COLOR } from '../art/palette.ts';
 import { debug } from '../debug.ts';
 import { getLayout, LAYOUT_EVENT, resultLayout, type Rect } from '../layout.ts';
@@ -87,7 +88,7 @@ export class PvpResultScene extends Phaser.Scene {
     center(r.review + 40, `敵軍 ${unitName(s.firstBroken[enemy], units, you)}`);
     center(r.review + 68, '一番崩した', 16, COLOR.muted);
     center(r.review + 88, unitName(best ? best.id : null, units, you));
-    center(r.review + 116, `残った兵 自軍${percent(s.remaining[you])} 敵軍${percent(s.remaining[enemy])}`);
+    center(r.review + 116, `残った兵 自軍${percent(remainingShown(s, you))} 敵軍${percent(remainingShown(s, enemy))}`);
     const b1 = rematchRect(r.buttons);
     if (b1) this.rematchButton = new Button(this, b1, 'もう一戦', () => this.rematch(), { primary: true });
   }

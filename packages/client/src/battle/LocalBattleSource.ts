@@ -4,6 +4,7 @@
 
 import {
   canOrder,
+  canSummon,
   createBattle,
   DT,
   step,
@@ -11,15 +12,20 @@ import {
   viewFor,
   type BattleEvent,
   type BattleSetup,
+  type BattleView,
   type BattleState,
   type BattleSummary,
   type EngineError,
   type OrderInput,
   type OrderKind,
   type OrderTarget,
+  type ReserveFrom,
+  type ReserveInput,
+  type ReserveView,
   type Side,
 } from '@jinkei/engine';
 import type { BattleFrame, BattleSource } from './BattleSource.ts';
+import { summonEnabled } from './reserveUi.ts';
 
 /** 何刻みごとに場面を出すか */
 const FRAME_EVERY = 2;
@@ -34,6 +40,8 @@ export class LocalBattleSource implements BattleSource {
   private readonly frameListeners: ((f: BattleFrame) => void)[] = [];
   private readonly endListeners: ((s: BattleSummary) => void)[] = [];
   private pending: OrderInput[] = [];
+  /** 次の step に渡す遊軍の呼び出し（1つまで） */
+  private pendingSummon: ReserveInput | null = null;
   private buffered: BattleEvent[] = [];
   private speed = 1;
   private acc = 0;
@@ -41,6 +49,7 @@ export class LocalBattleSource implements BattleSource {
   private raf = 0;
   private disposed = false;
   private summary: BattleSummary | null = null;
+  private lastView: BattleView | null = null;
 
   /** viewer は見る側の陣営。場面（相手の方針を隠す）と号令は、この陣営のものになる */
   static create(setup: BattleSetup, viewer: Side = 0): { ok: true; source: LocalBattleSource } | { ok: false; error: EngineError } {
@@ -59,7 +68,8 @@ export class LocalBattleSource implements BattleSource {
 
   onFrame(cb: (frame: BattleFrame) => void): void {
     this.frameListeners.push(cb);
-    cb({ tick: this.state.tick, view: viewFor(this.state, this.viewer), events: [] });
+    this.lastView = viewFor(this.state, this.viewer);
+    cb({ tick: this.state.tick, view: this.lastView, events: [] });
   }
 
   onEnd(cb: (summary: BattleSummary) => void): void {
@@ -77,6 +87,22 @@ export class LocalBattleSource implements BattleSource {
     const left = viewFor(this.state, this.viewer).ordersLeft[this.viewer];
     if (left - this.pending.length <= 0) return false;
     return canOrder(this.state, this.viewer, target, kind).ok;
+  }
+
+  reserve(): ReserveView | null {
+    // 最後に出した場面から読む（毎回 viewFor を作り直さないため）
+    return (this.lastView ?? viewFor(this.state, this.viewer)).reserve?.[this.viewer] ?? null;
+  }
+
+  canSummon(): boolean {
+    // 現れるマスまでは見ない（押したときに engine の canSummon で調べる）
+    return summonEnabled(this.reserve(), { ended: !!this.state.outcome, allowed: true, sent: this.pendingSummon !== null });
+  }
+
+  summon(from: ReserveFrom): void {
+    if (!this.canSummon() || !canSummon(this.state, this.viewer, from).ok) return;
+    // 次の step にまとめて渡す（engine は step の初めに、号令より先に遊軍を呼ぶ）
+    this.pendingSummon = { side: this.viewer, from };
   }
 
   setSpeed(mult: number): void {
@@ -105,13 +131,17 @@ export class LocalBattleSource implements BattleSource {
   private stepOnce(): void {
     const orders = this.pending;
     this.pending = [];
-    const events = step(this.state, orders);
+    const summons = this.pendingSummon ? [this.pendingSummon] : [];
+    this.pendingSummon = null;
+    // 遊軍の入力がなければ、いままでと同じ呼び方にする
+    const events = summons.length > 0 ? step(this.state, orders, summons) : step(this.state, orders);
     for (const e of events) this.buffered.push(e);
     if (this.state.outcome || this.state.tick % FRAME_EVERY === 0) this.emit();
   }
 
   private emit(): void {
     const frame: BattleFrame = { tick: this.state.tick, view: viewFor(this.state, this.viewer), events: this.buffered };
+    this.lastView = frame.view;
     this.buffered = [];
     for (const cb of [...this.frameListeners]) cb(frame);
     if (this.state.outcome && !this.summary) {

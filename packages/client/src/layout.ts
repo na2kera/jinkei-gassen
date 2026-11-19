@@ -182,6 +182,52 @@ export function battlePanel(l: Layout): BattlePanel {
   return { time: { x: p.x, y: p.y, w: 40, h: top }, marks, quit, mute, speed, targets, orders, view };
 }
 
+// ---- 遊軍（design §7.8）の置き場所 ----
+// 枠とボタンの位置は、ユーザーが実際の画面を見て決める（decisions §15）。動かすときは、この2つの関数だけを直す。
+// いまある表示物の位置は変えず、空いている所に置く：
+//   配置・横長：操作の欄の「開戦」「完了」のすぐ上（ひな形の2列と、ヒント・陣形名の下が空いている）。
+//   配置・縦長・1人用：戦場の下の帯の「？」の右（ふだんは陣形名が右の端に出るだけで、まん中が空いている）。
+//   配置・縦長・対戦：見出しの行の、予算の残りと「音あり」のあいだ（縦長の操作の欄も帯も、ほかに空きがない）。
+//   戦闘・横長：視点のボタンの右に2つ。縦長：視点のボタンの下の行に2つ（右は狭く、文字が枠に触れるため）。
+
+/** 配置の画面の「遊軍」の枠。pvp は対戦の配置の画面か */
+export function deployReserveSlot(l: Layout, pvp: boolean): Rect {
+  const p = l.panel;
+  if (l.mode === 'landscape') {
+    const start = pvp ? pvpDeployPanel(l).start : deployPanel(l).start;
+    // ひな形2つぶんの幅（ひな形のボタンと同じ並びの左の2列にそろえる）
+    const [a, b] = row(p.x, 0, p.w, 0, 4, 4);
+    return { x: a!.x, y: start.y - 8 - 36, w: b!.x + b!.w - a!.x, h: 36 };
+  }
+  if (!pvp && l.strip) {
+    const s = l.strip;
+    // 「？」（幅 32）と、ヒントの文字の書き出し（s.x + 40）にそろえる
+    return { x: s.x + 40, y: s.y, w: 104, h: s.h };
+  }
+  const head = pvpDeployPanel(l);
+  // 予算の残り（「残り 36」で幅 60px ほど）の右から、「音あり」の手前 4px まで
+  const x = head.budget.x + 68;
+  return { x, y: head.back.y, w: head.mute.x - 4 - x, h: head.back.h };
+}
+
+/** 戦闘の画面の「遊軍 左から」「遊軍 右から」（左・右の順） */
+export function battleReserveButtons(l: Layout): [Rect, Rect] {
+  const panel = battlePanel(l);
+  const p = l.panel;
+  const v = panel.view;
+  if (l.mode === 'portrait') {
+    // 縦長は視点のボタンの右だと文字が枠に触れるほど狭いので、その下の行に、欄の幅いっぱいで2つ並べる（欄の下の端 190px に収まる）
+    const [a, b] = row(p.x, v.y + v.h + 6, p.w, v.h, 2, 4);
+    return [a!, b!];
+  }
+  const x = v.x + v.w + 4;
+  const w = Math.floor((p.x + p.w - x - 4) / 2);
+  return [
+    { x, y: v.y, w, h: v.h },
+    { x: x + w + 4, y: v.y, w, h: v.h },
+  ];
+}
+
 /** 結果の画面。画面全体の中央に、枠の箱とボタンの列を縦に並べる */
 export interface ResultLayout {
   centerX: number;

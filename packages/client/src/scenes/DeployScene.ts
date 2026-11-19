@@ -9,7 +9,6 @@
 // どちらも、場所や手持ちの違いは下の「モード」の関数（list・roster・ownZone など）に閉じ込め、操作の作りは共通にする。
 
 import {
-  applyTemplate,
   defaultStance,
   listTemplates,
   MAX_UNITS,
@@ -23,6 +22,7 @@ import {
   type Field,
   type Kind,
   type Placement,
+  type ReserveSetup,
   type Roster,
   type Side,
   type Stage,
@@ -45,13 +45,14 @@ import { playFormation, playPlace, playRemove, playStance, playStart } from '../
 import { centeredFieldView, FieldView, type Cell } from '../battle/FieldView.ts';
 import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
 import { debug } from '../debug.ts';
-import { saveFormation as saveFormationTo, savedFormations as savedFormationList, savedPvpArmy } from '../save.ts';
-import { CELL, deployInfo, deployPanel, getLayout, LAYOUT_EVENT, pvpDeployPanel, type DeployInfoLayout, type Rect } from '../layout.ts';
+import { saveFormation as saveFormationTo, savedFormations as savedFormationList, savedPvpArmy, savedPvpReserve } from '../save.ts';
+import { CELL, deployInfo, deployPanel, deployReserveSlot, getLayout, LAYOUT_EVENT, pvpDeployPanel, type DeployInfoLayout, type Rect } from '../layout.ts';
 import { client, pvp, pvpLocal, setupKey } from '../net/pvp.ts';
+import { reserveAllowed, roomReserve } from '../net/reserveMessages.ts';
 import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { checkFit } from '../ui/overflow.ts';
-import { KIND_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
+import { KIND_LABEL, RESERVE_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
 import { unitBoxAt } from '../ui/unitBox.ts';
@@ -60,6 +61,8 @@ import { FormationDialog } from '../ui/FormationDialog.ts';
 import type { SavedFormation } from '../save.ts';
 import type { BattleSceneData } from './BattleScene.ts';
 import { enemyAt } from './enemyKind.ts';
+import { canPutReserve, newReserve, recallReserve, remainingOf, shrinkKind, templateWithReserve } from './reserveSlot.ts';
+import { drawStanceIcon } from '../art/icons.ts';
 
 /** 地形の名前と効きめ（配置の画面で、マスを押している間だけ1行で出す）。数字は出さず、何に効くかだけを書く */
 const TERRAIN_TEXT: Partial<Record<Terrain, string>> = {
@@ -126,6 +129,12 @@ export class DeployScene extends Phaser.Scene {
   private backButton!: Button;
   private popupButtons: Button[] = [];
   private popupIndex: number | null = null;
+  /** 遊軍の枠の箱（方針の切り替えと「外す」）を出しているか */
+  private popupReserve = false;
+  /** 「遊軍」の枠（design §7.8）。対戦で遊軍を使えない部屋では作らない */
+  private reserveButton: Button | null = null;
+  /** 枠の中の方針の印 */
+  private reserveIcon: Phaser.GameObjects.Graphics | null = null;
   private selectedKind: Kind | null = null;
   private press: Press | null = null;
   private infoLayout: DeployInfoLayout | null = null;
@@ -175,6 +184,9 @@ export class DeployScene extends Phaser.Scene {
     this.templateButtons = [];
     this.popupButtons = [];
     this.popupIndex = null;
+    this.popupReserve = false;
+    this.reserveButton = null;
+    this.reserveIcon = null;
     this.selectedKind = null;
     this.press = null;
     this.formationName = null;
@@ -294,6 +306,7 @@ export class DeployScene extends Phaser.Scene {
       debug.placeSolution = null;
       debug.startSolution = null;
       debug.formationOps = null;
+      debug.reserveOps = null;
     });
     debug.applyTemplate = (id) => this.useTemplate(id);
     debug.start = (viewer) => (this.pvpMode ? this.pressReady() : this.startBattle(viewer));
@@ -301,7 +314,8 @@ export class DeployScene extends Phaser.Scene {
       save: (name, replaceIndex) => {
         const z = this.ownZone;
         const units = this.list.map((p) => ({ kind: p.kind, stance: p.stance, col: p.col - z.col, row: p.row - z.row }));
-        return saveFormationTo({ name, width: z.width, units }, replaceIndex);
+        const reserve = this.reserve;
+        return saveFormationTo({ name, width: z.width, units, ...(reserve ? { reserve: { ...reserve } } : {}) }, replaceIndex);
       },
       recall: (name) => {
         const f = savedFormationList().find((x) => x.name === name);
@@ -313,14 +327,29 @@ export class DeployScene extends Phaser.Scene {
     if (!this.pvpMode) {
       debug.placeSolution = () => {
         this.closePopup();
-        setPlacements(this.stage.solution.map((p) => ({ ...p })));
+        // 見本は遊軍を使わないので、枠は空にする
+        setPlacements(this.stage.solution.map((p) => ({ ...p })), null);
         this.refresh();
       };
       debug.startSolution = () => {
-        setPlacements(this.stage.solution.map((p) => ({ ...p })));
+        setPlacements(this.stage.solution.map((p) => ({ ...p })), null);
         return this.startBattle(0, this.stage.solutionOrders ?? []);
       };
     }
+    debug.reserveOps = {
+      get: () => (this.reserve ? { ...this.reserve } : null),
+      put: (kind) => {
+        // 手持ちが残っていなければ、最後に置いたその兵種を戦場から外してから枠に入れる（確かめる手間を省くため）
+        if (this.remaining(kind) <= 0) {
+          const i = this.list.map((p) => p.kind).lastIndexOf(kind);
+          if (i >= 0) this.setList(this.list.filter((_, j) => j !== i));
+        }
+        this.selectedKind = kind;
+        this.pressReserve();
+        return this.reserve !== null && this.reserve.kind === kind;
+      },
+      tap: () => this.pressReserve(),
+    };
 
     // 開いた時点の陣形名は、音や動きなしで出す
     this.refresh(false);
@@ -385,13 +414,30 @@ export class DeployScene extends Phaser.Scene {
     return this.pvpMode ? pvpLocal.placements : session.placements;
   }
 
+  /** 遊軍の枠の部隊（なければ null） */
+  private get reserve(): ReserveSetup | null {
+    return this.pvpMode ? pvpLocal.reserve : session.reserve;
+  }
+
+  /** 配置を変える（遊軍はいまのまま） */
   private setList(list: Placement[]): void {
+    this.setDeploy(list, this.reserve);
+  }
+
+  /** 配置と遊軍を一組で変える（保存も下書きも、組で扱う。design §7.7） */
+  private setDeploy(list: Placement[], reserve: ReserveSetup | null): void {
     if (this.pvpMode) {
       pvpLocal.placements = list;
+      pvpLocal.reserve = reserve;
       pvp.markDraft();
     } else {
-      setPlacements(list);
+      setPlacements(list, reserve);
     }
+  }
+
+  /** 遊軍の枠を出すか。対戦では、遊軍を使える部屋（rules.reserve）だけ */
+  private reserveShown(): boolean {
+    return this.pvpMode ? reserveAllowed(client.room) : true;
   }
 
   private roster(): Roster {
@@ -416,7 +462,8 @@ export class DeployScene extends Phaser.Scene {
   }
 
   private errors(list: Placement[]): ArmyError[] {
-    return this.pvpMode ? validateArmy(list, this.ownZone, pvpArmyLimits()) : armyErrors(list);
+    // 遊軍も、手持ち・部隊数・予算に含めて数える（design §7.6）
+    return this.pvpMode ? validateArmy(list, this.ownZone, { ...pvpArmyLimits(), reserve: this.reserve }) : armyErrors(list, this.reserve);
   }
 
   /**
@@ -443,12 +490,20 @@ export class DeployScene extends Phaser.Scene {
     if (!room || pvpLocal.setupFor === setupKey(room)) return;
     pvpLocal.setupFor = setupKey(room);
     const fromServer = room.myArmy !== null && room.myArmy.length > 0;
-    const local = pvpLocal.placements.length > 0 ? pvpLocal.placements : savedPvpArmy();
-    const base = fromServer && room.myArmy ? room.myArmy : local;
-    const ok = !validateArmy(base, this.ownZone, pvpArmyLimits()).some((e) => BROKEN.has(e.code));
-    pvpLocal.placements = ok ? base.map((p) => ({ ...p })) : [];
-    // 編成は、置いてある部隊の数から始める。まだ何も置いていなければ、既定の編成（予算ちょうど）から始める
-    pvpLocal.roster = pvpLocal.placements.length > 0 ? { ...countKinds(pvpLocal.placements), hq: 1 } : { ...room.rules.standardRoster };
+    // 配置と遊軍は一組で選ぶ（サーバーの配置に手元の遊軍を付ける、のように混ぜない。design §7.7）
+    const local = pvpLocal.placements.length > 0 ? { army: pvpLocal.placements, reserve: pvpLocal.reserve } : { army: savedPvpArmy(), reserve: savedPvpReserve() };
+    const base = fromServer && room.myArmy ? { army: room.myArmy, reserve: roomReserve(room) } : local;
+    // 遊軍を使えない部屋では、遊軍を外す
+    const reserve = reserveAllowed(room) ? base.reserve : null;
+    const broken = (r: ReserveSetup | null): boolean => validateArmy(base.army, this.ownZone, { ...pvpArmyLimits(), reserve: r }).some((e) => BROKEN.has(e.code));
+    const ok = !broken(null);
+    pvpLocal.placements = ok ? base.army.map((p) => ({ ...p })) : [];
+    // 遊軍は、配置と一緒に検査を通るときだけ残す（予算を超えるなどしたら、遊軍だけを外す）
+    pvpLocal.reserve = ok && reserve && !broken(reserve) ? { ...reserve } : null;
+    // 編成は、置いてある部隊（と遊軍）の数から始める。まだ何も置いていなければ、既定の編成（予算ちょうど）から始める
+    const counted = countKinds(pvpLocal.placements);
+    if (pvpLocal.reserve) counted[pvpLocal.reserve.kind] = (counted[pvpLocal.reserve.kind] ?? 0) + 1;
+    pvpLocal.roster = pvpLocal.placements.length > 0 ? { ...counted, hq: 1 } : { ...room.rules.standardRoster };
     // サーバーにない配置を出したときだけ、送る印を立てる
     if (!fromServer && pvpLocal.placements.length > 0) pvp.markDraft();
   }
@@ -480,11 +535,9 @@ export class DeployScene extends Phaser.Scene {
     if (delta < 0 && have <= 0) return;
     pvpLocal.roster = { ...pvpLocal.roster, [kind]: have + delta };
     if (delta < 0) {
-      const placed = this.list.filter((p) => p.kind === kind).length;
-      if (placed > have + delta) {
-        const i = this.list.map((p) => p.kind).lastIndexOf(kind);
-        this.setList(this.list.filter((_, j) => j !== i));
-      }
+      // 置いた数 + 遊軍が減らした数を超えたら、最後に置いたその兵種を外す（戦場になければ遊軍の枠を空にする）
+      const next = shrinkKind(this.list, this.reserve, kind, have + delta);
+      if (next.list.length !== this.list.length || next.reserve !== this.reserve) this.setDeploy(next.list, next.reserve);
       playRemove();
     } else {
       playPlace();
@@ -523,9 +576,9 @@ export class DeployScene extends Phaser.Scene {
 
   // ---- 配置の操作 ----
 
+  /** まだ置いていない数（戦場と遊軍の枠の両方を引く） */
   private remaining(kind: Kind): number {
-    const used = this.list.filter((p) => p.kind === kind).length;
-    return (this.roster()[kind] ?? 0) - used;
+    return remainingOf(this.roster(), this.list, this.reserve, kind);
   }
 
   private indexAt(cell: Cell): number {
@@ -548,9 +601,10 @@ export class DeployScene extends Phaser.Scene {
     if (!this.templatesShown() || this.locked()) return;
     this.closePopup();
     this.selectedKind = null;
-    const placed = applyTemplate(id, this.roster(), this.ownZone, 0);
+    // ひな形は手持ちの全部隊を並べるので、遊軍の枠は空に戻す（design §7.6）
+    const t = templateWithReserve(id, this.roster(), this.ownZone);
     // ひな形の方針のうち、選べないものは兵種の初期設定に直す（対戦ではすべて選べる）
-    this.setList(this.pvpMode ? placed : fitStances(this.stage, placed));
+    this.setDeploy(this.pvpMode ? t.placements : fitStances(this.stage, t.placements), t.reserve);
     playPlace();
     this.refresh();
   }
@@ -643,6 +697,7 @@ export class DeployScene extends Phaser.Scene {
         return this.list.map((p) => ({ kind: p.kind, stance: p.stance, col: p.col - z.col, row: p.row - z.row }));
       },
       zoneWidth: () => this.ownZone.width,
+      reserve: () => (this.reserve ? { ...this.reserve } : null),
       recall: (f) => this.recallFormation(f),
     }, () => {
       this.dialog = null;
@@ -659,6 +714,10 @@ export class DeployScene extends Phaser.Scene {
     const z = this.ownZone;
     let units = f.units.map((u) => ({ ...u }));
     let trimmed = false;
+    // 陣形に遊軍があれば、枠に入れる（使えない部屋・本陣は入れない）
+    let wantReserve: ReserveSetup | null = f.reserve && f.reserve.kind !== 'hq' && this.reserveShown() ? { ...f.reserve } : null;
+    let skipped = 0;
+    if (f.reserve && !wantReserve) skipped++;
     if (this.pvpMode) {
       const costs = this.costs();
       const budget = client.room?.rules.budget ?? pvpArmyLimits().budget ?? 0;
@@ -666,21 +725,28 @@ export class DeployScene extends Phaser.Scene {
       // 本陣は1つだけ。2つ目からは外す
       let hq = 0;
       units = units.filter((u) => (u.kind === 'hq' ? ++hq === 1 : true));
-      const cost = (list: typeof units): number => list.reduce((n, u) => n + (u.kind === 'hq' ? 0 : (costs[u.kind] ?? 0)), 0);
-      while (units.length > 0 && (cost(units) > budget || units.filter((u) => u.kind !== 'hq').length > maxUnits)) {
+      // 遊軍も予算と部隊数に数える（いちばん後ろの部隊として、先に外す）
+      const cost = (list: typeof units): number =>
+        list.reduce((n, u) => n + (u.kind === 'hq' ? 0 : (costs[u.kind] ?? 0)), 0) + (wantReserve ? (costs[wantReserve.kind] ?? 0) : 0);
+      const count = (list: typeof units): number => list.filter((u) => u.kind !== 'hq').length + (wantReserve ? 1 : 0);
+      while (units.length > 0 && (cost(units) > budget || count(units) > maxUnits)) {
+        trimmed = true;
+        if (wantReserve) {
+          wantReserve = null;
+          continue;
+        }
         // 後ろの部隊（本陣以外）から外す
         const i = units.map((u) => u.kind !== 'hq').lastIndexOf(true);
         if (i < 0) break;
         units.splice(i, 1);
-        trimmed = true;
       }
       const roster = countKinds(units);
+      if (wantReserve) roster[wantReserve.kind] = (roster[wantReserve.kind] ?? 0) + 1;
       pvpLocal.roster = { ...roster, hq: 1 };
     }
     const roster = this.roster();
     const used: Roster = {};
     const placed: Placement[] = [];
-    let skipped = 0;
     const taken = new Set<string>();
     for (const u of units) {
       const col = z.col + u.col;
@@ -696,7 +762,10 @@ export class DeployScene extends Phaser.Scene {
       used[u.kind] = (used[u.kind] ?? 0) + 1;
       placed.push({ kind: u.kind, col, row, stance: this.stanceOkFor(u.kind, u.stance) ? u.stance : defaultStance(u.kind) });
     }
-    this.setList(placed);
+    // 遊軍は、戦場に置いたあと手持ちが残っていれば枠に入れる（足りなければ入れない）
+    const reserve = recallReserve(wantReserve, roster, placed, (k, s) => this.stanceOkFor(k, s));
+    if (wantReserve && !reserve) skipped++;
+    this.setDeploy(placed, reserve);
     playPlace();
     this.refresh();
     if (skipped > 0) this.showToast('置けない部隊を除きました');
@@ -730,7 +799,7 @@ export class DeployScene extends Phaser.Scene {
     this.hideKind();
     // ボタンの上は、ボタンが受け持つ
     if (over.length > 0) return;
-    const hadPopup = this.popupIndex !== null;
+    const hadPopup = this.popupIndex !== null || this.popupReserve;
     this.closePopup();
     const cell = this.fv.cellAt(pointer.x, pointer.y);
     if (!cell || !this.inOwnZone(cell)) {
@@ -893,6 +962,124 @@ export class DeployScene extends Phaser.Scene {
     for (const b of this.popupButtons) b.destroy();
     this.popupButtons = [];
     this.popupIndex = null;
+    this.popupReserve = false;
+  }
+
+  // ---- 遊軍の枠（design §7.8） ----
+
+  /**
+   * 枠を押した。枠が空で、手持ちの兵種（本陣以外）を選んでいれば、その兵種の1部隊を遊軍にする。
+   * 枠に部隊が入っていれば、方針の切り替えと「外す」の箱を出す（もう一度押すと閉じる）
+   */
+  private pressReserve(): void {
+    if (this.locked() || this.dialog || !this.reserveShown()) return;
+    const r = this.reserve;
+    if (r) {
+      if (this.popupReserve) {
+        this.closePopup();
+        this.refresh();
+      } else {
+        this.openReservePopup(r);
+      }
+      return;
+    }
+    const kind = this.selectedKind;
+    if (!canPutReserve(kind, this.roster(), this.list, r)) return;
+    this.closePopup();
+    this.setDeploy(this.list, newReserve(kind));
+    playPlace();
+    this.refresh();
+  }
+
+  /** 枠の部隊の箱。選べる方針と「外す」を、枠の上に縦に並べる（上に入らなければ下に出す） */
+  private openReservePopup(r: ReserveSetup): void {
+    const slot = this.reserveButton?.rect;
+    if (!slot) return;
+    this.closePopup();
+    this.selectedKind = null;
+    this.popupReserve = true;
+    const stances = this.stancesShown() ? STANCES.filter((s) => this.stanceOkFor(r.kind, s)) : [];
+    const items: { label: string; stance: Stance | null }[] = stances.map((s) => ({ label: STANCE_LABEL[s], stance: s }));
+    items.push({ label: '外す', stance: null });
+    // 大きさは、戦場の部隊を押したときの箱と同じ
+    const w = 88;
+    const h = 28;
+    const gap = 2;
+    const totalH = items.length * h + (items.length - 1) * gap;
+    const layout = getLayout();
+    // 枠の右に入れば、枠の右に下の端をそろえて出す（ヒントやひな形に重ならないように）。
+    // 入らなければ枠の上に、上にも入らなければ枠の下に出す
+    let x: number;
+    let y: number;
+    if (slot.x + slot.w + 4 + w <= layout.width) {
+      x = slot.x + slot.w + 4;
+      y = Math.max(0, slot.y + slot.h - totalH);
+    } else {
+      x = Math.max(0, Math.min(layout.width - w, slot.x));
+      y = slot.y - 4 - totalH >= 0 ? slot.y - 4 - totalH : slot.y + slot.h + 4;
+    }
+    items.forEach((it, i) => {
+      const b = new Button(this, { x, y: y + i * (h + gap), w, h }, it.label, () => {
+        if (it.stance) this.setReserveStance(it.stance);
+        else this.removeReserve();
+      });
+      b.setSelected(it.stance === r.stance);
+      b.addTo(this.popupLayer);
+      this.popupButtons.push(b);
+    });
+    // 操作の欄のボタンより上に出す（横長では、箱がひな形の並びに重なることがあるため）
+    this.children.bringToTop(this.popupLayer);
+    this.refresh();
+  }
+
+  private setReserveStance(stance: Stance): void {
+    const r = this.reserve;
+    if (r && this.stanceOkFor(r.kind, stance)) this.setDeploy(this.list, { kind: r.kind, stance });
+    playStance();
+    this.closePopup();
+    this.refresh();
+  }
+
+  /** 枠から外して手持ちに戻す。続けて戦場に置けるよう、その兵種を選んだ状態にする */
+  private removeReserve(): void {
+    const r = this.reserve;
+    if (!r) return;
+    this.setDeploy(this.list, null);
+    playRemove();
+    this.closePopup();
+    this.selectedKind = r.kind;
+    this.refresh();
+  }
+
+  /** 枠を出す・消す（対戦では、遊軍を使えるかが途中で変わる）と、中身の表示 */
+  private syncReserveSlot(locked: boolean): void {
+    const shown = this.reserveShown();
+    if (!shown) {
+      this.reserveButton?.destroy();
+      this.reserveButton = null;
+      this.reserveIcon?.destroy();
+      this.reserveIcon = null;
+      if (this.popupReserve) this.closePopup();
+      return;
+    }
+    if (!this.reserveButton) {
+      this.reserveButton = new Button(this, deployReserveSlot(getLayout(), this.pvpMode), RESERVE_LABEL, () => this.pressReserve());
+      this.reserveIcon = this.add.graphics();
+      // 開いている箱があれば、その下にならないようにする
+      this.children.bringToTop(this.popupLayer);
+    }
+    const r = this.reserve;
+    const b = this.reserveButton;
+    b.setText(r ? `${RESERVE_LABEL} ${KIND_LABEL[r.kind]}` : RESERVE_LABEL)
+      .setEnabled(!locked && (r !== null || canPutReserve(this.selectedKind, this.roster(), this.list, r)))
+      .setSelected(this.popupReserve);
+    // 方針の印（戦場の自軍と同じ札）を枠の右の内側に。方針を選べない面では出さない
+    const g = this.reserveIcon;
+    g?.clear();
+    if (g && r && this.stancesShown()) {
+      const rect = b.rect;
+      drawStanceIcon(g, r.stance, rect.x + rect.w - 7 - 8, Math.round(rect.y + rect.h / 2 - 4));
+    }
   }
 
   // ---- 表示 ----
@@ -941,6 +1128,7 @@ export class DeployScene extends Phaser.Scene {
       b.setText(`${KIND_LABEL[kind]}${n}`).setEnabled(n > 0 && !locked).setSelected(this.selectedKind === kind);
     }
     for (const b of this.templateButtons) b.setEnabled(!locked);
+    this.syncReserveSlot(locked);
     const errors = this.errors(this.list);
     if (this.pvpMode) {
       for (const [kind, b] of this.minusButtons) b.setEnabled(!locked && (pvpLocal.roster[kind] ?? 0) > 0);
