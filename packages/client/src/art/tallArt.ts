@@ -3,7 +3,7 @@
 // （シーンの側で視点の名前を見て分けない）。Phaser を使わない計算だけにして、画面なしで確かめられるようにする。
 
 import type { Terrain } from '@jinkei/engine';
-import { GENERAL_H, type ArtKind, type FieldView } from '../battle/FieldView.ts';
+import type { ArtKind, FieldView } from '../battle/FieldView.ts';
 import type { Rect } from '../layout.ts';
 import { gateKey, SIDE_FENCE, SIDE_WALL, sideGateKey, TALL_FENCE, TALL_TREE, TALL_WALL, tallGateKey } from './textures.ts';
 
@@ -98,7 +98,7 @@ export function placeTallCell(a: TallArt, fv: FieldView, col: number, row: numbe
   const x0 = Math.round(Math.min(front[0]!.x, front[1]!.x));
   const x1 = Math.round(Math.max(front[0]!.x, front[1]!.x));
   // 手前の辺の s。画面の縦は行だけで決まるので、同じ行のマスはどれもちょうど同じ値になる
-  const s = (front[0]!.y - fv.horizonY) / GENERAL_H;
+  const s = fv.scaleAtScreenY(front[0]!.y);
   return placeTallSpan(a, x0, x1 - x0, Math.round(front[0]!.y), s, size);
 }
 

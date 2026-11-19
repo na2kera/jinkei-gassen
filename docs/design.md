@@ -966,12 +966,12 @@ interface BattleSource {
 | 数字の箱の持ち上げ（BattleScene.drawInfo と DeployScene の 34 / 20）、旗の高さ（UnitSprite.drawMarks）、号令の印の位置、号令の相手の枠（UnitSprite.drawMarks。部隊の中心のまわりに描く。マスには合わせない） | `fv.standing` と `fv.spriteScale` から決める（立った絵の高さ × 倍率）。枠は、いまと同じく、補間した部隊の位置（画面の座標）を中心に描く |
 | 押した位置から部隊を選ぶ（BattleScene.onDown。いまは、押した位置を戦場の座標に戻して、0.55 マス以内でいちばん近い部隊。斜めは 6px 下にずらす） | 真上と斜めは、いまのまま。横から・将軍は、**画面の上で選ぶ**：部隊ごとに「体のまん中」（`toScreen` の位置から、立った絵の高さの半分 × 倍率だけ上）を出し、押した位置からの距離が `0.55 × CELL × 倍率` px 以内のもののうち、いちばん近い部隊。同じ距離なら、手前（`depthOf` が大きい）の部隊。`FieldView` に `pickPoint(x, y)`（体のまん中）と `pickRadius(x, y)` を持たせる。真上・斜めは、戦場の座標の上の円（斜めは画面の上では楕円）で選ぶので、画面の上の円では同じにならない。そのため選び方を1つにはまとめず、`fv.pick(部隊, sx, sy)` が視点ごとの選び方を受け持つ（真上・斜めはいまの計算のまま。同じ離れは、浮動小数の丸めを見込んで 1e-6 px までを同じとみなす） |
 | 旗・箱・押せる範囲を止める矩形（BattleScene.clipRect。描く絵を切り抜くものではなく、UI を収める範囲） | `fv.uiBounds(area)`：真上は戦場の矩形。斜めは、縦を描き場所いっぱいまで広げる（いまと同じ）。横から・将軍は、縦も横も描き場所いっぱい |
-| 描く絵の切り抜き（いまはない） | `fv.masked`（将軍だけ true にする予定）：true のとき、戦場の絵・兵・演出の層を、描き場所の矩形で切り抜く。真上・斜め・横からは false（いまと同じく切り抜かない）。切り抜く処理は、使う視点がまだないので、将軍を足すときに書く |
+| 描く絵の切り抜き（いまはない） | `fv.masked`（将軍だけ true）：true のとき、戦場の絵・兵・演出の層を、描き場所の矩形で切り抜く。真上・斜め・横からは false（いまと同じく切り抜かない）。切り抜く方法は §5.8.3 の決めの補足7（描き場所の外を板で覆う） |
 | 地形のタイルを敷く（art/field.ts `addFieldImage`）、霧のマス、瓦礫 | `fv.cellQuad(col, row)`：マスの4隅の画面の座標。真上・斜め・横からは軸に平行な矩形なので、いまの `cellRect` も残す（矩形でない視点で `cellRect` を呼んだら、4隅を囲む矩形を返す）。タイルは §5.8.4 のとおり敷く |
-| 高さのある絵（木・柵・城壁・門。BattleScene.buildTallTerrain、GateSprite。門は、作るときと、壊れ具合で絵を替えるときの両方） | `fv.standing` のとき立てる。どの絵を使うか・絵のどこをマスのどこに合わせるかは、`fv.art`（`'flat' \| 'oblique' \| 'side'`。将軍は決まってから足す）で選ぶ。絵の鍵と置き方を返す関数を `art/` に1つ作り（`tallArt(fv.art, 種類, 壊れ具合)` → 鍵・原点・マスのどこに合わせるか）、BattleScene と GateSprite はそれを呼ぶだけにする（シーンの側で視点の名前を見て分けない） |
+| 高さのある絵（木・柵・城壁・門。BattleScene.buildTallTerrain、GateSprite。門は、作るときと、壊れ具合で絵を替えるときの両方） | `fv.standing` のとき立てる。どの絵を使うか・絵のどこをマスのどこに合わせるかは、`fv.art`（`'flat' \| 'oblique' \| 'side'`。将軍は `'oblique'`）で選ぶ。絵の鍵と置き方を返す関数を `art/` に1つ作り（`tallArt(fv.art, 種類, 壊れ具合)` → 鍵・原点・マスのどこに合わせるか）、BattleScene と GateSprite はそれを呼ぶだけにする（シーンの側で視点の名前を見て分けない） |
 | `centeredFieldView(area, field, flipped, oblique)` | 最後の引数を `mode` にする。配置・公開の画面は `top` を渡す（いまと同じ見た目） |
 | 保存（save.ts の `view`、`sanitize`、`savedView`、`saveView`） | 4つの値を受け付ける。知らない値は `top` |
-| 視点のボタン（BattleScene.toggleView、ボタンの文字） | 押すたびに top → oblique → side → general → top。文字は「視点：真上」「視点：斜め」「視点：横」「視点：将軍」。将軍が決まるまでは top → oblique → side → top で回し、`general` が保存されていたら top として扱う（回す順は `battle/viewMode.ts` の `VIEW_CYCLE` の1か所。将軍を足すときに `general` を足す） |
+| 視点のボタン（BattleScene.toggleView、ボタンの文字） | 押すたびに top → oblique → side → general → top。文字は「視点：真上」「視点：斜め」「視点：横」「視点：将軍」。保存した `general` は、そのまま将軍で読む（回す順は `battle/viewMode.ts` の `VIEW_CYCLE` の1か所。2026-11-19 に `general` を足した） |
 
 - `flipped`（陣営1の人が見るとき上下左右を返す）は、いまと同じく、視点の変換の前にかける。以下の式の (x, y) は、返したあとの座標（自軍が下＝y が大きい側）。
 - 視点を切り替えても、`BattleSource` と補間は作り直さない（いまと同じ。表示物だけ作り直す）。

@@ -1,5 +1,5 @@
 // 「戦場の座標 → 画面の座標」（投影）と、その逆の変換を閉じ込める唯一の場所（design §5.2、§5.7、§5.8）。
-// 視点（真上・斜め・横から）の違いと、対戦で上下左右を返す表示の違いは、すべてここで吸収する。
+// 視点（真上・斜め・横から・将軍）の違いと、対戦で上下左右を返す表示の違いは、すべてここで吸収する。
 // シーンや絵の側で (x - originX) / CELL のような計算を書かないこと。視点の名前（mode）を見て分けないこと
 // （standing、depthSorted、art などの値と、vecToScreen などの口を使う）。
 //
@@ -299,6 +299,11 @@ export class FieldView {
     const s = (sy + 0.5 - this.horizonY) / GENERAL_H;
     if (s <= 0) return null;
     return { y: this.rows - (GENERAL_NEAR / s - 1) * (this.rows / 2), s };
+  }
+
+  /** 将軍：画面の縦 sy（連続値）での倍率 s。ほかの視点では 1 */
+  scaleAtScreenY(sy: number): number {
+    return this.mode === 'general' ? (sy - this.horizonY) / GENERAL_H : 1;
   }
 
   /** 表示の側の座標（flipped を返したあと）→ 実際の列と行（flipped を戻す）。戦場の外の値もそのまま返す */

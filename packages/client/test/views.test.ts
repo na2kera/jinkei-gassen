@@ -1,4 +1,4 @@
-// 戦闘の画面の視点（design §5.8.5 の V1〜V6、V9、V10）を、画面なしで確かめる。
+// 戦闘の画面の視点（design §5.8.5 の V1〜V6、V9、V10、将軍の V12〜V16・V18）を、画面なしで確かめる。
 // node --experimental-strip-types --test で動かす（クライアントにはテストの道具を入れていないため）。
 // 「変更前」の式は、§5.8 の作りに直す前の FieldView・UnitSprite・BattleScene.onDown から写した。
 
