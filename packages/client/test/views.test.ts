@@ -4,8 +4,8 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { dirOf, slotsOf, soldierPoint, unitLift } from '../src/art/formation.ts';
-import { groundTerrain, placeTall, tallArt } from '../src/art/tallArt.ts';
+import { dirOf, marksShown, slotsOf, soldierPoint, unitLift } from '../src/art/formation.ts';
+import { groundTerrain, placeTall, placeTallCell, tallArt } from '../src/art/tallArt.ts';
 import { sideArtColors, sideArtRows } from '../src/art/textures.ts';
 import { centeredFieldView, type FieldView, type PickTarget, type Point } from '../src/battle/FieldView.ts';
 import { nextView, parseView, usableView, VIEW_CYCLE, VIEW_MODES, type ViewMode } from '../src/battle/viewMode.ts';
@@ -19,12 +19,12 @@ const AREAS: Rect[] = [
 ];
 const WIDTHS = [12, 8, 7, 6];
 
-/** V1 と V9 の表。将軍は変換がまだないので、名前だけ残して飛ばす（足すときに skip を外す） */
+/** V1 と V9 の表（将軍の V9 は、決めの補足1 のとおり別に確かめるので、V9 の表からは外す） */
 const MODE_TABLE: { mode: ViewMode; skip?: string }[] = [
   { mode: 'top' },
   { mode: 'oblique' },
   { mode: 'side' },
-  { mode: 'general', skip: '将軍の視点はまだない（design §5.8.3）' },
+  { mode: 'general' },
 ];
 
 function views(mode: ViewMode, widths = WIDTHS): FieldView[] {
@@ -136,9 +136,10 @@ for (const { mode, skip } of MODE_TABLE) {
   });
 }
 
-test('将軍の視点は、まだ FieldView を作れない（変換を足すまで回す順に入れない）', () => {
-  assert.throws(() => centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, false, 'general'));
-  assert.ok(!VIEW_CYCLE.includes('general'));
+test('将軍の視点の FieldView を作れて、回す順に入っている', () => {
+  const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, false, 'general');
+  assert.equal(fv.mode, 'general');
+  assert.ok(VIEW_CYCLE.includes('general'));
 });
 
 // ---- V2 ----
@@ -477,24 +478,24 @@ test('V6 保存：view に4つの値が入り、読み戻せる。知らない�
   for (const bad of ['', 'Top', 'front', 3, null, undefined, {}]) assert.equal(parseView(bad), 'top');
 });
 
-test('視点のボタン：真上 → 斜め → 横 → 真上 と回り、将軍が保存されていたら真上として扱う', () => {
+test('視点のボタン：真上 → 斜め → 横 → 将軍 → 真上 と回り、保存した将軍はそのまま将軍で読む', () => {
   assert.equal(nextView('top'), 'oblique');
   assert.equal(nextView('oblique'), 'side');
-  assert.equal(nextView('side'), 'top');
-  assert.equal(usableView('general'), 'top');
-  assert.equal(nextView('general'), 'oblique');
+  assert.equal(nextView('side'), 'general');
+  assert.equal(nextView('general'), 'top');
+  assert.equal(usableView('general'), 'general');
+  assert.equal(usableView(parseView('general')), 'general');
   assert.deepEqual(
     VIEW_CYCLE.map((v) => VIEW_LABEL[v]),
-    ['視点：真上', '視点：斜め', '視点：横'],
+    ['視点：真上', '視点：斜め', '視点：横', '視点：将軍'],
   );
-  assert.equal(VIEW_LABEL.general, '視点：将軍');
 });
 
 // ---- V9 ----
 
 const DIR_VEC: Record<number, Point> = { 0: { x: 0, y: -1 }, 1: { x: 1, y: 0 }, 2: { x: 0, y: 1 }, 3: { x: -1, y: 0 } };
 
-for (const { mode, skip } of MODE_TABLE) {
+for (const { mode, skip } of MODE_TABLE.filter((m) => m.mode !== 'general')) {
   test(`V9 ${mode}：兵の並びと向き（前の列が向きの側、右手が右、4方向の絵が画面の向きと合う）`, skip ? { skip } : {}, () => {
     for (const flipped of [false, true]) {
       const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, flipped, mode);
@@ -612,5 +613,278 @@ test('V10 横から：体のまん中を押すとその部隊、重なる2部隊
     assert.equal(fv.pick([front, back], mid.x, mid.y), want);
     // 離れすぎていれば選ばない
     assert.equal(fv.pick([back], a.x + fv.pickRadius(back.x, back.y) + 1, a.y), null);
+  }
+});
+
+// ---- V12〜V16、V18（将軍。design §5.8.3 と、決めの補足13） ----
+
+/** 行の数が 16 でない戦場も試す（補足13） */
+const GEN_ROWS = [16, 8, 12, 20];
+
+function genViews(widths = WIDTHS, rowsList = GEN_ROWS): FieldView[] {
+  const out: FieldView[] = [];
+  for (const area of AREAS) {
+    for (const w of widths) for (const h of rowsList) for (const flipped of [false, true]) out.push(centeredFieldView(area, { width: w, height: h }, flipped, 'general'));
+  }
+  return out;
+}
+
+/** 表示の側の座標（自軍が大きい側）→ 戦場の座標 */
+function realOf(fv: FieldView, x: number, y: number): Point {
+  return fv.flipped ? { x: fv.cols - x, y: fv.rows - y } : { x, y };
+}
+
+function areaOf(fv: FieldView): Rect {
+  return AREAS.find((a) => a.x === fv.rect.x && a.y + 192 === fv.rect.y)!;
+}
+
+test('V12 将軍：往復（8・12・16・20 行）、手前の辺の中央が (cx, 下の端)、奥の辺の両端が枠の左右の端（12 列）、中央の列が cx', () => {
+  for (const fv of genViews()) {
+    const area = areaOf(fv);
+    for (const p of samplePoints(fv)) {
+      const s = fv.toScreen(p.x, p.y);
+      const q = fv.toField(s.x, s.y);
+      assert.ok(Math.abs(q.x - p.x) < 1e-9 && Math.abs(q.y - p.y) < 1e-9, `${fv.cols}×${fv.rows} ${fv.flipped} (${p.x},${p.y}) → (${q.x},${q.y})`);
+    }
+    const cx = area.x + area.w / 2;
+    const near = realOf(fv, fv.cols / 2, fv.rows);
+    const n = fv.toScreen(near.x, near.y);
+    assert.ok(Math.abs(n.x - cx) < 1e-9 && Math.abs(n.y - (area.y + 384)) < 1e-9);
+    const far = realOf(fv, fv.cols / 2, 0);
+    const f = fv.toScreen(far.x, far.y);
+    assert.ok(Math.abs(f.x - cx) < 1e-9 && Math.abs(f.y - (area.y + 192)) < 1e-9);
+    // 手前の辺は、1 列が 72px（倍率 3）
+    const nl = realOf(fv, 0, fv.rows);
+    assert.ok(Math.abs(Math.abs(cx - fv.toScreen(nl.x, nl.y).x) - (fv.cols / 2) * 72) < 1e-9);
+    if (fv.cols === 12) {
+      const l = realOf(fv, 0, 0);
+      const r = realOf(fv, 12, 0);
+      assert.ok(Math.abs(fv.toScreen(l.x, l.y).x - area.x) < 1e-9);
+      assert.ok(Math.abs(fv.toScreen(r.x, r.y).x - (area.x + 288)) < 1e-9);
+    }
+    assert.deepEqual(fv.rect, { x: area.x, y: area.y + 192, w: 288, h: 192 });
+    assert.deepEqual(fv.uiBounds(area), area);
+    assert.deepEqual(fv.noticeBounds(area), area);
+    assert.equal(fv.standing, true);
+    assert.equal(fv.depthSorted, true);
+    assert.equal(fv.fitMarks, true);
+    assert.equal(fv.masked, true);
+    assert.equal(fv.perspective, true);
+    assert.equal(fv.art, 'oblique');
+  }
+});
+
+test('真上・斜め・横から：将軍のための値（masked・perspective・visible・noticeBounds・scanline・新しい置き方）は、いままでどおり', () => {
+  for (const mode of ['top', 'oblique', 'side'] as const) {
+    for (const fv of views(mode, [12, 6])) {
+      assert.equal(fv.masked, false);
+      assert.equal(fv.perspective, false);
+      assert.deepEqual(fv.noticeBounds(AREAS[0]!), fv.rect);
+      assert.equal(fv.scanline(fv.rect.y + 10), null);
+      for (const p of samplePoints(fv)) {
+        assert.equal(fv.visible(p.x, p.y), true);
+        assert.equal(fv.spriteScale(p.x, p.y), 1);
+      }
+      // 高さのある絵を置く新しい口も、いままでの placeTall と同じ位置で倍率 1
+      for (const kind of ['tree', 'fence', 'wall', 'gate'] as const) {
+        const a = tallArt(fv.art, kind, { alt: true, stage: 1 });
+        if (!a) continue;
+        for (const [c, r] of [
+          [0, 0],
+          [3, 7],
+          [fv.cols - 1, 15],
+        ] as const) {
+          assert.deepEqual(placeTallCell(a, fv, c, r, { w: 24, h: 22 }), { ...placeTall(a, fv.cellRect(c, r)), scaleX: 1, scaleY: 1 });
+        }
+      }
+    }
+  }
+});
+
+test('V13 将軍：spriteScale は 1・2・3 で手前ほど大きい。境目 s = 2.5・1.5 の直前・ちょうど・直後。自軍の本陣（y = 13.5）で 2、敵の本陣で 1', () => {
+  for (const fv of genViews([12, 6])) {
+    const R = fv.rows;
+    const at = (dy: number): number => {
+      const p = realOf(fv, 3, dy);
+      return fv.spriteScale(p.x, p.y);
+    };
+    let prev = 0;
+    for (let i = 0; i <= 400; i++) {
+      const k = at((i / 400) * R);
+      assert.ok(k === 1 || k === 2 || k === 3);
+      // 表示の側の y が大きい（手前）ほど大きい（小さくならない）
+      assert.ok(k >= prev);
+      prev = k;
+    }
+    // 境目：奥行き d = R / 10 で s = 2.5、d = R / 2 で s = 1.5
+    const y25 = R - R / 10;
+    const y15 = R - R / 2;
+    assert.equal(at(y25 + 1e-6), 3, `${R} 2.5 の手前`);
+    assert.equal(at(y25), 3, `${R} 2.5 ちょうど`);
+    assert.equal(at(y25 - 1e-6), 2, `${R} 2.5 の奥`);
+    assert.equal(at(y15 + 1e-6), 2);
+    assert.equal(at(y15), 2);
+    assert.equal(at(y15 - 1e-6), 1);
+    assert.equal(at(R), 3);
+    assert.equal(at(0), 1);
+  }
+  for (const flipped of [false, true]) {
+    const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, flipped, 'general');
+    const own = realOf(fv, 6, 13.5);
+    const enemy = realOf(fv, 6, 2.5);
+    assert.equal(fv.spriteScale(own.x, own.y), 2);
+    assert.equal(fv.spriteScale(enemy.x, enemy.y), 1);
+  }
+});
+
+test('V14 将軍：走査線の y は toScreen と往復し、地平線より上は null。toField は地平線より上でも有限', () => {
+  for (const fv of genViews([12, 7])) {
+    const area = areaOf(fv);
+    for (let sy = area.y; sy < area.y + area.h; sy++) {
+      const sl = fv.scanline(sy);
+      if (sy + 0.5 <= area.y + 96) {
+        assert.equal(sl, null);
+        continue;
+      }
+      assert.ok(sl);
+      const p = realOf(fv, 2.5, sl.y);
+      assert.ok(Math.abs(fv.toScreen(p.x, p.y).y - (sy + 0.5)) < 1e-9);
+      assert.ok(Math.abs(sl.s - (sy + 0.5 - (area.y + 96)) / 96) < 1e-12);
+    }
+    for (const sy of [area.y + 96, area.y + 50, area.y, -1e6]) {
+      const q = fv.toField(area.x + 10, sy);
+      assert.ok(Number.isFinite(q.x) && Number.isFinite(q.y));
+    }
+  }
+});
+
+test('V14 将軍：全走査線で、隣り合う列の端が一致し、枠の幅がすき間なく埋まる。区間のマスは押した位置のマスと合う（返す・返さない）', () => {
+  for (const fv of genViews([12, 7, 6], [16, 12])) {
+    const area = areaOf(fv);
+    for (let sy = area.y; sy < area.y + area.h; sy++) {
+      const spans = fv.scanSpans(sy, area.x, area.x + area.w, 24);
+      if (!fv.scanline(sy)) {
+        assert.equal(spans.length, 0);
+        continue;
+      }
+      assert.ok(spans.length > 0);
+      assert.equal(spans[0]!.x0, area.x);
+      assert.equal(spans.at(-1)!.x1, area.x + area.w);
+      for (let i = 0; i < spans.length; i++) {
+        const sp = spans[i]!;
+        assert.ok(sp.x1 > sp.x0 && sp.tileRow >= 0 && sp.tileRow < 24);
+        if (i > 0) {
+          assert.equal(sp.x0, spans[i - 1]!.x1);
+          // 地平線のすぐ下では、1 列が 1px より細く、幅 0 の列は飛ばすので、列の番号は増えるだけを見る
+          assert.ok(sp.dcol > spans[i - 1]!.dcol);
+          if (fv.scanline(sy)!.s >= 0.5) assert.equal(sp.dcol, spans[i - 1]!.dcol + 1);
+        }
+        // 区間のまん中を押すと、その区間のマス（戦場の中だけ。丸めの端から離れた所で比べる）
+        if (sp.x1 - sp.x0 < 4) continue;
+        if (!(sp.dcol >= 0 && sp.dcol < fv.cols && sp.drow >= 0 && sp.drow < fv.rows)) continue;
+        const cell = fv.cellAt((sp.x0 + sp.x1) / 2, sy + 0.5);
+        const want = fv.cellOfDisplay(sp.dcol, sp.drow);
+        assert.ok(cell);
+        assert.equal(cell.col, want.col, `${fv.cols} ${fv.flipped} sy=${sy}`);
+        // 行の境目にかかる走査線は、浮動小数の丸めでどちらの行にもなりうるので、境目から離れた所だけ比べる
+        if (sp.tileRow > 0 && sp.tileRow < 23) assert.equal(cell.row, want.row);
+      }
+    }
+  }
+  // 返したときは、表示の左端の列が、実際の右端の列（左右が非対称な地形でも、絵が鏡写しにならない）
+  const fv = centeredFieldView(AREAS[0]!, { width: 7, height: 16 }, true, 'general');
+  assert.deepEqual(fv.cellOfDisplay(0, 15), { col: 6, row: 0 });
+  assert.deepEqual(fv.cellOfDisplay(6.5, 0.5), { col: 0, row: 15 });
+  const nf = centeredFieldView(AREAS[0]!, { width: 7, height: 16 }, false, 'general');
+  assert.deepEqual(nf.cellOfDisplay(0, 15), { col: 0, row: 15 });
+});
+
+test('V15 将軍：兵の並びと向き（敵へ向く自軍の部隊で、前の列の兵は画面の縦が小さく、右手の兵は画面の横が大きい）', () => {
+  for (const flipped of [false, true]) {
+    const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, flipped, 'general');
+    const fy = flipped ? 1 : -1;
+    for (const pos of [
+      { x: 6, y: 12.5 },
+      { x: 4.3, y: 9.2 },
+      { x: 8.7, y: 3.4 },
+    ]) {
+      const at = realOf(fv, pos.x, pos.y);
+      const c = fv.toScreen(at.x, at.y);
+      for (const kind of ['infantry', 'cavalry', 'hq'] as const) {
+        const pts = slotsOf(kind).map((s) => ({ s, p: soldierPoint(fv, c, at, 0, fy, s.lx, s.ly) }));
+        for (const a of pts) {
+          for (const b of pts) {
+            if (a.s.lx === b.s.lx && a.s.ly < b.s.ly) assert.ok(a.p.y < b.p.y, `${flipped} ${kind} 前`);
+            if (a.s.ly === b.s.ly && a.s.lx > b.s.lx) assert.ok(a.p.x > b.p.x, `${flipped} ${kind} 右`);
+          }
+        }
+      }
+      // 絵の向き：敵へまっすぐ向く部隊は上向き、真横（見ている人の右）は右向き（真上と同じ選び方）
+      const up = fv.facingOnScreen(at.x, at.y, 0, fy);
+      assert.equal(dirOf(up.x, up.y), 0);
+      const right = fv.facingOnScreen(at.x, at.y, flipped ? -1 : 1, 0);
+      assert.equal(dirOf(right.x, right.y), 1);
+    }
+  }
+});
+
+test('V16 将軍：体のまん中を押すとその部隊。枠の外の部隊（visible が false）は選ばれず、旗と印も描かない', () => {
+  for (const flipped of [false, true]) {
+    const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, flipped, 'general');
+    const area = AREAS[0]!;
+    const units: PickTarget[] = [
+      { id: 1, ...realOf(fv, 6, 14.5) },
+      { id: 2, ...realOf(fv, 3.5, 8.5) },
+      { id: 3, ...realOf(fv, 9.5, 2.5) },
+      // 手前の左右の端：枠の外
+      { id: 4, ...realOf(fv, 0.5, 15) },
+      { id: 5, ...realOf(fv, 11.5, 12) },
+    ];
+    for (const u of units) {
+      const foot = fv.toScreen(u.x, u.y);
+      const inside = foot.x >= area.x && foot.y >= area.y && foot.x < area.x + area.w && foot.y < area.y + area.h;
+      assert.equal(fv.visible(u.x, u.y), inside);
+      assert.equal(marksShown(fv, u), inside);
+      const c = fv.pickPoint(u.x, u.y);
+      // 体のまん中は、足もとから絵の高さの半分 × 倍率だけ上
+      assert.ok(Math.abs(foot.y - c.y - 5 * fv.spriteScale(u.x, u.y)) < 1e-9);
+      assert.equal(fv.pick(units, c.x, c.y), inside ? u.id : null, `${flipped} ${u.id}`);
+    }
+    assert.equal(fv.visible(units[3]!.x, units[3]!.y), false);
+    assert.equal(fv.visible(units[4]!.x, units[4]!.y), false);
+  }
+});
+
+test('V18 将軍：壁の行で、隣り合うマスの左端と幅がつながり、上の端がそろう。木は整数倍', () => {
+  for (const area of AREAS) {
+    for (const w of [12, 7]) {
+      for (const flipped of [false, true]) {
+        const fv = centeredFieldView(area, { width: w, height: 16 }, flipped, 'general');
+        for (let row = 0; row < 16; row++) {
+          for (const kind of ['wall', 'fence', 'gate'] as const) {
+            const a = tallArt(fv.art, kind, { stage: 1 })!;
+            const size = kind === 'fence' ? { w: 24, h: 12 } : { w: 24, h: 22 };
+            const ps = Array.from({ length: w }, (_, col) => placeTallCell(a, fv, col, row, size)).sort((p, q) => p.x - q.x);
+            const top0 = ps[0]!.y - Math.round(ps[0]!.scaleY * size.h);
+            for (let i = 0; i < ps.length; i++) {
+              const p = ps[i]!;
+              const width = p.scaleX * size.w;
+              const height = p.scaleY * size.h;
+              assert.ok(Math.abs(width - Math.round(width)) < 1e-9 && Math.abs(height - Math.round(height)) < 1e-9);
+              assert.equal(p.y, ps[0]!.y);
+              assert.equal(p.y - Math.round(height), top0);
+              assert.equal(p.depth, p.y + a.depthBias);
+              if (i > 0) assert.equal(p.x, ps[i - 1]!.x + Math.round(ps[i - 1]!.scaleX * size.w), `${w} ${flipped} ${row} ${kind}`);
+            }
+            // 下の端は、マスの手前の辺
+            const q = fv.cellQuad(0, row);
+            assert.equal(ps[0]!.y, Math.round(Math.max(q[0].y, q[2].y)));
+          }
+          const tree = placeTallCell(tallArt(fv.art, 'tree', { alt: false })!, fv, 2, row, { w: 12, h: 16 });
+          assert.equal(tree.scaleX, fv.spriteScale(2.5, row + 0.5));
+          assert.equal(tree.scaleX, tree.scaleY);
+        }
+      }
+    }
   }
 });

@@ -621,6 +621,8 @@ export class DeployScene extends Phaser.Scene {
       stageId,
       ...(this.stage.fog && this.stage.fog.length > 0 ? { fog: this.stage.fog } : {}),
       survive: this.stage.win.type === 'survive',
+      // 将軍の視点の遠景の絵（面ごとに1枚）
+      backdrop: stageId,
     };
     playStart();
     this.scene.start('Battle', data);

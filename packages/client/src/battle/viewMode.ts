@@ -6,11 +6,8 @@ export type ViewMode = 'top' | 'oblique' | 'side' | 'general';
 
 export const VIEW_MODES: readonly ViewMode[] = ['top', 'oblique', 'side', 'general'];
 
-/**
- * 視点のボタンで回す順。将軍の視点は仕様が決まっていない（design §5.8.3）ので、まだ入れない。
- * 将軍を足すときは、ここに 'general' を足す（FieldView の変換と、art/tallArt.ts の絵も足す）
- */
-export const VIEW_CYCLE: readonly ViewMode[] = ['top', 'oblique', 'side'];
+/** 視点のボタンで回す順（真上 → 斜め → 横から → 将軍 → 真上） */
+export const VIEW_CYCLE: readonly ViewMode[] = ['top', 'oblique', 'side', 'general'];
 
 /** 保存してある値を視点に直す。知らない値は真上 */
 export function parseView(v: unknown): ViewMode {

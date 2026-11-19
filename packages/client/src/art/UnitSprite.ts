@@ -9,7 +9,7 @@ import type { Kind, OrderKind, Stance } from '@jinkei/engine';
 import Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
 import type { Rect } from '../layout.ts';
-import { dirOf, SCATTER, slotsOf, soldierPoint, type Slot } from './formation.ts';
+import { dirOf, marksShown, SCATTER, slotsOf, soldierPoint, type Slot } from './formation.ts';
 import { drawOrderIcon, drawStanceIcon } from './icons.ts';
 import { ART, COLOR, SIDE_COLOR } from './palette.ts';
 import { soldierKey, soldierSize, standKey, standSize, type Dir4, type SoldierShape } from './textures.ts';
@@ -102,6 +102,8 @@ export class UnitSprite {
     const jitter = 8 * look.rout;
     const beat = Math.floor(time / 200);
     const jab = Math.floor(time / 160);
+    // 兵の絵の倍率（将軍だけ 1 以外）。1つの部隊の兵は、部隊の中心で決めた同じ倍率で描く
+    const scale = fv.spriteScale(at.x, at.y);
     this.soldiers.forEach((img, i) => {
       if (i >= count) {
         img.setVisible(false);
@@ -126,7 +128,8 @@ export class UnitSprite {
       if (fv.standing) {
         // 立った兵は、足もとを並びの位置に置く。奥の兵ほど上に描かれ、depth（並べる値）の順で手前が上に重なる
         const size = standSize(slot.shape);
-        img.setPosition(Math.round(wx - size.w / 2), Math.round(wy - size.h + 1));
+        if (img.scaleX !== scale) img.setScale(scale);
+        img.setPosition(Math.round(wx - (size.w * scale) / 2), Math.round(wy - size.h * scale + 1));
         if (fv.depthSorted) img.setDepth(fv.depthAt(wx, wy));
       } else {
         const size = soldierSize(slot.shape, dir);
@@ -135,14 +138,15 @@ export class UnitSprite {
       }
       img.setVisible(true);
     });
-    this.drawMarks(look, count > 0, time, fv.spriteScale(at.x, at.y));
+    // 枠の外の部隊（将軍）は、旗・印・号令の相手の枠を描かない（兵の絵は、描き場所の外を覆う板で見えなくなる）
+    this.drawMarks(look, count > 0 && marksShown(fv, at), time, scale);
   }
 
-  /** いま見えている兵の中心（全滅したときに、その場に倒れた兵を描くため） */
+  /** いま見えている兵の中心（全滅したときに、その場に倒れた兵を描くため）。大きさは、倍率をかけたあとの表示の大きさ */
   soldierCenters(): { x: number; y: number; w: number; h: number }[] {
     return this.soldiers
       .filter((s) => s.visible)
-      .map((s) => ({ x: s.x + s.width / 2, y: s.y + s.height / 2, w: s.width, h: s.height }));
+      .map((s) => ({ x: s.x + s.displayWidth / 2, y: s.y + s.displayHeight / 2, w: s.displayWidth, h: s.displayHeight }));
   }
 
   /**
@@ -181,7 +185,7 @@ export class UnitSprite {
     const fy = poleTop + Math.round(((1 - m) * (poleH - flagH)) / 2) * 2;
     const wave = look.wave ? Math.floor(time / 120) % 2 : 0;
     const key = alive
-      ? [look.highlight ? 1 : 0, look.rout > 0 ? 1 : 0, fy, poleTop, mirror ? 1 : 0, wave, look.order ?? '', look.stance ?? '', orderX, orderY].join('|')
+      ? [look.highlight ? 1 : 0, look.rout > 0 ? 1 : 0, fy, poleTop, mirror ? 1 : 0, wave, look.order ?? '', look.stance ?? '', orderX, orderY, scale].join('|')
       : 'dead';
     g.setPosition(cx, cy);
     if (key === this.marksKey) return;
@@ -190,14 +194,15 @@ export class UnitSprite {
     if (!alive) return;
     if (look.highlight) {
       // 号令の相手の枠。部隊の中心のまわりに描く（マスには合わせない）。
-      // 立った兵のときは、兵（足もとから上へ伸びる）を囲む平たい形にする
+      // 立った兵のときは、兵（足もとから上へ伸びる）を囲む平たい形にする。横も縦も兵の絵の倍率ぶん広げる（線の太さは同じ）
       const top = standing ? -18 * scale : -12;
       const bottom = standing ? 6 * scale : 12;
+      const half = 12 * scale;
       g.fillStyle(COLOR.highlight, 1);
-      g.fillRect(-12, top, 24, 2);
-      g.fillRect(-12, bottom - 2, 24, 2);
-      g.fillRect(-12, top + 2, 2, bottom - top - 4);
-      g.fillRect(10, top + 2, 2, bottom - top - 4);
+      g.fillRect(-half, top, half * 2, 2);
+      g.fillRect(-half, bottom - 2, half * 2, 2);
+      g.fillRect(-half, top + 2, 2, bottom - top - 4);
+      g.fillRect(half - 2, top + 2, 2, bottom - top - 4);
     }
     if (look.rout > 0) return;
     // 旗竿は画面の上下に立てる（部隊の向きでは回さない）
