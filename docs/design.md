@@ -1224,6 +1224,28 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
 - 古い client（遊軍を知らない）と新しい server：上の `cv` の決まりで、古い画面のいる部屋では遊軍が使えない。通信の形は、項目が増えるだけなので、古い client でも読める。
 - `snap` の `reserve` は、自分のぶんの `ReserveView`（なければ null）を1つだけ入れる。client の `RemoteBattleSource` は、これを `BattleView.reserve` の自分の側に入れ、相手の側を null にして組み立てる。
 
+**実装で決めた細部**（2026-11-19。号令 `order` の扱いに合わせた。型は `packages/server/src/protocol.ts`）
+
+- メッセージの形：
+  - C→S：`{ type: 'draft', army, reserve? }`、`{ type: 'ready', army?, reserve? }`、`{ type: 'reserve', battleNo, from }`。`reserve` の値は `{ kind, stance }` か null。
+  - S→C：`room.rules.reserve: boolean`、`room.myReserve`、`reveal.myReserve`、`snap.reserve`。どれも、遊軍がない・使えないときは null（false）を入れて、項目そのものはいつも送る（遊軍の有無で形を変えない）。古い server は送らないので、client は、ない場合を null（false）として読む。
+- 遊軍の値の検査：server の入口（`validate.ts`）では形だけを見る（鍵が `kind` と `stance` だけで、どちらも 16 文字以下の文字列）。形が違えば、号令と同じくメッセージごと黙って捨てる。兵種と方針が正しいか（本陣・知らない方針）は `validateArmy` の `limits.reserve`（`reserveErrors`）に任せ、`invalid_army` の `armyErrors` で返す（遊軍の誤りは `index` なし）。入口で落とすと、知らない方針を送った人に何も返らなくなるため。
+- 下書き（`draft`）の誤りは、いままでどおりエラーを返さない（組を下書きとして持ち、検査を通らなければ `lastValid` を変えない）。
+- `room.myArmy` と `room.myReserve` は、同じ組（`lastValid`）から返す。
+- エラー：
+  - 呼べないとき：`{ reason: 'invalid_reserve', op: 'reserve', code, message }`。`code` は engine の理由（`no_reserve`・`reserve_not_ready`・`no_spawn_cell`・`battle_over`）。号令のエラー（`invalid_order`）とは `reason` も違うので、いまの client（`invalid_order` で「返事待ち」を減らす）は、遊軍のエラーで数を減らさない。
+  - 渡す前の入力が陣営ごとに1つまで：2つ目は engine に渡さず、号令の4回目と同じく本人にだけ `invalid_reserve`（`code: 'no_reserve'`）を返す。
+  - 受け付けたあと、渡す刻みまでに現れるマスがふさがったときは、engine が黙って捨てる（§7.3）。エラーは返らず、`snap.reserve.state` が `'ready'` のまま残る。
+  - 遊軍を使えない部屋：`{ reason: 'reserve_disabled' }`。`draft` と `ready` では、遊軍つきのメッセージを組ごと捨てる（配置だけを受け取ることもしない）。`reserve` のメッセージでは `op: 'reserve'` も付ける。遊軍の値が null（省略）なら、使えない部屋でもふつうに通る。
+  - `reserve` のメッセージを、戦闘以外・`battleNo` 違いで送ったときは、号令と同じく黙って捨てる。
+- `rules.reserve`：両方の席が埋まっていて、どちらの席も最後につないだ接続の `cv` が 2 以上のとき true。相手を待っている間（席が1つ）は false。`cv` は入り直すたびに、その接続の値に置き換える（付けない・形が違えば 1）。値は `publicSignature` に入れるので、変われば両者に `room` が届く（遊軍を外したかどうかでは送り分けない）。
+- 配置の段階の途中で `rules.reserve` が false になったら、両方の席の下書きと `lastValid`（確定した組を含む）から遊軍を外す。**確定（ready）は取り消さない**。取り消すと、遊軍を持っていた側だけ確定が外れ、相手に遊軍があったことが伝わるため。外れたことは、本人の `room.myReserve` が null になることで分かる。あとで両者が cv 2 以上に戻っても、外れた遊軍は戻らない。
+- 公開・戦闘の途中で `rules.reserve` が false になったとき（古い画面で入り直したとき）：始まった戦いの遊軍は消さないが、`reserve` のメッセージは `reserve_disabled` で断る（古い画面は途中で増えた部隊を描けないため。§7.7 の「受け付けない」をそのまま当てた）。新しい画面で入り直せば、また呼べる。
+- 戦いを作るとき、どちらにも遊軍がなければ `createBattle` に `reserves` を渡さない（遊軍のない戦いの設定を、いままでとまったく同じにする）。`createBattle` が片方の配置を断ったときは、その陣営を既定の編成・遊軍なしにする（組ごと置き換える）。
+- 戦闘の記録（`BattleRecord`）に `reserves`（両軍の遊軍）を足した（公開の段階で入り直した人に、自分の遊軍を送り直すため）。遊軍の前に保存した記録にはないので、ないときは両方 null。
+- 保存した部屋の形を `v: 3` にした。遊軍の前の形（`v: 2`。下書きが配置の配列、席に `cv` がない）は、読み戻すときに、遊軍なしの組と `cv = 1` にそろえる。
+- `result` の振り返りは `structuredClone` で写してから、相手のぶんを直す。`unusedReserve`・`remainingForStars` がない古い振り返りは、そのまま送る。
+
 ### 7.8 client
 
 - **戦闘の途中で部隊が増える**：`BattleScene` は、場面に知らない id の部隊が出てきたら、その場で `UnitSprite` を作る（いまは最初の場面でだけ作っている）。補間（`FrameInterpolator`）は、前の場面にない部隊を、いまの位置にそのまま出す（動かさない）。
