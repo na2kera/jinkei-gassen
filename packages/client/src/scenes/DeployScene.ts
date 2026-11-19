@@ -39,6 +39,7 @@ import { addFieldImage, drawFieldFrame, drawZone } from '../art/field.ts';
 import { COLOR } from '../art/palette.ts';
 import { GateSprite } from '../art/GateSprite.ts';
 import { FOG_KEY } from '../art/textures.ts';
+import { unitLift } from '../art/formation.ts';
 import { UnitSprite } from '../art/UnitSprite.ts';
 import { playFormation, playPlace, playRemove, playStance, playStart } from '../audio/sfx.ts';
 import { centeredFieldView, FieldView, type Cell } from '../battle/FieldView.ts';
@@ -235,10 +236,9 @@ export class DeployScene extends Phaser.Scene {
       // 敵の配置は見せる（方針と、霧のマスの部隊は見せない。decisions §8）
       this.enemyVisible = stageEnemyVisible(this.stage);
       this.enemyVisible.forEach((p, i) => {
-        const s = new UnitSprite(this, 1, p.kind, 100 + i, this.soldierLayer, this.markLayer);
+        const s = new UnitSprite(this, 1, p.kind, 100 + i, this.soldierLayer, this.markLayer, this.fv);
         const c = this.fv.cellCenter(p.col, p.row);
-        const d = this.fv.dirToScreen(0, 1);
-        s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
+        s.apply({ x: c.x, y: c.y, fx: 0, fy: 1, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
       });
     }
     // ヒント・対戦の知らせ・陣形名は、戦場の上には重ねない（中間地帯に地形があるため）。
@@ -621,6 +621,8 @@ export class DeployScene extends Phaser.Scene {
       stageId,
       ...(this.stage.fog && this.stage.fog.length > 0 ? { fog: this.stage.fog } : {}),
       survive: this.stage.win.type === 'survive',
+      // 将軍の視点の遠景の絵（面ごとに1枚）
+      backdrop: stageId,
     };
     playStart();
     this.scene.start('Battle', data);
@@ -788,7 +790,7 @@ export class DeployScene extends Phaser.Scene {
     // 箱の作りと置き方は、戦闘の画面の兵数と士気（BattleScene の drawInfo）と同じ
     const w = Math.ceil(this.kindText.width / 2) * 2 + 16;
     const h = Math.ceil(this.kindText.height / 2) * 2 + 12;
-    const { x, y } = unitBoxAt(this.fv.rect, this.fv.cellCenter(e.col, e.row), w, h, this.fv.oblique ? 34 : 20);
+    const { x, y } = unitBoxAt(this.fv.rect, this.fv.cellCenter(e.col, e.row), w, h, unitLift(this.fv, e.col + 0.5, e.row + 0.5));
     this.kindBox.clear();
     drawBox(this.kindBox, { x, y, w, h });
     this.kindText.setPosition(x + 8, y + 6).setVisible(true);
@@ -820,7 +822,7 @@ export class DeployScene extends Phaser.Scene {
     const p = this.list[press.index];
     const sprite = this.ownSprites[press.index];
     if (!p || !sprite) return;
-    sprite.apply({ x: pointer.x, y: pointer.y, dx: 0, dy: -1, menRatio: 1, morale: 100, rout: 0, highlight: true, stance: this.stancesShown() ? p.stance : null });
+    sprite.apply({ x: pointer.x, y: pointer.y, fx: 0, fy: -1, menRatio: 1, morale: 100, rout: 0, highlight: true, stance: this.stancesShown() ? p.stance : null });
     const cell = this.fv.cellAt(pointer.x, pointer.y);
     this.dropMark.clear();
     if (cell && this.inOwnZone(cell)) this.drawCellFrame(this.dropMark, this.fv.cellRect(cell.col, cell.row));
@@ -925,13 +927,12 @@ export class DeployScene extends Phaser.Scene {
     if (locked) this.closePopup();
     for (const s of this.ownSprites) s.destroy();
     this.ownSprites = this.list.map((p: Placement, i) => {
-      const s = new UnitSprite(this, 0, p.kind, i, this.soldierLayer, this.markLayer);
+      const s = new UnitSprite(this, 0, p.kind, i, this.soldierLayer, this.markLayer, this.fv);
       const c = this.fv.cellCenter(p.col, p.row);
-      const d = this.fv.dirToScreen(0, -1);
       const highlight = i === this.popupIndex || (this.press?.index === i && this.press.dragging);
       // 自軍には方針の印を付ける（押さなくても方針が分かるように。敵と、方針を選べない面には付けない）
       const stance = this.stancesShown() ? p.stance : null;
-      s.apply({ x: c.x, y: c.y, dx: d.x, dy: d.y, menRatio: 1, morale: 100, rout: 0, highlight, stance, bounds: this.fv.rect });
+      s.apply({ x: c.x, y: c.y, fx: 0, fy: -1, menRatio: 1, morale: 100, rout: 0, highlight, stance, bounds: this.fv.rect });
       return s;
     });
     if (this.selectedKind && (this.remaining(this.selectedKind) <= 0 || locked)) this.selectedKind = null;

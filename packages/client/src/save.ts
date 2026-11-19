@@ -3,6 +3,7 @@
 // 形が合わないデータは、その項目だけ捨てて初期値にする（古い形や壊れたデータで起動できなくなるのを防ぐため）。
 
 import { KINDS, STANCES, type Placement } from '@jinkei/engine';
+import { parseView, type ViewMode } from './battle/viewMode.ts';
 
 /**
  * 保存の鍵。開発時だけ、URL に ?save=b のように付けると別の鍵（jinkei-gassen/v1:b）を使う。
@@ -42,8 +43,8 @@ export interface SaveData {
   pvpArmy: Placement[];
   /** 保存した陣形（design §5.6。8つまで） */
   formations: SavedFormation[];
-  /** 戦闘の画面の視点（design §5.7） */
-  view: 'top' | 'oblique';
+  /** 戦闘の画面の視点（design §5.7、§5.8）。4つの値を受け付ける（使えない視点は戦闘の画面で真上として扱う） */
+  view: ViewMode;
 }
 
 /**
@@ -107,7 +108,8 @@ function sanitize(raw: unknown): SaveData {
       data.formations.push({ name: f.name, width: f.width as number, units: (f.units as Placement[]).map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance })) });
     }
   }
-  if (raw.view === 'top' || raw.view === 'oblique') data.view = raw.view;
+  // 知らない値は真上
+  data.view = parseView(raw.view);
   if (Array.isArray(raw.pvpArmy) && raw.pvpArmy.length <= 16 && raw.pvpArmy.every(isPlacement)) {
     data.pvpArmy = raw.pvpArmy.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
   }
@@ -253,11 +255,11 @@ export function deleteFormation(name: string): void {
   write();
 }
 
-export function savedView(): 'top' | 'oblique' {
+export function savedView(): ViewMode {
   return loadSave().view;
 }
 
-export function saveView(v: 'top' | 'oblique'): void {
+export function saveView(v: ViewMode): void {
   loadSave().view = v;
   write();
 }

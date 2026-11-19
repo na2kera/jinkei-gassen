@@ -1,6 +1,7 @@
 // 画面に出す日本語の呼び名。
 
 import type { Kind, OrderKind, OrderTarget, Stance, Wing } from '@jinkei/engine';
+import type { ViewMode } from '../battle/viewMode.ts';
 
 export const KIND_LABEL: Record<Kind, string> = {
   hq: '本陣',
@@ -50,3 +51,11 @@ export function wingForViewer<T extends Wing | OrderTarget>(wing: T, side: 0 | 1
   if (wing === 'right') return 'left' as T;
   return wing;
 }
+
+/** 視点のボタンの文字（design §5.8.1） */
+export const VIEW_LABEL: Record<ViewMode, string> = {
+  top: '視点：真上',
+  oblique: '視点：斜め',
+  side: '視点：横',
+  general: '視点：将軍',
+};

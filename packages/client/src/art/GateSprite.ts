@@ -6,7 +6,9 @@
 import type { Field } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
-import { gateKey, RUBBLE_KEY, tallGateKey } from './textures.ts';
+import { addCellImage } from './field.ts';
+import { placeTallCell, tallArt } from './tallArt.ts';
+import { RUBBLE_KEY } from './textures.ts';
 
 export class GateSprite {
   private readonly img: Phaser.GameObjects.Image;
@@ -22,11 +24,14 @@ export class GateSprite {
     readonly row: number,
     private readonly layer: Phaser.GameObjects.Container,
   ) {
-    const r = fv.cellRect(col, row);
-    // 斜めのときは、高さのある門の絵を、マスの手前の端に下の端を合わせて立てる（奥のものから描けるよう depth を付ける）
-    this.img = fv.oblique
-      ? scene.add.image(r.x, r.y + r.h, tallGateKey(0)).setOrigin(0, 1).setDepth(r.y + r.h)
-      : scene.add.image(r.x, r.y, gateKey(0)).setOrigin(0, 0);
+    // 絵と置き方は視点の絵の組で決まる（真上は平たく敷き、立てる視点では、マスの手前の端に下の端を合わせて立てる）。
+    // 奥のものから描く視点では、並べる値を depth に入れる
+    // 将軍では、マスの手前の辺の幅に合わせて伸び縮みさせる（遠近のない視点では倍率 1）
+    const a = tallArt(fv.art, 'gate')!;
+    this.img = scene.add.image(0, 0, a.key).setOrigin(a.originX, a.originY);
+    const at = placeTallCell(a, fv, col, row, { w: this.img.width, h: this.img.height });
+    this.img.setPosition(at.x, at.y).setScale(at.scaleX, at.scaleY);
+    if (fv.depthSorted) this.img.setDepth(at.depth);
     layer.add(this.img);
   }
 
@@ -35,7 +40,7 @@ export class GateSprite {
     const stage: 0 | 1 | 2 = ratio > 2 / 3 ? 0 : ratio > 1 / 3 ? 1 : 2;
     if (stage === this.stage) return;
     this.stage = stage;
-    this.img.setTexture(this.fv.oblique ? tallGateKey(stage) : gateKey(stage));
+    this.img.setTexture(tallArt(this.fv.art, 'gate', { stage })!.key);
   }
 
   get isBroken(): boolean {
@@ -54,11 +59,13 @@ export class GateSprite {
       // 門のマスと、両隣のうち城壁のマスだけ（field は開戦時のものなので、崩れる前の城壁が入っている）
       if (c !== this.col && t !== 'wall') continue;
       const r = this.fv.cellRect(c, this.row);
-      // 瓦礫は平たい絵なので、斜めのときも縮めて敷き、どの部隊よりも下に描く
-      const img = this.scene.add.image(r.x, r.y, RUBBLE_KEY).setOrigin(0, 0).setDisplaySize(r.w, r.h).setDepth(-1e6);
+      // 瓦礫は平たい絵なので、立てる視点でもマスの形に合わせて敷き（将軍は走査線で台形に描く）、どの部隊よりも下に描く
+      const img = addCellImage(this.scene, this.fv, c, this.row, RUBBLE_KEY).setDepth(-1e6);
       this.layer.add(img);
       this.rubble.push(img);
-      centers.push({ x: r.x + r.w / 2, y: r.y + r.h / 2, col: c });
+      // 演出の場所：遠近つきではマスの中心（矩形の中心は台形の中心からずれる）。ほかの視点はいままでどおり矩形の中心
+      const mid = this.fv.perspective ? this.fv.cellCenter(c, this.row) : { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+      centers.push({ x: mid.x, y: mid.y, col: c });
     }
     return centers;
   }
