@@ -34,6 +34,11 @@ export interface SaveData {
   formations: SavedFormation[];
   /** 戦闘の画面の視点（design §5.7、§5.8）。4つの値を受け付ける（使えない視点は戦闘の画面で真上として扱う） */
   view: ViewMode;
+  /**
+   * チュートリアルを済ませたか（design §8.7）。最後まで遊ぶか、飛ばすと付く。
+   * チュートリアルの前の保存にはないので、ないときは星が1つでもあれば済みとして読む（v は上げない）
+   */
+  tutorialDone: boolean;
 }
 
 /**
@@ -52,7 +57,7 @@ export interface SavedFormation {
 export const MAX_FORMATIONS = 8;
 
 export function emptySave(): SaveData {
-  return { v: 1, stars: {}, placements: {}, reserves: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], pvpReserve: null, formations: [], view: 'top' };
+  return { v: 1, stars: {}, placements: {}, reserves: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], pvpReserve: null, formations: [], view: 'top', tutorialDone: false };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -127,5 +132,7 @@ export function sanitizeSave(raw: unknown): SaveData {
     data.pvpArmy = raw.pvpArmy.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
   }
   data.pvpReserve = cleanReserve(raw.pvpReserve);
+  // 済みの印は、星を掃除したあとで決める（design §8.10-6）。真偽値ならその値、そうでなければ、掃除したあとの星に 1 以上があれば済み
+  data.tutorialDone = typeof raw.tutorialDone === 'boolean' ? raw.tutorialDone : Object.values(data.stars).some((n) => n >= 1);
   return data;
 }

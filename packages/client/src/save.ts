@@ -97,6 +97,24 @@ export function setStarsForDebug(stageId: string, stars: number): void {
   write();
 }
 
+/** チュートリアルを済ませたか（design §8.7） */
+export function tutorialDone(): boolean {
+  return loadSave().tutorialDone;
+}
+
+/** チュートリアルを済ませた印を付ける（最後まで遊ぶか、飛ばしたとき） */
+export function markTutorialDone(): void {
+  if (loadSave().tutorialDone) return;
+  loadSave().tutorialDone = true;
+  write();
+}
+
+/** 開発用：済みの印を付ける・外す */
+export function setTutorialDoneForDebug(v: boolean): void {
+  loadSave().tutorialDone = v;
+  write();
+}
+
 /** 開発用：記録を消す */
 export function clearSave(): void {
   cache = emptySave();
