@@ -1351,3 +1351,227 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
 | R13 | **強さの測定**（`pnpm sim reserve`。結果を balance.md に書く）。比べる相手は、いつも「同じ配置で、その部隊を遊軍に回さず、そのまま置いたとき」。<br>(a) **1人用**：15 面の見本の配置から、本陣以外の1部隊を遊軍に回す。どの部隊を抜くか（全部隊を1つずつ）× 方針（その面で選べるものすべて）× 呼ぶ時刻（5・6・8・10・15・30・60 秒と、呼ばない）× 左右 × 種 20。勝ち数、星、判定の割合と星の割合を出す。面の方針の制限を外した測定は、別の表にする。<br>(b) **対戦**：対戦の予算（36）に収まる配置で測る（いまの総当たりの標準の手持ちは値段 40 で予算を超えるので、ひな形から予算に収まるよう部隊を減らした配置を作る）。7 つのひな形の総当たり（同じひな形どうしを含む 49 組）× 対戦の地図 4 つ × 遊軍を持つ側（陣営0だけ・陣営1だけ・両方）× 抜く部隊（兵種ごとに、前の列・後ろの列・端）× 方針 4 つ × 呼ぶ時刻（上と同じ）× 左右 × 種 5。組み合わせが多いので、まず種 5 でふるいにかけ、得点率の上がり方が大きい上位 30 通りを、別の種 20 で測り直す。<br>(c) **号令との組み合わせ**：(b) の上位 30 通りに、現れた刻みの突撃（全軍・出た側の翼）と堅守を足して測る。<br>**ユーザーに数字を見せる線**：(b) の平均の得点率の上がり方が +0.10 を超える使い方がある、または、1つのひな形の組で +0.25 を超える使い方がある、または (a) で星が1つ以上増える面が 15 面中 5 面以上ある。超えたら、client の実装に入る前に報告する。<br>実際に測った範囲（2026-11-19）：時間がかかりすぎるため、ふるいは種 2・遊軍を持つのは陣営0だけ、「両方」と (c) は上位 30 通りを種 5 で測った。「両方」は両軍が同じ使い方をする形とした。(c) の堅守は全軍あてとし、同じ刻みに同じ号令を出した対照とも比べた。結果は balance.md §6 |
 | R14 | server：(a) 隠す情報：相手の遊軍だけを「なし／騎兵・前進／弓兵・守備」に変えた3つの対戦で、呼ぶ前に自分へ届くメッセージ（`room`・`reveal`・`snap`・エラー。入り直したときのものも）が一致する。呼ばないまま終わった `result` も一致する（決着のときと、結果の画面に入り直したとき）。(b) 現れたあとは両者の `snap` に出る。(c) もう一戦で下書きの組が消える。(d) 配置の検査：予算ちょうど、予算を遊軍で超える、戦場 16 部隊 + 遊軍、本陣を遊軍に、知らない方針。(e) 一組で扱う：正しい組のあとに正しくない下書きを送って時間切れ → 最後に検査を通った組（配置と遊軍）が使われる。(f) 遊軍が現れた直後（定期の保存の前）に落として戻す → 遊軍は現れたまま、もう一度は呼べない。(g) `cv`：片方が古い画面の部屋では `rules.reserve` が false で、遊軍つきの `ready` と `reserve` が落ちる。(h) 遊軍のエラーに `op: 'reserve'` が付く。engine に渡す前の入力は陣営ごとに1つまで |
 | R15 | ブラウザ：1人用（配置で遊軍に回す → 戦闘で左右から呼ぶ → 結果）と、対戦（2枚のタブ。自分の遊軍だけ見える、呼ぶと相手にも現れる、もう一戦）を、実際のクリック操作で通す。4つの視点で、現れた部隊が正しい位置に出る |
+
+## 8. チュートリアル（issue #4。decisions §17）
+
+1-1 の前に置く、案内つきの一戦。配置の画面（Deploy）と戦闘の画面（Battle）をそのまま使い、案内の進み具合だけを別に持つ。面の一覧（`STAGES`）には入れない。
+
+### 8.1 原則
+
+- **`STAGES` に入れない**。星、面が開く条件、次の面、対戦が開く条件、章の一覧、測定、面の数を数えるテストは、どれも `STAGES` を見ている。チュートリアルがこれらに混ざらないよう、面のデータは別の定数にする。
+- **戦いを作る設定は1か所**。client とテストが同じ関数（`tutorialSetup`）を呼ぶ。テスト用に設定を書き写さない。
+- **人が変えられる所を残さない**。置く順、押す部隊、選ぶ方針、号令の刻みは、どれも1通りになるように縛るか、戦いの前にそろえる（§8.4）。
+- **進み具合はシーンの外に持つ**。画面の向きが変わるとシーンは作り直されるので、いまの手順と、戦闘が止まっているかは、シーンの外（`session` と `BattleSource`）に置く。
+- **保存を汚さない**。チュートリアルの配置・視点・星は保存しない。保存に足すのは「済み」の印だけ。
+
+### 8.2 engine：面のデータと戦いの設定
+
+`packages/engine/src/tutorial.ts` を足し、`index.ts` から出す。
+
+```ts
+/** チュートリアルの面。STAGES には入れない */
+export const TUTORIAL_STAGE: Stage;        // id 'tutorial'、chapter 1、index 0、name '遊び方'、hint ''
+/** 置き終えたあとの自軍。戦いに渡す順（この並びにそろえてから戦う） */
+export const TUTORIAL_ARMY: Placement[];
+/** 方針を変える部隊（TUTORIAL_ARMY の添字）と、変えたあとの方針 */
+export const TUTORIAL_STANCE: { index: number; stance: Stance };
+/** 号令のために戦闘を止める刻み */
+export const TUTORIAL_ORDER_TICK = 50;
+/** 号令（全軍に突撃） */
+export const TUTORIAL_ORDER: { target: OrderTarget; kind: OrderKind };   // { target: 'all', kind: 'charge' }
+/** 乱数の種（固定） */
+export const TUTORIAL_SEED = 20261119;
+/** 戦いの設定。client とテストがこれを呼ぶ */
+export function tutorialSetup(): BattleSetup;
+```
+
+| 項目 | 値 |
+|---|---|
+| 戦場 | `plainField()`（12 × 16 の平地） |
+| 手持ち | 本陣 1、歩兵 3 |
+| 自軍（`TUTORIAL_ARMY` の順） | 本陣・守備 (5, 14)、歩兵・前進 (4, 10)、歩兵・**本陣狙い** (5, 10)、歩兵・前進 (6, 10) |
+| 敵 | 本陣・守備 (5, 1)、歩兵・守備 (4, 3)、歩兵・守備 (6, 3) |
+| 敵の号令・遊軍 | なし |
+| 勝ち方 | `defeat`（ふつうの戦い） |
+| `allow` | `stances: ['hunt']`、`orders: true`、`templates: false` |
+| `solution` | `TUTORIAL_ARMY` |
+| 長さ | `maxTicks` 1800、`timeout: 'compare'`（ほかの面と同じ。`stageSetupWith` を通して作る） |
+
+設計のときに測った結果（種 6 つ、号令の時刻 3・5・8 秒）：どれも陣営0が `hq`（本陣を落とす）で勝ち、5 秒の号令では 26 秒で終わる。両脇の歩兵が敵の歩兵2つと戦っている間に、真ん中の歩兵が本陣へ抜ける。
+
+方針を変える部隊を真ん中の歩兵・本陣狙いにしたのは、画面に出す「敵の本陣を落とせば勝ち」と決着の理由を合わせるため（敵の歩兵を正面に置いて3つとも前進にすると、本陣が残ったまま `wipeout` で終わる）。
+
+### 8.3 client：進み具合
+
+`packages/client/src/tutorial/steps.ts`（Phaser に頼らない。`node --test` で試す）。
+
+```ts
+export type TutorialStep =
+  | 'placeHq'      // 本陣を置く
+  | 'placeInf'     // 歩兵を3つ置く
+  | 'tapUnit'      // 真ん中の歩兵を押す
+  | 'pickStance'   // 「本陣狙い」を選ぶ
+  | 'start'        // 開戦を押す
+  | 'march'        // 戦闘が始まり、止まるまで
+  | 'order'        // 止まっている。全軍 → 突撃
+  | 'fight'        // 号令のあと、決着まで
+  | 'done';        // 決着のあと、最後の一言
+
+export interface TutorialRun {
+  step: TutorialStep;
+  /** どこから始めたか。終わったあとの行き先を決める */
+  from: 'auto' | 'list';
+  /** 兵種のボタンで選んでいる兵種（placeHq・placeInf の間） */
+  picked: Kind | null;
+  /** 置いた部隊（置いた順） */
+  placed: Placement[];
+  /** order の手順で「全軍」を押したか */
+  targetPicked: boolean;
+}
+
+/** 画面の操作 */
+export type TutorialAction =
+  | { type: 'pickKind'; kind: Kind }
+  | { type: 'cell'; col: number; row: number }
+  | { type: 'unit'; col: number; row: number }
+  | { type: 'stance'; stance: Stance }
+  | { type: 'start' }
+  | { type: 'paused' }                       // 戦闘が TUTORIAL_ORDER_TICK で止まった
+  | { type: 'target'; target: OrderTarget }
+  | { type: 'order'; kind: OrderKind }
+  | { type: 'ended' };                       // 決着の表示が終わった
+
+export function newRun(from: 'auto' | 'list'): TutorialRun;
+/** いまその操作をしてよいか */
+export function allowed(run: TutorialRun, a: TutorialAction): boolean;
+/** 操作を当てはめた次の状態（allowed が false なら、同じ状態を返す） */
+export function apply(run: TutorialRun, a: TutorialAction): TutorialRun;
+/** いま出す一行 */
+export function line(run: TutorialRun): string;
+/** いま目立たせるもの */
+export function lit(run: TutorialRun): { kinds: Kind[]; cells: { col: number; row: number }[]; stances: Stance[]; start: boolean; targets: OrderTarget[]; orders: OrderKind[] };
+/** 戦いに渡す配置（TUTORIAL_ARMY の順にそろえ、方針も TUTORIAL_ARMY のものにする） */
+export function armyOf(run: TutorialRun): Placement[];
+```
+
+手順ごとの決まり：
+
+| 手順 | 出す一行 | 目立たせる | 受け付ける操作 | 次へ進むとき |
+|---|---|---|---|---|
+| `placeHq` | 本陣を選んで、光るマスに置こう | 兵種「本陣」。選んだあとはマス (5, 14) | 兵種「本陣」を選ぶ、(5, 14) を押す | 本陣を置いた |
+| `placeInf` | 歩兵を3つ、光るマスに置こう | 兵種「歩兵」。選んだあとは、まだ空いている (4, 10)・(5, 10)・(6, 10) | 兵種「歩兵」を選ぶ、空いている光るマスを押す（順は自由） | 3つ置いた |
+| `tapUnit` | 部隊を押すと、動き方を選べる | (5, 10) の歩兵 | (5, 10) の歩兵を押す | 方針の箱が開いた |
+| `pickStance` | 「本陣狙い」を選ぼう | 方針「本陣狙い」 | 「本陣狙い」を押す | 選んだ |
+| `start` | 開戦。あとは部隊が自分で戦う | 「開戦」 | 「開戦」を押す | 押した |
+| `march` | （`start` と同じ一行のまま） | なし | なし | 戦闘が `TUTORIAL_ORDER_TICK` で止まった |
+| `order` | 号令で、全軍に突撃を命じよう | 「全軍」。押したあとは「突撃」 | 「全軍」、そのあと「突撃」 | 「突撃」を押した（戦闘を再開する） |
+| `fight` | 敵の本陣を落とせば勝ち | なし | なし | 決着の表示が終わった |
+| `done` | 動き方と号令は、先の面で使える | 「次へ」 | 「次へ」 | 済みを付けて、行き先へ |
+
+- 一行はどれも全角 18 文字以内（縦長の帯の幅 288px に、16px の字で1行に収まる長さ）。はみ出しの記録（`ui/overflow.ts`）で、横長・縦長の両方を確かめる。
+- 表にない操作は、どの手順でも受け付けない：置いた部隊を動かす・外す、ほかの兵種を選ぶ、ほかのマスに置く、ほかの方針を選ぶ、方針の箱の「外す」、ほかの号令や翼、部隊の長押し（情報の箱）。
+- `pickStance` で箱の外を押して箱が閉じたら、`tapUnit` に戻す。
+- いまの `TutorialRun` は `session.tutorial`（`TutorialRun | null`）に置く。チュートリアルでないときは `null`。
+
+### 8.4 必ず同じ戦いになるようにする
+
+人が変えられる所と、その扱い：
+
+| 変えられる所 | 扱い |
+|---|---|
+| 歩兵を置く順（3! 通り） | 戦いに渡す前に `armyOf` で `TUTORIAL_ARMY` の順にそろえる（部隊の番号が置いた順で変わらないように） |
+| 押す部隊・選ぶ方針 | 1通りに縛る（§8.3） |
+| 号令の刻み | 戦闘を `TUTORIAL_ORDER_TICK` で止め、再開した最初の `step` に号令を渡す |
+| 止まっている長さ | 止まっている間は `step` を呼ばないので、戦いに影響しない |
+| 倍速 | ボタンを隠し、1倍に固定する |
+| 乱数の種 | `TUTORIAL_SEED` に固定する |
+
+`armyOf(run)` の結果は、置き終えていれば `TUTORIAL_ARMY` と同じ中身になる。開戦のときは `tutorialSetup()` をそのまま使い、`armyOf(run)` が `TUTORIAL_ARMY` と一致することを確かめてから戦いを作る（一致しなければ開戦しない。手順の作りの誤りを見つけるため）。
+
+### 8.5 client：戦闘を止める
+
+`LocalBattleSource` に足す（`BattleSource` の形には足さない。チュートリアルは1人用だけ）。
+
+```ts
+/** その刻みに達したら step を止め、その場面を出してから cb を呼ぶ。1回だけ */
+pauseAt(tick: number, cb: () => void): void;
+/** 止まっているか */
+get paused(): boolean;
+/** 再開する。止まっている間にたまった実時間は捨てる */
+resume(): void;
+```
+
+- 止まっている間も、場面の描画（兵の動きの補間、旗）は最後の場面のまま続ける。残り時間の表示は進まない。
+- 止まっている間に `order` を呼ぶと、号令は次の `step`（`state.tick === TUTORIAL_ORDER_TICK` の `step`）に渡る。`canOrder` は止まっていても正しく答える。
+- 画面の向きが変わって戦闘の画面が作り直されても、`LocalBattleSource` は同じものを使い続ける（いまの作りと同じ）。作り直したあとの画面は、`session.tutorial.step` と `paused` を見て、同じ見た目に戻す。`pauseAt` の `cb` は、シーンではなく `session.tutorial` を進める関数にする。
+
+### 8.6 client：画面
+
+**入口**
+
+- タイトルの「ステージ」：保存が「済み」でなければ、`from: 'auto'` でチュートリアルを始める。済みなら、いままでどおりステージ選択へ。
+- ステージ選択：第1章の一覧の先頭に「遊び方」の行を足す（面の id は付けない、星は描かない、いつも押せる）。押すと `from: 'list'` で始める。行が1つ増えるので、`stageSelectLayout` には面の数 + 1 を渡す（横長 640 × 400 で 6 行は収まる：行 40px・間 6px で 270px、上の端は 82px）。
+
+**配置の画面**（`session.tutorial` があるとき）
+
+- 面は `TUTORIAL_STAGE`。`stageById('tutorial')` が返すようにする（`STAGES` には足さない）。`session.stageId` を 'tutorial' にしている間、`setPlacements` は保存に書かない。
+- 開いたときの配置は空。保存した配置は読まない。
+- 「戻る」の場所に「飛ばす」を出す（「戻る」は出さない）。
+- 隠す：ひな形、「陣形」、遊軍の枠、縦長の「？」と陣形名。
+- 出す：兵種のボタン、方針の箱、「開戦」、音、「飛ばす」、指示の一行。
+- 指示の一行は、面の手がかりの行（`deployInfo` の `info`）に出す。縦長でも、「？」を押さなくてもいつも出す。
+- 敵の配置は、ほかの面と同じに見せる。
+
+**戦闘の画面**（`session.tutorial` があるとき）
+
+- 視点は真上に固定する。保存した視点は読まず、書き換えない。
+- 「やめる」の場所に「飛ばす」を出す（「やめる」は出さない）。
+- 隠す：視点、倍速、遊軍のボタン。
+- 出す：残り時間、号令（翼の4つと種類の3つ）、音、「飛ばす」、指示の一行。
+- 指示の一行は、横長・縦長とも、視点のボタンがあった行に左寄せで出す（16px、`COLOR.cream`）。
+- 号令のボタンは、`order` の手順のとき以外は押せない見た目にする。`order` の手順では「全軍」だけ、押したあとは「突撃」だけが押せる。
+- 部隊の長押し（情報の箱）は効かない。
+- 決着の表示（「勝利」）はいままでどおり出す。出し終えたら結果の画面（Result）へは行かず（`onFinished` を使う）、`done` に進んで、指示の一行と「次へ」を出す。「次へ」は、号令の翼のボタンの行の場所に、主のボタン（`primary`）として出す。号令のボタンは消す。
+- 星は記録しない（`recordStars` を呼ばない）。
+
+**目立たせ方**
+
+- ボタン：0.5 秒ごとに、ふつうの見た目と選択中の見た目（`setSelected(true)`）を入れ替える。
+- マスと部隊：そのマスに、2px の枠を `COLOR.highlight` で描き、0.5 秒ごとに出したり消したりする。
+- 新しい色・絵・矢印は足さない。
+
+**飛ばす・終わる**
+
+- 「飛ばす」と「次へ」は、どちらも「済み」を付け、`session.tutorial` を `null` にし、戦いが動いていれば捨てて（`dispose`）、行き先へ移る。確かめの箱は出さない。
+- 行き先：`from: 'auto'` なら 1-1 の配置の画面。`from: 'list'` ならステージ選択。
+
+### 8.7 保存
+
+- `SaveData` に `tutorialDone: boolean` を足す。`v` は 1 のまま。
+- 読むとき：項目が真偽値ならその値。項目がなければ、星が 1 以上の面が1つでもあれば `true`、なければ `false`。
+- `save.ts` に `tutorialDone(): boolean` と `markTutorialDone(): void` を足す。
+- `clearSave` のあとは、済みでない状態に戻る。
+
+### 8.8 動かして確かめるための口
+
+`__jg` に足す（開発時だけ。ビルドした中身に `__jg` が残らないことは、いままでどおり確かめる）。
+
+- `tutorial`：いまの `TutorialRun`（なければ `null`）と、`paused`。
+- `tutorialStart(from)`：チュートリアルを始める。
+- `tutorialAct(action)`：`TutorialAction` を、画面の操作と同じ道筋で当てはめる（受け付けたら `true`）。
+- `tutorialSkip()`：「飛ばす」と同じ。
+- `setTutorialDone(v)`：済みの印を付ける・外す。
+
+### 8.9 確かめ方
+
+| 番号 | 確かめること |
+|---|---|
+| U1 | engine：`tutorialSetup()` で戦いを作り、`[]` で `TUTORIAL_ORDER_TICK` 回 `step` したあと、次の `step` に `TUTORIAL_ORDER` を渡し、決着まで進める。陣営0が勝ち、理由は `hq`、決着の刻みは 200〜450。2回走らせて、決着の刻みと残りの割合が一致する |
+| U2 | engine：`TUTORIAL_STAGE` は `STAGES` に入っていない。`validateStageArmy(TUTORIAL_STAGE, TUTORIAL_ARMY)` にエラーがない。`TUTORIAL_ARMY` の各マスは陣営0の配置エリアの中 |
+| U3 | client（`node --test`）：手順の進み方。表のとおりの操作だけが `allowed` で、それ以外（別の兵種、別のマス、別の部隊、別の方針、順を飛ばした操作、別の号令や翼）は受け付けず、状態が変わらない。歩兵を置く順の 6 通りすべてで、`armyOf` が `TUTORIAL_ARMY` と同じ中身・同じ順になる |
+| U4 | client：どの手順の一行も、全角 18 文字以内 |
+| U5 | client：`LocalBattleSource` を `tutorialSetup()` で作り、`pauseAt(TUTORIAL_ORDER_TICK)` → 止まる（それ以上 `step` が進まない、場面の刻みが `TUTORIAL_ORDER_TICK`）→ `order(TUTORIAL_ORDER)` → `resume()` → 決着。勝った陣営・理由・決着の刻みが、U1 の engine だけで走らせた結果と一致する。時間の進め方をテストから渡せないなら、`step` を回す部分を関数に切り出して、そこを試す |
+| U6 | client：保存。項目のない古い保存で、星があれば済み、なければ済みでない。真偽値でない値は、項目がないのと同じに扱う。`markTutorialDone` のあと読み直すと済み |
+| U7 | client：`STAGES` を見る関数（`orderedStages`、`nextStage`、`isUnlocked`、`chapters`、`pvpUnlocked`）の答えが、チュートリアルを足す前と変わらない。チュートリアルのあいだ、保存の配置・星・視点が変わらない |
+| U8 | ブラウザ（実際のクリック）：保存を消してタイトルの「ステージ」→ チュートリアルが始まる → 表の順に最後まで → 「次へ」で 1-1 の配置の画面。もう一度「ステージ」を押すとステージ選択が出て、先頭に「遊び方」がある。そこから始めて「飛ばす」→ ステージ選択に戻る。横長と縦長の両方。それぞれの手順で、指示以外の所を押しても何も起きない。戦闘が止まっている間に画面の向きを変えても、止まったまま同じ指示が出る。保存した視点が「将軍」でも、チュートリアルは真上で出て、終わったあとも保存は「将軍」のまま。はみ出しの記録が空 |
+| U9 | ビルドした中身に `__jg` がない。engine・server・client のテスト、型の検査、ビルドが通る |
