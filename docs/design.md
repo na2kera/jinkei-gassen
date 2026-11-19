@@ -1230,6 +1230,7 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
   - C→S：`{ type: 'draft', army, reserve? }`、`{ type: 'ready', army?, reserve? }`、`{ type: 'reserve', battleNo, from }`。`reserve` の値は `{ kind, stance }` か null。
   - S→C：`room.rules.reserve: boolean`、`room.myReserve`、`reveal.myReserve`、`snap.reserve`。どれも、遊軍がない・使えないときは null（false）を入れて、項目そのものはいつも送る（遊軍の有無で形を変えない）。古い server は送らないので、client は、ない場合を null（false）として読む。
 - 遊軍の値の検査：server の入口（`validate.ts`）では形だけを見る（鍵が `kind` と `stance` だけで、どちらも 16 文字以下の文字列）。形が違えば、号令と同じくメッセージごと黙って捨てる。兵種と方針が正しいか（本陣・知らない方針）は `validateArmy` の `limits.reserve`（`reserveErrors`）に任せ、`invalid_army` の `armyErrors` で返す（遊軍の誤りは `index` なし）。入口で落とすと、知らない方針を送った人に何も返らなくなるため。
+- `army` を付けない `ready` は、`reserve` を形も見ない（形が違っても捨てず、いまの下書きの組で確定する）。
 - 下書き（`draft`）の誤りは、いままでどおりエラーを返さない（組を下書きとして持ち、検査を通らなければ `lastValid` を変えない）。
 - `room.myArmy` と `room.myReserve` は、同じ組（`lastValid`）から返す。
 - エラー：
