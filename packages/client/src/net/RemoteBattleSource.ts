@@ -44,13 +44,21 @@ export class RemoteBattleSource implements BattleSource {
   private session: number;
   private summary: BattleSummary | null = null;
   private readonly unsubscribe: (() => void)[] = [];
+  /** 押せるかが、場面以外の理由（つながりの状態）で変わったときに呼ぶ */
+  private readonly controlListeners: (() => void)[] = [];
+  /** 最後に知らせた、つながっているか */
+  private lastConnected: boolean;
+  // 引数のプロパティ（constructor(private readonly …)）にしない。node の型を外す読み込み（テスト）が受け付けないため
+  private readonly client: RoomClient;
+  readonly battleNo: number;
+  private readonly you: Side;
 
-  constructor(
-    private readonly client: RoomClient,
-    readonly battleNo: number,
-    private readonly you: Side,
-  ) {
+  constructor(client: RoomClient, battleNo: number, you: Side) {
+    this.client = client;
+    this.battleNo = battleNo;
+    this.you = you;
     this.session = client.session;
+    this.lastConnected = this.connected();
     this.unsubscribe.push(client.onSnap((m) => this.onSnap(m)));
     this.unsubscribe.push(
       client.onError((m) => {
@@ -60,7 +68,17 @@ export class RemoteBattleSource implements BattleSource {
         if (m.op === 'reserve') this.summonSentAt = null;
       }),
     );
-    this.unsubscribe.push(client.subscribe(() => this.checkResult()));
+    this.unsubscribe.push(
+      client.subscribe(() => {
+        this.checkResult();
+        // 切れた・つなぎ直したら、ボタンの見た目を直してもらう（切れている間は場面が届かないため）
+        const now = this.connected();
+        if (now !== this.lastConnected) {
+          this.lastConnected = now;
+          for (const cb of [...this.controlListeners]) cb();
+        }
+      }),
+    );
     // すでに届いている場面があれば、受け取っておく（入り直したときも、その時点の戦況から描ける）
     const last = client.snap;
     if (last && last.battleNo === battleNo) this.onSnap(last);
@@ -90,13 +108,23 @@ export class RemoteBattleSource implements BattleSource {
     return v.ordersLeft[this.you] - this.pending > 0;
   }
 
+  onControls(cb: () => void): void {
+    this.controlListeners.push(cb);
+  }
+
+  /** いま送れるか（切れている間・つなぎ直している間は false） */
+  private connected(): boolean {
+    return this.client.status === 'open';
+  }
+
   reserve(): ReserveView | null {
     return this.view?.reserve?.[this.you] ?? null;
   }
 
   canSummon(): boolean {
     const v = this.view;
-    if (!v || !canSummonView(v, this.you)) return false;
+    // 切れている間・つなぎ直している間は押せない（押しても送れないため。つながったら、また押せる）
+    if (!v || !this.connected() || !canSummonView(v, this.you)) return false;
     // ボタンを押せるかは、遊軍が 'ready' であることと、この部屋で遊軍を使えること（rules.reserve）の両方で決める
     return summonEnabled(this.reserve(), { ended: !!v.outcome, allowed: reserveAllowed(this.client.room), sent: this.summonSentAt !== null });
   }
@@ -110,6 +138,7 @@ export class RemoteBattleSource implements BattleSource {
     for (const u of this.unsubscribe) u();
     this.frameListeners.length = 0;
     this.endListeners.length = 0;
+    this.controlListeners.length = 0;
   }
 
   private onSnap(m: SnapMessage): void {

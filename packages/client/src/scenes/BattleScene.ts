@@ -236,6 +236,7 @@ export class BattleScene extends Phaser.Scene {
     this.build();
     source.onFrame((f) => this.onFrame(f));
     source.onEnd((s) => this.onEnd(s));
+    source.onControls?.(() => this.refreshControls());
 
     this.input.on(Phaser.Input.Events.POINTER_DOWN, this.onDown, this);
     this.input.on(Phaser.Input.Events.POINTER_UP, this.onUp, this);

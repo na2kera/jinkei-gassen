@@ -31,6 +31,11 @@ export interface BattleSource {
   canSummon(): boolean;
   /** 遊軍を呼ぶ。from は見ている人から見た左右（engine の from と同じ向き） */
   summon(from: ReserveFrom): void;
+  /**
+   * 押せるかが場面以外の理由で変わったときに呼んでほしい（対戦だけ。つながりが切れた・戻ったとき）。
+   * 切れている間は場面が届かず、ボタンの見た目を直す機会がないため
+   */
+  onControls?(cb: () => void): void;
   /** 1人用だけ。画面のボタンは 1 と 2 だけを渡す（開発用の口は大きな倍率も渡す） */
   setSpeed?(mult: number): void;
   dispose(): void;
