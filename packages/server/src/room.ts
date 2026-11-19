@@ -903,8 +903,10 @@ export class Room extends DurableObject<Env> {
     this.watchdogAt = null;
     this.pendingOrders = [];
     this.pendingSummons = [];
-    // 結果は見る人ごとに作る（相手の呼ばなかった遊軍を消す。design §7.7）
-    tx.early.push((side) => this.resultMsg(s, side));
+    // 結果は見る人ごとに作る（相手の呼ばなかった遊軍を消す。design §7.7）。いま作っておく
+    // （送るのは settle のあと。不在の席が空くと lastResult が消えるため、送るときに作ると作れない）
+    const results = [this.resultMsg(s, 0), this.resultMsg(s, 1)] as const;
+    tx.early.push((side) => results[side]);
   }
 
   /**
