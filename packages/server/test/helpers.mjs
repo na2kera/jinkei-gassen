@@ -133,10 +133,13 @@ export class Client {
     this.closed = null;
     this.waiters = [];
     this.room = null;
+    /** client の版（接続の URL の cv）。undefined なら付けない（遊軍を知らない古い画面） */
+    this.cv = opts.cv;
   }
 
   get url() {
     const q = new URLSearchParams({ pid: this.pid, name: this.name, rlkey: this.rlKey });
+    if (this.cv !== undefined) q.set('cv', String(this.cv));
     return `${this.base.replace(/^http/, 'ws')}/api/rooms/${this.code}/ws?${q}`;
   }
 
@@ -246,11 +249,11 @@ export class Client {
 }
 
 /** 部屋を作り、2人を入れて setup まで進める */
-export async function setupPair(base, timing, { names = ['A', 'B'], map = 'plain' } = {}) {
-  const A = new Client(base, '', { name: names[0] });
+export async function setupPair(base, timing, { names = ['A', 'B'], map = 'plain', cv = [undefined, undefined] } = {}) {
+  const A = new Client(base, '', { name: names[0], cv: cv[0] });
   const code = await createRoom(base, A.pid, timing, undefined, map);
   A.code = code;
-  const B = new Client(base, code, { name: names[1] });
+  const B = new Client(base, code, { name: names[1], cv: cv[1] });
   await A.connect();
   await A.waitRoom((r) => r.phase === 'waiting');
   await B.connect();

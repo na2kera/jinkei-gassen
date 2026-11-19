@@ -4,10 +4,22 @@
 // 部屋がない（empty）ことは、"room" の記録がないことで表す。片付けでは保存領域をすべて消すので、
 // 使われていないコードの Durable Object には何も残らない。
 
-import type { BattleState, BattleSummary, Placement } from '@jinkei/engine';
+import type { BattleState, BattleSummary, Placement, ReserveSetup } from '@jinkei/engine';
 import type { Timing } from './timing.ts';
 
 export type Phase = 'reserved' | 'waiting' | 'setup' | 'reveal' | 'battle' | 'result';
+
+/**
+ * 配置と遊軍の組（design §7.7）。下書き・最後に検査を通った配置・確定した配置は、いつもこの組で持ち、組ごと検査して組ごと入れ替える
+ * （古い配置に新しい遊軍が付くことがないように）。army は戦場の座標。reserve は遊軍（なければ null）
+ */
+export interface Deploy {
+  army: Placement[];
+  reserve: ReserveSetup | null;
+}
+
+/** 遊軍を知っている client の版（接続の URL の cv）。両方の席がこれ以上のときだけ遊軍を使える */
+export const RESERVE_CLIENT_VERSION = 2;
 
 export interface Seat {
   pid: string;
@@ -17,10 +29,12 @@ export interface Seat {
   /** 切れた時刻。つながっていれば null */
   goneSince: number | null;
   ready: boolean;
-  /** 最後に届いた下書き（戦場の座標） */
-  draft: Placement[] | null;
-  /** 最後に検査を通った下書き（戦場の座標） */
-  lastValid: Placement[] | null;
+  /** 最後に届いた下書きの組 */
+  draft: Deploy | null;
+  /** 最後に検査を通った下書きの組（確定したときは、確定した組） */
+  lastValid: Deploy | null;
+  /** いまの（最後につないだ）接続の client の版。cv を付けない古い画面は 1 */
+  cv: number;
 }
 
 /**
@@ -37,7 +51,8 @@ export interface Deadlines {
 }
 
 export interface RoomState {
-  v: 2;
+  /** 形の版。3 は遊軍（design §7.7）を足した形。読み戻すときに normalizeRoom でそろえる */
+  v: 2 | 3;
   /** 部屋のコード（Durable Object の名前と同じ） */
   code: string;
   /**
@@ -67,6 +82,8 @@ export interface BattleRecord {
   battleNo: number;
   /** 両軍の配置（戦場の座標）。公開の段階で入り直した人に送り直すために持つ */
   armies: [Placement[], Placement[]];
+  /** 両軍の遊軍（なければ null）。公開の段階で、自分のぶんだけを送る。遊軍の前に保存した記録にはないので、ないときは両方 null */
+  reserves?: [ReserveSetup | null, ReserveSetup | null];
   startsAt: number;
   state: BattleState;
   /**
@@ -78,7 +95,7 @@ export interface BattleRecord {
 
 export function newRoom(code: string, gen: number, timing: Timing): RoomState {
   return {
-    v: 2,
+    v: 3,
     code,
     gen,
     phase: 'reserved',
@@ -94,8 +111,8 @@ export function newRoom(code: string, gen: number, timing: Timing): RoomState {
   };
 }
 
-export function newSeat(pid: string, name: string): Seat {
-  return { pid, name, conn: null, goneSince: null, ready: false, draft: null, lastValid: null };
+export function newSeat(pid: string, name: string, cv = 1): Seat {
+  return { pid, name, conn: null, goneSince: null, ready: false, draft: null, lastValid: null, cv };
 }
 
 /**
@@ -140,5 +157,33 @@ export function publicSignature(s: RoomState): string {
     s.deadlines.setup ?? null,
     s.deadlines.reveal ?? null,
     s.rematch,
+    // 遊軍を使える部屋か（room.rules.reserve）。席の client の版だけで決まり、遊軍の有無には関わらない
+    reserveAllowed(s),
   ]);
+}
+
+/** 遊軍を使える部屋か（design §7.7）：両方の席が埋まっていて、どちらも cv が RESERVE_CLIENT_VERSION 以上 */
+export function reserveAllowed(s: RoomState): boolean {
+  return s.seats.every((x) => x !== null && x.cv >= RESERVE_CLIENT_VERSION);
+}
+
+/**
+ * 保存領域から読んだ部屋の状態を、いまの形にそろえる（その場で書き換える）。
+ * 遊軍の前の形（v 2）では、下書きが配置の配列そのままで、席に cv がない。配置は遊軍なしの組に、cv は 1（古い画面）にする
+ */
+export function normalizeRoom(s: RoomState): RoomState {
+  const toDeploy = (v: unknown): Deploy | null => {
+    if (v === null || v === undefined) return null;
+    if (Array.isArray(v)) return { army: v as Placement[], reserve: null };
+    const d = v as Partial<Deploy>;
+    return Array.isArray(d.army) ? { army: d.army, reserve: d.reserve ?? null } : null;
+  };
+  for (const seat of s.seats) {
+    if (seat === null) continue;
+    seat.draft = toDeploy(seat.draft);
+    seat.lastValid = toDeploy(seat.lastValid);
+    if (typeof seat.cv !== 'number') seat.cv = 1;
+  }
+  s.v = 3;
+  return s;
 }
