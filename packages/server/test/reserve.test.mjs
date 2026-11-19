@@ -404,7 +404,8 @@ describe('古い画面の混じる部屋（R14 g）', () => {
     await A.waitRoom((r) => r.rules.reserve === true, 5000, 'reserve on again');
     expect(A.room.myReserve).toBeNull();
     expect(B.room.myReserve).toBeNull();
-    B.send({ type: 'ready' });
+    // army を付けない ready は、reserve の値を（形が違っても）見ず、いまの下書きの組で確定する
+    B.send({ type: 'ready', reserve: 'not a reserve' });
     const [revA, revB] = await Promise.all([A.waitMsg((m) => m.type === 'reveal'), B.waitMsg((m) => m.type === 'reveal')]);
     expect(revA.myReserve).toBeNull();
     expect(revB.myReserve).toBeNull();
@@ -412,5 +413,31 @@ describe('古い画面の混じる部屋（R14 g）', () => {
     expect(snap.reserve).toBeNull();
     A.close();
     B.close();
+  });
+
+  it('遊軍が外れるとき、相手（古い画面で入り直した人）に届くものは、遊軍があってもなくても同じ', async () => {
+    const timing = { tickMs: 20, revealMs: 300, maxTicks: 200, setupMs: 30_000 };
+    const run = async (reserve) => {
+      let { A, B } = await setupPair(server.base, timing, { cv: [2, 2] });
+      A.send({ type: 'ready', army: holdArmy(), reserve });
+      await B.waitRoom((r) => r.seats[0].ready === true, 5000, 'A ready');
+      const Bs = [B];
+      Bs.push(await rejoin(B, { cv: undefined }));
+      await A.waitRoom((r) => r.rules.reserve === false, 5000, 'reserve off');
+      await sleep(300);
+      Bs.push(await rejoin(Bs.at(-1), { cv: 2 }));
+      await A.waitRoom((r) => r.rules.reserve === true, 5000, 'reserve on');
+      await sleep(300);
+      // A の確定はそのまま（遊軍を持っていたかどうかで、相手に見える確定の様子が変わらない）
+      expect(A.room.seats[0].ready).toBe(true);
+      expect(A.room.myReserve).toBeNull();
+      const msgs = Bs.flatMap((c) => c.messages).map(norm);
+      A.close();
+      Bs.forEach((c) => c.close());
+      return msgs;
+    };
+    const [withReserve, without] = await Promise.all([run(CAV), run(null)]);
+    expect(withReserve.some((m) => m.type === 'room' && m.rules.reserve === false)).toBe(true);
+    expect(withReserve).toEqual(without);
   });
 });

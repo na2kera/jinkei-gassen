@@ -85,12 +85,11 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage | n
     }
     case 'ready': {
       if (!onlyKeys(v, ['type', 'army', 'reserve'])) return null;
-      const reserve = parseReserve(v['reserve']);
-      if (reserve === 'bad') return null;
-      // army を付けないときは、いまの下書きの組で確定する。reserve の値は見ない（design §7.7）
+      // army を付けないときは、いまの下書きの組で確定する。reserve の値は（形も）見ない（design §7.7）
       if (!('army' in v)) return { type: 'ready' };
+      const reserve = parseReserve(v['reserve']);
       const army = parseArmy(v['army']);
-      return army === null ? null : { type: 'ready', army, reserve };
+      return army === null || reserve === 'bad' ? null : { type: 'ready', army, reserve };
     }
     case 'reserve': {
       if (!onlyKeys(v, ['type', 'battleNo', 'from'])) return null;
