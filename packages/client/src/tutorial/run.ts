@@ -59,6 +59,8 @@ export function blinkOn(now: number): boolean {
  */
 export function finishTutorial(scene: Phaser.Scene): void {
   const run = session.tutorial;
+  // 終える処理は1度だけ（連打で2回呼ばれても、済みの印・捨てる・画面の移動は1回ずつ）
+  if (!run) return;
   markTutorialDone();
   session.tutorial = null;
   battle?.dispose();
@@ -66,7 +68,7 @@ export function finishTutorial(scene: Phaser.Scene): void {
   session.placements = [];
   session.reserve = null;
   const first = orderedStages()[0];
-  if (run?.from === 'auto' && first) {
+  if (run.from === 'auto' && first) {
     session.stageId = first.id;
     scene.scene.start('Deploy', { stageId: first.id });
     return;

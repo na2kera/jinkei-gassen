@@ -18,7 +18,8 @@ export const SAVE_KEY = saveKey();
 
 function saveKey(): string {
   const base = 'jinkei-gassen/v1';
-  if (!import.meta.env.DEV) return base;
+  // node のテスト（import.meta.env がない）では、本番と同じく別の鍵を使わない
+  if (!import.meta.env?.DEV) return base;
   try {
     const slot = new URLSearchParams(window.location.search).get('save');
     return slot && /^[a-z0-9]{1,8}$/.test(slot) ? `${base}:${slot}` : base;

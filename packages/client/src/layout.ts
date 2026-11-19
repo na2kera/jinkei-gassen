@@ -449,6 +449,16 @@ export function tutorialLine(l: Layout, screen: 'deploy' | 'battle'): Rect {
   return { x: info.x, y: info.y - 2, w: info.w, h: 24 };
 }
 
+/**
+ * チュートリアルの配置の画面の「飛ばす」と面の名前。「戻る」の幅（56px）では「飛ばす」が枠にぎりぎりなので、
+ * 戦闘の画面の縦長の「飛ばす」（80px）と同じ幅にし、面の名前をそのぶん右へ寄せる
+ */
+export function tutorialDeployHead(l: Layout): { back: Rect; name: { x: number; y: number } } {
+  const d = deployPanel(l);
+  const w = 80;
+  return { back: { ...d.back, w }, name: { x: d.name.x + (w - d.back.w), y: d.name.y } };
+}
+
 /** チュートリアルの戦闘の画面の「次へ」。号令の翼のボタンの行の場所に、行の幅いっぱいで出す */
 export function tutorialNext(l: Layout): Rect {
   const t = battlePanel(l).targets;

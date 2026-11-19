@@ -52,7 +52,7 @@ import { centeredFieldView, FieldView, type Cell } from '../battle/FieldView.ts'
 import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
 import { debug } from '../debug.ts';
 import { saveFormation as saveFormationTo, savedFormations as savedFormationList, savedPvpArmy, savedPvpReserve } from '../save.ts';
-import { CELL, deployInfo, deployPanel, deployReserveSlot, getLayout, LAYOUT_EVENT, pvpDeployPanel, tutorialLine, type DeployInfoLayout, type Rect } from '../layout.ts';
+import { CELL, deployInfo, deployPanel, deployReserveSlot, getLayout, LAYOUT_EVENT, pvpDeployPanel, tutorialDeployHead, tutorialLine, type DeployInfoLayout, type Rect } from '../layout.ts';
 import { client, pvp, pvpLocal, setupKey } from '../net/pvp.ts';
 import { reserveAllowed, roomReserve } from '../net/reserveMessages.ts';
 import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
@@ -544,11 +544,12 @@ export class DeployScene extends Phaser.Scene {
     const on = blinkOn(this.time.now);
     const l = lit(run);
     for (const [kind, b] of this.rosterButtons) b.setSelected(this.selectedKind === kind || (on && l.kinds.includes(kind)));
-    this.startButton.setSelected(on && l.start);
-    const p = this.popupIndex !== null ? this.list[this.popupIndex] : undefined;
+    // 主のボタン（開戦）は、主の見た目とふつうのボタンの見た目を入れ替える（選択中の見た目は主の見た目と同じなので）
+    this.startButton.setPrimary(!l.start || on);
+    // 方針の箱は、受け付ける方針だけが押せる見た目で、それだけを点滅させる
     this.popupButtons.forEach((b, i) => {
       const st = this.popupStances[i] ?? null;
-      b.setSelected((st !== null && st === p?.stance) || (on && st !== null && l.stances.includes(st)));
+      b.setSelected(on && st !== null && l.stances.includes(st));
     });
     const g = this.litMarks;
     if (g) {
@@ -560,14 +561,15 @@ export class DeployScene extends Phaser.Scene {
   private buildStagePanel(): void {
     const stage = this.stage;
     const panel = deployPanel(getLayout());
-    // チュートリアルは「戻る」の場所に「飛ばす」（確かめずに抜け、済んだ扱いにする）
+    // チュートリアルは「戻る」の場所に、幅を広げた「飛ばす」（確かめずに抜け、済んだ扱いにする）。面の名前はそのぶん右へ
+    const head = this.tut ? tutorialDeployHead(getLayout()) : { back: panel.back, name: panel.name };
     this.backButton = this.tut
-      ? new Button(this, panel.back, '飛ばす', () => finishTutorial(this))
+      ? new Button(this, head.back, '飛ばす', () => finishTutorial(this))
       : new Button(this, panel.back, '戻る', () => this.scene.start('StageSelect'));
     // チュートリアルは面の id を付けない
-    const name = addText(this, panel.name.x, panel.name.y, this.tut ? stage.name : `${stage.id} ${stage.name}`, 16, COLOR.goldHi).setOrigin(0, 0.5);
+    const name = addText(this, head.name.x, head.name.y, this.tut ? stage.name : `${stage.id} ${stage.name}`, 16, COLOR.goldHi).setOrigin(0, 0.5);
     // 面の名前が「音あり」に重ならないか（開発時だけ記録）
-    checkFit(this.scene.key, name.text, name.width, name.height, panel.mute.x - 6 - panel.name.x + 8, 40);
+    checkFit(this.scene.key, name.text, name.width, name.height, panel.mute.x - 6 - head.name.x + 8, 40);
     addMuteButton(this, panel.mute);
     // 手持ちは、その面にある兵種だけを並べる（ない兵種のボタンは出さない）
     ROSTER_ORDER.filter((k) => (stage.roster[k] ?? 0) > 0).forEach((kind, i) => {
@@ -1177,6 +1179,9 @@ export class DeployScene extends Phaser.Scene {
       const r: Rect = { x, y: y + i * (h + gap), w, h };
       const b = new Button(this, r, it.label, () => this.choosePopup(index, it.stance));
       b.setSelected(it.stance === p.stance);
+      // チュートリアルでは、受け付ける方針（本陣狙い）のほかは押せない見た目（「外す」も）
+      const run = this.tut ? session.tutorial : null;
+      if (run) b.setEnabled(it.stance !== null && allowed(run, { type: 'stance', stance: it.stance }));
       b.addTo(this.popupLayer);
       this.popupButtons.push(b);
       this.popupStances.push(it.stance);
@@ -1357,9 +1362,12 @@ export class DeployScene extends Phaser.Scene {
       return s;
     });
     if (this.selectedKind && (this.remaining(this.selectedKind) <= 0 || locked)) this.selectedKind = null;
+    const run = this.tut ? session.tutorial : null;
     for (const [kind, b] of this.rosterButtons) {
       const n = this.remaining(kind);
-      b.setText(`${KIND_LABEL[kind]}${n}`).setEnabled(n > 0 && !locked).setSelected(this.selectedKind === kind);
+      // チュートリアルでは、その手順で選べる兵種だけを押せる見た目にする
+      const ok = !run || allowed(run, { type: 'pickKind', kind });
+      b.setText(`${KIND_LABEL[kind]}${n}`).setEnabled(n > 0 && !locked && ok).setSelected(this.selectedKind === kind);
     }
     for (const b of this.templateButtons) b.setEnabled(!locked);
     this.syncReserveSlot(locked);
@@ -1371,7 +1379,8 @@ export class DeployScene extends Phaser.Scene {
       // 確定中は「取消」（押すと取り消す）。確定できるのは、検査を通る配置のときだけ
       this.startButton.setText(locked ? '取消' : '完了').setEnabled(locked || errors.length === 0);
     } else {
-      this.startButton.setEnabled(errors.length === 0);
+      // チュートリアルの「開戦」は、start の手順になるまで押せない見た目
+      this.startButton.setEnabled(errors.length === 0 && (!run || run.step === 'start'));
     }
     this.updateFormation(announce);
   }

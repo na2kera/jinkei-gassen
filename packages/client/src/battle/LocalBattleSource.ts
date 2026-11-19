@@ -137,6 +137,9 @@ export class LocalBattleSource implements BattleSource {
 
   dispose(): void {
     this.disposed = true;
+    // 止める予約も消す（捨てたあとに cb を呼ばないように）
+    this.pauseTick = null;
+    this.pauseCb = null;
     cancelAnimationFrame(this.raf);
     this.frameListeners.length = 0;
     this.endListeners.length = 0;
@@ -151,10 +154,12 @@ export class LocalBattleSource implements BattleSource {
     while (!this.isPaused && this.acc >= DT && !this.state.outcome) {
       this.acc -= DT;
       this.stepOnce();
+      // 場面の受け手が戦いを捨てたら、そこでやめる（cb も次の描画も予約しない）
+      if (this.disposed) return;
       // 止めるかは1刻みごとに調べる（1回の描画で何刻みも進めることがあるため。design §8.10-5）
       if (this.pauseTick !== null && this.state.tick === this.pauseTick && !this.state.outcome) this.pauseHere();
     }
-    if (!this.state.outcome) this.raf = requestAnimationFrame(this.loop);
+    if (!this.state.outcome && !this.disposed) this.raf = requestAnimationFrame(this.loop);
   };
 
   private stepOnce(): void {
@@ -173,6 +178,7 @@ export class LocalBattleSource implements BattleSource {
     this.pauseTick = null;
     this.isPaused = true;
     if (this.state.tick % FRAME_EVERY !== 0) this.emit();
+    if (this.disposed) return;
     const cb = this.pauseCb;
     this.pauseCb = null;
     cb?.();

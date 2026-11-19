@@ -424,7 +424,8 @@ export class BattleScene extends Phaser.Scene {
     const l = lit(run);
     for (const [t, b] of this.targetButtons) b.setSelected(this.selectedTarget === t || (on && l.targets.includes(t)));
     for (const [k, b] of this.orderButtons) b.setSelected(on && l.orders.includes(k));
-    this.nextButton?.setSelected(on && l.next);
+    // 主のボタン（次へ）は、主の見た目とふつうのボタンの見た目を入れ替える
+    this.nextButton?.setPrimary(!l.next || on);
   }
 
   /** 号令の翼のボタンを押した */

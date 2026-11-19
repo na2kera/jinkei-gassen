@@ -366,6 +366,31 @@ test('止めて号令を渡して再開すると、engine だけで走らせた�
   }
 });
 
+test('刻み 50 の場面の受け手が戦いを捨てたら、止まる cb は呼ばれず、次の描画も予約しない', () => {
+  pendingFrame = null;
+  const made = LocalBattleSource.create(tutorialSetup());
+  assert.ok(made.ok);
+  const src = made.source;
+  let called = 0;
+  src.pauseAt(TUTORIAL_ORDER_TICK, () => {
+    called++;
+  });
+  src.onFrame((f) => {
+    if (f.tick === TUTORIAL_ORDER_TICK) src.dispose();
+  });
+  let now = 0;
+  let frames = 0;
+  while (pendingFrame && frames++ < 10000) {
+    const cb: (now: number) => void = pendingFrame;
+    pendingFrame = null;
+    now += 16;
+    cb(now);
+  }
+  assert.equal(called, 0);
+  assert.equal(pendingFrame, null);
+  assert.equal(src.paused, false);
+});
+
 test('pauseAt を呼ばなければ、いままでどおり止まらずに決着まで進む', () => {
   pendingFrame = null;
   const made = LocalBattleSource.create(tutorialSetup());
