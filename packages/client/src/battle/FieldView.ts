@@ -66,6 +66,12 @@ export interface ScanSpan {
   drow: number;
   /** タイルの絵の、使う行（0〜tile−1） */
   tileRow: number;
+  /**
+   * タイルの絵の、使う横の範囲 [tx0, tx1)（px。小数のことがある）。ふつうは [0, tile)。
+   * 枠の端をまたぐマスでは、枠の外に出る分を、描く先と同じ割合で切り落とした範囲
+   */
+  tx0: number;
+  tx1: number;
 }
 
 export class FieldView {
@@ -313,15 +319,12 @@ export class FieldView {
     return this.flipped ? { col: this.cols - 1 - c, row: this.rows - 1 - r } : { col: c, row: r };
   }
 
-  /** 将軍：走査線の倍率 s での、戦場の左右の端の画面の横（四捨五入した整数） */
-  scanFieldEdges(s: number): { x0: number; x1: number } {
-    return { x0: Math.round(this.scanX(0, s)), x1: Math.round(this.scanX(this.cols, s)) };
-  }
-
   /**
    * 将軍：走査線 sy の上で、画面の横 [bx0, bx1) にかかるマスの区間（左から順）。列の境目は、左右の端をそれぞれ
    * 四捨五入した値を隣のマスと共有し、左を含み右を含まない（隙間も重なりも出さない）。戦場の外の仮のマスも含む。
-   * tile はタイルの絵の縦の px。地平線より上は空
+   * tile はタイルの絵の大きさ（px）。地平線より上は空。
+   * 枠の端をまたぐマスは、描く先を枠の中へ切り落とし、タイルの絵の側も同じ割合で切り落とす（tx0・tx1。
+   * 絵を縮めて押し込まない。マスの本来の投影の幅を保つ）
    */
   scanSpans(sy: number, bx0: number, bx1: number, tile: number): ScanSpan[] {
     const sl = this.scanline(sy);
@@ -333,9 +336,15 @@ export class FieldView {
     const c1 = Math.ceil(this.cols / 2 + (bx1 - this.genCx) / unit) + 1;
     const out: ScanSpan[] = [];
     for (let c = c0; c < c1; c++) {
-      const x0 = Math.max(bx0, Math.round(this.scanX(c, sl.s)));
-      const x1 = Math.min(bx1, Math.round(this.scanX(c + 1, sl.s)));
-      if (x1 > x0) out.push({ x0, x1, dcol: c, drow, tileRow });
+      // マスの本来の区間（丸めたあと）と、そのうち枠の中に入る部分
+      const a = Math.round(this.scanX(c, sl.s));
+      const b = Math.round(this.scanX(c + 1, sl.s));
+      const x0 = Math.max(bx0, a);
+      const x1 = Math.min(bx1, b);
+      if (x1 <= x0) continue;
+      const tx0 = x0 === a ? 0 : ((x0 - a) / (b - a)) * tile;
+      const tx1 = x1 === b ? tile : ((x1 - a) / (b - a)) * tile;
+      out.push({ x0, x1, dcol: c, drow, tileRow, tx0, tx1 });
     }
     return out;
   }

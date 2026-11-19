@@ -41,6 +41,7 @@ import {
 import type { BattleFrame, BattleSource } from '../battle/BattleSource.ts';
 import { centeredFieldView, FieldView } from '../battle/FieldView.ts';
 import { nextView, usableView, type ViewMode } from '../battle/viewMode.ts';
+import { followInspect, type Inspect } from '../battle/inspect.ts';
 import { FrameInterpolator, type UnitSample } from '../battle/interp.ts';
 import { debug, pushCapped } from '../debug.ts';
 import { battlePanel, CELL, getLayout, LAYOUT_EVENT, type Rect } from '../layout.ts';
@@ -147,7 +148,7 @@ export class BattleScene extends Phaser.Scene {
   private ended = false;
   private endShownAt = 0;
   private summary: BattleSummary | null = null;
-  private inspect: { pointerId: number; unit: number } | null = null;
+  private inspect: Inspect | null = null;
 
   // 表示物（向きが変わると作り直す）
   private fv!: FieldView;
@@ -552,7 +553,8 @@ export class BattleScene extends Phaser.Scene {
     const samples = this.interp.sample();
     this.flushEvents(samples, now);
     const fighting = this.findFights(samples, now);
-    let inspected: UnitSample | null = null;
+    // いま描いている部隊（全滅して消えた部隊を除く）
+    const drawn: { id: number; x: number; y: number; s: UnitSample }[] = [];
     for (const s of samples) {
       const sprite = this.sprites.get(s.view.id);
       if (!sprite) continue;
@@ -583,12 +585,12 @@ export class BattleScene extends Phaser.Scene {
         wave: (this.waveUntil.get(u.id) ?? 0) > now,
         bounds: this.fv.uiBounds(this.area),
       });
-      if (this.inspect?.unit === u.id) {
-        // 押したあとで部隊が枠の外へ出たら（将軍）、数字の箱を消す。戻ってきても出し直さない
-        if (this.fv.visible(s.x, s.y)) inspected = s;
-        else this.inspect = null;
-      }
+      drawn.push({ id: u.id, x: s.x, y: s.y, s });
     }
+    // 押している部隊の数字の箱。枠の外へ出たら（将軍）、押している状態ごと消し、戻ってきても出し直さない（battle/inspect.ts）
+    const follow = followInspect(this.fv, this.inspect, drawn);
+    this.inspect = follow.inspect;
+    const inspected = follow.shown?.s ?? null;
     // 立てる視点のときは、兵・門・森の木・柵・城壁を、並べる値の順（奥のものから）に並べ直す
     if (this.fv.depthSorted) this.soldierLayer.sort('depth');
     this.shootArrows(samples, now);

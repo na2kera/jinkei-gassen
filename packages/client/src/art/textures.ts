@@ -344,12 +344,9 @@ function paintRubble(ctx: CanvasRenderingContext2D): void {
   }
 }
 
-/** 岩壁の地の色（将軍の奥の帯のべた塗りにも使う） */
-export const ROCK_GROUND = 0x3a3428;
-
 /** 岩壁（戦場の幅が狭い面で、戦場の外側に置く）：暗い岩の段 */
 function paintRock(ctx: CanvasRenderingContext2D, seed: number): void {
-  fill(ctx, ROCK_GROUND, 0, 0, TILE, TILE);
+  fill(ctx, 0x3a3428, 0, 0, TILE, TILE);
   for (let i = 0; i < 5; i++) {
     const x = Math.floor(hash(seed * 17 + i) * 9) * 2;
     const y = Math.floor(hash(seed * 29 + i * 5) * 10) * 2;

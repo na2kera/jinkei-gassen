@@ -5,10 +5,10 @@ import type { Field, Zone } from '@jinkei/engine';
 import Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
 import { COLOR, css } from './palette.ts';
-import { FIELD_COLS, type Rect } from '../layout.ts';
+import type { Rect } from '../layout.ts';
 import { BACKDROP_H, BACKDROP_W, backdropKey } from './backdrop.ts';
 import { groundTerrain } from './tallArt.ts';
-import { PLAIN_VARIANTS, ROCK_GROUND, ROCK_KEY, TILE, tileKey } from './textures.ts';
+import { PLAIN_VARIANTS, ROCK_KEY, TILE, tileKey } from './textures.ts';
 
 let serial = 0;
 
@@ -73,73 +73,55 @@ function sourceOf(scene: Phaser.Scene, key: string): CanvasImageSource {
 
 /**
  * 走査線でマスに絵を描く、地形・霧・瓦礫で共通の処理（将軍。design §5.8.3 補足2・5）。
- * 画面の矩形 box の中を、整数の行ごとに FieldView.scanSpans で区間に分け、srcOf が返すタイルの該当する1行（高さ 1px）を、
- * 区間の左端から右端まで伸ばして描く（ぼかさない）。ctx の原点は box の左上。srcOf が null の区間は描かない。
- * minS より倍率の小さい走査線は飛ばす（奥の帯のべた塗りの所）
+ * 画面の矩形 box の中を、整数の行ごとに FieldView.scanSpans で区間に分け、srcOf が返すタイルの該当する1行（高さ 1px）の
+ * 使う範囲（tx0〜tx1。枠の端をまたぐマスでは、枠の外の分を切り落とした範囲）を、区間の左端から右端まで伸ばして描く
+ * （ぼかさない）。ctx の原点は box の左上。srcOf が null の区間は描かない
  */
 export function paintScanCells(
   ctx: CanvasRenderingContext2D,
   fv: FieldView,
   box: Rect,
   srcOf: (dcol: number, drow: number) => CanvasImageSource | null,
-  minS = 0,
 ): void {
   ctx.imageSmoothingEnabled = false;
   for (let sy = box.y; sy < box.y + box.h; sy++) {
-    const sl = fv.scanline(sy);
-    if (!sl || sl.s < minS) continue;
     for (const sp of fv.scanSpans(sy, box.x, box.x + box.w, TILE)) {
       const src = srcOf(sp.dcol, sp.drow);
-      if (src) ctx.drawImage(src, 0, sp.tileRow, TILE, 1, sp.x0 - box.x, sy - box.y, sp.x1 - sp.x0, 1);
+      if (src) ctx.drawImage(src, sp.tx0, sp.tileRow, sp.tx1 - sp.tx0, 1, sp.x0 - box.x, sy - box.y, sp.x1 - sp.x0, 1);
     }
   }
 }
 
 /**
- * 将軍の戦場の絵（描き場所ぜんぶ）：地平線より上は遠景の絵（なければ空の色）、その下は走査線でタイルを敷く。
- * 行の縦の幅が 1px を切る奥の帯（s < sqrt(rows / 64)）は、外側の色で幅いっぱいに塗り、戦場の列だけを平地の地の色で上書きする。
- * 戦場の外の列は、12 列の戦場では平地、12 列より狭い戦場では岩壁（design §5.8.3 補足3・4）
+ * 将軍の戦場の絵（描き場所ぜんぶ）：描き場所の上の端から戦場の奥の辺（rect の上の端）までは遠景の絵（288 × 192。
+ * なければ空の色のべた塗り）、その下は走査線でタイルを敷く。奥の辺より向こうの地面は描かない
+ * （design §5.8.3「遠景の絵を戦場の奥の辺まで下ろす」）。戦場の外の列は、12 列より狭い戦場では岩壁
  */
 function paintPerspectiveField(scene: Phaser.Scene, ctx: CanvasRenderingContext2D, fv: FieldView, field: Field, r: Rect, backdrop?: string): void {
   ctx.imageSmoothingEnabled = false;
-  const skyH = Math.max(0, Math.min(r.h, Math.round(fv.horizonY - r.y)));
+  const topH = Math.max(0, Math.min(r.h, fv.rect.y - r.y));
   const bk = backdrop ? backdropKey(backdrop) : '';
   const img = bk && scene.textures.exists(bk) ? (scene.textures.get(bk).getSourceImage() as HTMLImageElement) : null;
-  if (img && img.width === BACKDROP_W && img.height === BACKDROP_H && skyH === BACKDROP_H) {
+  if (img && img.width === BACKDROP_W && img.height === BACKDROP_H && topH === BACKDROP_H) {
     ctx.drawImage(img, 0, 0);
   } else {
     ctx.fillStyle = css(COLOR.sky);
-    ctx.fillRect(0, 0, r.w, skyH);
+    ctx.fillRect(0, 0, r.w, topH);
   }
-  const rockOutside = field.width < FIELD_COLS;
-  const minS = Math.sqrt(field.height / 64);
-  // 奥の帯のべた塗り
-  for (let sy = r.y + skyH; sy < r.y + r.h; sy++) {
-    const sl = fv.scanline(sy);
-    if (!sl || sl.s >= minS) continue;
-    ctx.fillStyle = css(rockOutside ? ROCK_GROUND : COLOR.grass2);
-    ctx.fillRect(0, sy - r.y, r.w, 1);
-    const e = fv.scanFieldEdges(sl.s);
-    ctx.fillStyle = css(COLOR.grass2);
-    ctx.fillRect(e.x0 - r.x, sy - r.y, e.x1 - e.x0, 1);
-  }
-  paintScanCells(
-    ctx,
-    fv,
-    r,
-    (dcol, drow) => {
-      const { col, row } = fv.cellOfDisplay(dcol, drow);
-      const inCols = dcol >= 0 && dcol < field.width;
-      if (inCols && drow >= 0 && drow < field.height) {
-        const terrain = groundTerrain(fv.art, field.terrain[row * field.width + col] ?? 'plain');
-        return sourceOf(scene, tileKey(terrain, plainVariant(col, row)));
-      }
-      // 戦場の外の仮のマス：戦場の列が奥へ続く所は平地、列の外は岩壁（12 列の戦場では平地）
-      if (inCols || !rockOutside) return sourceOf(scene, tileKey('plain', plainVariant(col, row)));
-      return sourceOf(scene, `${ROCK_KEY}-${rockVariant(col, row)}`);
-    },
-    minS,
-  );
+  // 戦場の奥の辺から下だけを敷く（ctx の原点を、その矩形の左上にずらす）
+  const ground = { x: r.x, y: r.y + topH, w: r.w, h: r.h - topH };
+  ctx.save();
+  ctx.translate(0, topH);
+  paintScanCells(ctx, fv, ground, (dcol, drow) => {
+    const { col, row } = fv.cellOfDisplay(dcol, drow);
+    if (dcol >= 0 && dcol < field.width && drow >= 0 && drow < field.height) {
+      const terrain = groundTerrain(fv.art, field.terrain[row * field.width + col] ?? 'plain');
+      return sourceOf(scene, tileKey(terrain, plainVariant(col, row)));
+    }
+    // 戦場の外の列（12 列より狭い戦場の左右）は岩壁。12 列の戦場では、奥の辺より手前に外の列は入らない
+    return sourceOf(scene, `${ROCK_KEY}-${rockVariant(col, row)}`);
+  });
+  ctx.restore();
 }
 
 /**

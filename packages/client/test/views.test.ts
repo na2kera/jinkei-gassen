@@ -8,6 +8,7 @@ import { dirOf, marksShown, slotsOf, soldierPoint, unitLift } from '../src/art/f
 import { groundTerrain, placeTall, placeTallCell, tallArt } from '../src/art/tallArt.ts';
 import { sideArtColors, sideArtRows } from '../src/art/textures.ts';
 import { centeredFieldView, type FieldView, type PickTarget, type Point } from '../src/battle/FieldView.ts';
+import { followInspect } from '../src/battle/inspect.ts';
 import { nextView, parseView, usableView, VIEW_CYCLE, VIEW_MODES, type ViewMode } from '../src/battle/viewMode.ts';
 import { CELL, type Rect } from '../src/layout.ts';
 import { VIEW_LABEL } from '../src/ui/labels.ts';
@@ -773,6 +774,9 @@ test('V14 将軍：全走査線で、隣り合う列の端が一致し、枠の�
       for (let i = 0; i < spans.length; i++) {
         const sp = spans[i]!;
         assert.ok(sp.x1 > sp.x0 && sp.tileRow >= 0 && sp.tileRow < 24);
+        // タイルの絵の使う範囲：中のマスは絵の横ぜんぶ。どのマスも、描く幅と絵の範囲の比は、マスの本来の投影の幅 / 24
+        assert.ok(sp.tx0 >= 0 && sp.tx1 <= 24 && sp.tx1 > sp.tx0);
+        if (i > 0 && i < spans.length - 1) assert.deepEqual([sp.tx0, sp.tx1], [0, 24]);
         if (i > 0) {
           assert.equal(sp.x0, spans[i - 1]!.x1);
           // 地平線のすぐ下では、1 列が 1px より細く、幅 0 の列は飛ばすので、列の番号は増えるだけを見る
@@ -886,5 +890,67 @@ test('V18 将軍：壁の行で、隣り合うマスの左端と幅がつなが�
         }
       }
     }
+  }
+});
+
+test('将軍：枠の端をまたぐタイルは縮めずに切り落とす（描く幅と絵の範囲の比が、マスの本来の幅と同じ）', () => {
+  // Codex のレビューの例：描き場所 {x:16, y:40}、12 列 16 行、sy = 300 で、本来の区間 [-4, 37) のマスが枠の左の端をまたぐ
+  const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, false, 'general');
+  const first = fv.scanSpans(300, 16, 304, 24)[0]!;
+  assert.deepEqual([first.x0, first.x1], [16, 37]);
+  const whole = fv.scanSpans(300, -1e4, 1e4, 24).find((s) => s.dcol === first.dcol)!;
+  assert.deepEqual([whole.x0, whole.x1, whole.tx0, whole.tx1], [-4, 37, 0, 24]);
+  // 枠の外の 20px（41px のうち）を、絵の側も同じ割合で切り落とす
+  assert.ok(Math.abs(first.tx0 - (20 / 41) * 24) < 1e-12);
+  assert.equal(first.tx1, 24);
+  // 全走査線・左右の端・返す/返さない・狭い戦場で、切り落としたあとの区間は、切り落とす前の区間と同じ比で絵を取る
+  for (const v of genViews([12, 7, 6], [16])) {
+    const area = areaOf(v);
+    for (let sy = area.y + 192; sy < area.y + area.h; sy++) {
+      const spans = v.scanSpans(sy, area.x, area.x + area.w, 24);
+      const full = v.scanSpans(sy, -1e5, 1e5, 24);
+      for (const sp of spans) {
+        const w = full.find((s) => s.dcol === sp.dcol)!;
+        assert.ok(Math.abs(sp.tx0 - ((sp.x0 - w.x0) / (w.x1 - w.x0)) * 24) < 1e-9, `${v.cols} ${v.flipped} ${sy}`);
+        assert.ok(Math.abs(sp.tx1 - ((sp.x1 - w.x0) / (w.x1 - w.x0)) * 24) < 1e-9);
+      }
+    }
+  }
+});
+
+test('V16 将軍：押した部隊が枠の外へ出たら数字の箱を消し、枠の中へ戻っても出し直さない（BattleScene.render が呼ぶ判定）', () => {
+  for (const flipped of [false, true]) {
+    const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, flipped, 'general');
+    const inside = { id: 7, ...realOf(fv, 6, 13) };
+    const outside = { id: 7, ...realOf(fv, 0.5, 15) };
+    const other = { id: 8, ...realOf(fv, 5, 10) };
+    assert.ok(fv.visible(inside.x, inside.y) && !fv.visible(outside.x, outside.y));
+    let inspect: { pointerId: number; unit: number } | null = { pointerId: 1, unit: 7 };
+    // 1. 枠の中：箱を出す
+    let r = followInspect(fv, inspect, [other, inside]);
+    assert.equal(r.shown, inside);
+    inspect = r.inspect;
+    assert.ok(inspect);
+    // 2. 枠の外へ出た：箱を消し、押している状態も消す
+    r = followInspect(fv, inspect, [other, outside]);
+    assert.equal(r.shown, null);
+    assert.equal(r.inspect, null);
+    inspect = r.inspect;
+    // 3. 枠の中へ戻った：出し直さない
+    r = followInspect(fv, inspect, [other, inside]);
+    assert.equal(r.shown, null);
+    assert.equal(r.inspect, null);
+    // 全滅して描いていない部隊：押している状態は残し、箱は出さない（いままでどおり）
+    const held = { pointerId: 1, unit: 9 };
+    r = followInspect(fv, held, [other]);
+    assert.equal(r.inspect, held);
+    assert.equal(r.shown, null);
+  }
+  // 真上・斜め・横からは、どこにいても箱を出し続ける
+  for (const mode of ['top', 'oblique', 'side'] as const) {
+    const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, false, mode);
+    const u = { id: 3, x: 0.2, y: 15.8 };
+    const r = followInspect(fv, { pointerId: 1, unit: 3 }, [u]);
+    assert.equal(r.shown, u);
   }
 });
