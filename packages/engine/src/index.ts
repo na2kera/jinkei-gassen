@@ -36,3 +36,4 @@ export { PVP_MAPS, pvpField } from './maps.ts';
 export type { PvpMapId } from './maps.ts';
 export { isGate } from './battle.ts';
 export { terrainAt } from './terrain.ts';
+export { TUTORIAL_STAGE, TUTORIAL_ARMY, TUTORIAL_STANCE, TUTORIAL_ORDER_TICK, TUTORIAL_ORDER, TUTORIAL_SEED, tutorialSetup } from './tutorial.ts';
