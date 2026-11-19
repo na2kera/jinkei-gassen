@@ -9,6 +9,7 @@
 
 import type { Placement, Roster } from '@jinkei/engine';
 import type Phaser from 'phaser';
+import { pvpBackdrop } from '../art/backdrop.ts';
 import { savedRoomCode, saveRoomCode, savePvpArmy } from '../save.ts';
 import { RemoteBattleSource } from './RemoteBattleSource.ts';
 import { failureText, RoomClient } from './RoomClient.ts';
@@ -253,6 +254,8 @@ class PvpFlow {
           onQuit: () => this.leave(),
           onFinished: () => this.finishBattle(r.battleNo),
           stageId: '',
+          // 将軍の視点の遠景の絵（部屋の地図から。両方の席で同じ絵）
+          backdrop: pvpBackdrop(r.map),
         });
         return;
       }

@@ -21,8 +21,8 @@ import { Effects } from '../art/effects.ts';
 import { GateSprite } from '../art/GateSprite.ts';
 import { FOG_KEY } from '../art/textures.ts';
 import { unitLift } from '../art/formation.ts';
-import { placeTall, tallArt } from '../art/tallArt.ts';
-import { addFieldImage, drawFieldFrame } from '../art/field.ts';
+import { placeTallCell, tallArt } from '../art/tallArt.ts';
+import { addCellImage, addFieldImage, drawFieldFrame, drawOutsideBoards } from '../art/field.ts';
 import { drawDrum, drawSurviveIcon } from '../art/icons.ts';
 import { COLOR, css } from '../art/palette.ts';
 import { UnitSprite } from '../art/UnitSprite.ts';
@@ -41,6 +41,7 @@ import {
 import type { BattleFrame, BattleSource } from '../battle/BattleSource.ts';
 import { centeredFieldView, FieldView } from '../battle/FieldView.ts';
 import { nextView, usableView, type ViewMode } from '../battle/viewMode.ts';
+import { followInspect, type Inspect } from '../battle/inspect.ts';
 import { FrameInterpolator, type UnitSample } from '../battle/interp.ts';
 import { debug, pushCapped } from '../debug.ts';
 import { battlePanel, CELL, getLayout, LAYOUT_EVENT, type Rect } from '../layout.ts';
@@ -97,6 +98,11 @@ export interface BattleSceneData {
   fog?: { col: number; row: number }[];
   /** 時間切れまで守り切れば勝ちの面（win が survive）。残り時間の所に小さな印を付ける */
   survive?: boolean;
+  /**
+   * 将軍の視点の遠景の絵の名前（art/backdrop.ts）。1人用は面の id、対戦は pvp-<地図の id>。
+   * 省略したときや、絵を読めなかったときは、空の色のべた塗り
+   */
+  backdrop?: string;
 }
 
 export class BattleScene extends Phaser.Scene {
@@ -115,6 +121,7 @@ export class BattleScene extends Phaser.Scene {
   private fog: { col: number; row: number }[] = [];
   private fogCleared = false;
   private survive = false;
+  private backdrop: string | undefined = undefined;
   /** 視点（design §5.7、§5.8）。選んだ視点は保存し、次の戦いでも使う */
   private mode: ViewMode = 'top';
   private soldierLayer!: Phaser.GameObjects.Container;
@@ -141,7 +148,7 @@ export class BattleScene extends Phaser.Scene {
   private ended = false;
   private endShownAt = 0;
   private summary: BattleSummary | null = null;
-  private inspect: { pointerId: number; unit: number } | null = null;
+  private inspect: Inspect | null = null;
 
   // 表示物（向きが変わると作り直す）
   private fv!: FieldView;
@@ -177,7 +184,8 @@ export class BattleScene extends Phaser.Scene {
     this.fog = data.fog ?? [];
     this.fogCleared = this.fog.length === 0;
     this.survive = data.survive ?? false;
-    // 回す順に入っていない視点（将軍）が保存されていたら、真上として扱う
+    this.backdrop = data.backdrop;
+    // 回す順に入っていない視点が保存されていたら、真上として扱う（いまは4つとも回す順に入っている）
     this.mode = usableView(savedView());
     this.stageId = data.stageId ?? '';
   }
@@ -253,7 +261,7 @@ export class BattleScene extends Phaser.Scene {
     this.root = this.add.container(0, 0);
     const frame = this.add.graphics();
     drawFieldFrame(frame, this.fv, layout.field);
-    const bg = addFieldImage(this, this.fv, field, layout.field);
+    const bg = addFieldImage(this, this.fv, field, layout.field, this.backdrop);
     const soldierLayer = this.add.container(0, 0);
     this.soldierLayer = soldierLayer;
     const effectLayer = this.add.container(0, 0);
@@ -261,6 +269,12 @@ export class BattleScene extends Phaser.Scene {
     this.gateLayer = this.add.container(0, 0);
     this.fogLayer = this.add.container(0, 0);
     this.root.add([frame, bg, this.gateLayer, soldierLayer, effectLayer, this.fogLayer, markLayer]);
+    if (this.fv.masked) {
+      // 将軍：戦場の絵・兵・演出・旗と印を描き場所で切り抜く。外側を画面の地の色の板で覆い、枠を描き直す（UI はこの上に足す）
+      const boards = this.add.graphics();
+      drawOutsideBoards(boards, layout.field, layout.width, layout.height);
+      this.root.add(boards);
+    }
     this.buildTallTerrain();
     this.buildGate();
     // 霧は、最初の場面が届いて部隊の絵を作ったあと（作り直し）に出す。最初の build で出すと、
@@ -463,7 +477,8 @@ export class BattleScene extends Phaser.Scene {
     if (!s) return;
     const text = s.winner === 'draw' ? '引き分け' : s.winner === this.viewer ? '勝ち' : '負け';
     this.endText.setText(text);
-    const f = this.fv.rect;
+    // 将軍は描き場所の中央、ほかの視点は戦場の矩形の中央
+    const f = this.fv.noticeBounds(this.area);
     const w = Math.ceil(this.endText.width / 2) * 2 + 48;
     const r = { x: Math.round((f.x + f.w / 2 - w / 2) / 2) * 2, y: f.y + f.h / 2 - 28, w, h: 56 };
     this.endBox.clear();
@@ -538,7 +553,8 @@ export class BattleScene extends Phaser.Scene {
     const samples = this.interp.sample();
     this.flushEvents(samples, now);
     const fighting = this.findFights(samples, now);
-    let inspected: UnitSample | null = null;
+    // いま描いている部隊（全滅して消えた部隊を除く）
+    const drawn: { id: number; x: number; y: number; s: UnitSample }[] = [];
     for (const s of samples) {
       const sprite = this.sprites.get(s.view.id);
       if (!sprite) continue;
@@ -569,8 +585,12 @@ export class BattleScene extends Phaser.Scene {
         wave: (this.waveUntil.get(u.id) ?? 0) > now,
         bounds: this.fv.uiBounds(this.area),
       });
-      if (this.inspect?.unit === u.id) inspected = s;
+      drawn.push({ id: u.id, x: s.x, y: s.y, s });
     }
+    // 押している部隊の数字の箱。枠の外へ出たら（将軍）、押している状態ごと消し、戻ってきても出し直さない（battle/inspect.ts）
+    const follow = followInspect(this.fv, this.inspect, drawn);
+    this.inspect = follow.inspect;
+    const inspected = follow.shown?.s ?? null;
     // 立てる視点のときは、兵・門・森の木・柵・城壁を、並べる値の順（奥のものから）に並べ直す
     if (this.fv.depthSorted) this.soldierLayer.sort('depth');
     this.shootArrows(samples, now);
@@ -694,7 +714,8 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
     if (cur.until === 0) cur.until = now + ANNOUNCE_MS;
-    const f = this.fv.rect;
+    // 将軍は描き場所の上の端から、ほかの視点は戦場の矩形の上の端から 8px
+    const f = this.fv.noticeBounds(this.area);
     if (this.announceText.text !== cur.text) this.announceText.setText(cur.text);
     // 太鼓の絵（12px）+ 間 + 文字
     const w = Math.ceil(this.announceText.width / 2) * 2 + 12 + 6 + 24;
@@ -766,8 +787,8 @@ export class BattleScene extends Phaser.Scene {
   private buildFog(): void {
     if (this.fogCleared) return;
     const imgs = this.fog.map((c) => {
-      const r = this.fv.cellRect(c.col, c.row);
-      const img = this.add.image(r.x, r.y, FOG_KEY).setOrigin(0, 0).setDisplaySize(r.w, r.h);
+      // マスの形に合わせて敷く（将軍は走査線で台形に描く）
+      const img = addCellImage(this, this.fv, c.col, c.row, FOG_KEY);
       this.fogLayer.add(img);
       return img;
     });
@@ -783,7 +804,7 @@ export class BattleScene extends Phaser.Scene {
   }
   // ---- 視点（design §5.7、§5.8） ----
 
-  /** 視点を 真上 → 斜め → 横から → 真上 と回す（battle/viewMode.ts）。表示物だけを作り直すので、戦いの途中でも位置は飛ばない */
+  /** 視点を 真上 → 斜め → 横から → 将軍 → 真上 と回す（battle/viewMode.ts）。表示物だけを作り直すので、戦いの途中でも位置は飛ばない */
   private toggleView(): void {
     this.mode = nextView(this.mode);
     saveView(this.mode);
@@ -802,8 +823,10 @@ export class BattleScene extends Phaser.Scene {
         if (!kind) continue;
         const a = tallArt(this.fv.art, kind, { alt: (col + row) % 2 !== 0 });
         if (!a) continue;
-        const at = placeTall(a, this.fv.cellRect(col, row));
-        const img = this.add.image(at.x, at.y, a.key).setOrigin(a.originX, a.originY).setDepth(at.depth);
+        // 将軍では、木は整数倍、柵・城壁はマスの手前の辺の幅に合わせて伸び縮みさせる（遠近のない視点では倍率 1）
+        const img = this.add.image(0, 0, a.key).setOrigin(a.originX, a.originY);
+        const at = placeTallCell(a, this.fv, col, row, { w: img.width, h: img.height });
+        img.setPosition(at.x, at.y).setScale(at.scaleX, at.scaleY).setDepth(at.depth);
         this.soldierLayer.add(img);
         if (kind === 'wall') this.wallImages.set(col, img);
       }

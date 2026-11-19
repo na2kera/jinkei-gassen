@@ -23,6 +23,8 @@ export const COLOR = {
   grass3: 0x648638,
   zone: 0x2a2216,
   pole: 0x3a2a14,
+  // 将軍の視点の、遠景の絵がないときの空（遠景の絵の、昼の空のいちばん上の色）
+  sky: 0x718d99,
 } as const;
 
 /**
