@@ -343,6 +343,12 @@ export function installDebug(game: Phaser.Game): void {
       api.addStage(r ? { ...rest, enemyReserve: { ...r } } : rest);
       return true;
     },
+    /** 部屋を作って入る（部屋の画面の「部屋を作る」と同じ。確かめるときに画面の操作を省くため）。部屋のコードを返す */
+    async pvpCreate(name = '試し'): Promise<string | null> {
+      pvp.begin();
+      await client.create(playerId(), name);
+      return client.code;
+    },
     /** 部屋を出る（画面の「出る」と同じ） */
     pvpLeave(): void {
       pvp.leave();

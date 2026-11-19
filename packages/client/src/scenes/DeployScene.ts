@@ -82,6 +82,8 @@ const HINT_MS = 3000;
 const TOAST_MS = 2500;
 /** 敵の部隊を短く押したときも、兵種の名前を出しておく長さ（ミリ秒）。押している間は、これより長くても出したまま */
 const KIND_MS = 1000;
+/** 遊軍の枠に方針の印を出す、枠の幅の下限（px）。これより狭いと「遊軍 騎兵」の文字に印が触れる */
+const RESERVE_ICON_MIN_W = 140;
 /** 「出る」を2回押すまでの猶予（ミリ秒） */
 const LEAVE_ARM_MS = 2500;
 
@@ -501,8 +503,10 @@ export class DeployScene extends Phaser.Scene {
     // 遊軍は、配置と一緒に検査を通るときだけ残す（予算を超えるなどしたら、遊軍だけを外す）
     pvpLocal.reserve = ok && reserve && !broken(reserve) ? { ...reserve } : null;
     // 編成は、置いてある部隊（と遊軍）の数から始める。まだ何も置いていなければ、既定の編成（予算ちょうど）から始める
+    // 使えない部屋で外した遊軍も、編成には残す（手持ちに戻り、戦場に置ける）
     const counted = countKinds(pvpLocal.placements);
-    if (pvpLocal.reserve) counted[pvpLocal.reserve.kind] = (counted[pvpLocal.reserve.kind] ?? 0) + 1;
+    const kept = ok && base.reserve && !broken(base.reserve) ? base.reserve : null;
+    if (kept) counted[kept.kind] = (counted[kept.kind] ?? 0) + 1;
     pvpLocal.roster = pvpLocal.placements.length > 0 ? { ...counted, hq: 1 } : { ...room.rules.standardRoster };
     // サーバーにない配置を出したときだけ、送る印を立てる
     if (!fromServer && pvpLocal.placements.length > 0) pvp.markDraft();
@@ -1073,10 +1077,10 @@ export class DeployScene extends Phaser.Scene {
     b.setText(r ? `${RESERVE_LABEL} ${KIND_LABEL[r.kind]}` : RESERVE_LABEL)
       .setEnabled(!locked && (r !== null || canPutReserve(this.selectedKind, this.roster(), this.list, r)))
       .setSelected(this.popupReserve);
-    // 方針の印（戦場の自軍と同じ札）を枠の右の内側に。方針を選べない面では出さない
+    // 方針の印（戦場の自軍と同じ札）を枠の右の内側に。方針を選べない面と、文字に触れるほど狭い枠（縦長）では出さない
     const g = this.reserveIcon;
     g?.clear();
-    if (g && r && this.stancesShown()) {
+    if (g && r && this.stancesShown() && b.rect.w >= RESERVE_ICON_MIN_W) {
       const rect = b.rect;
       drawStanceIcon(g, r.stance, rect.x + rect.w - 7 - 8, Math.round(rect.y + rect.h / 2 - 4));
     }
