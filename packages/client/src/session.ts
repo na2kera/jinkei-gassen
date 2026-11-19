@@ -12,12 +12,13 @@ import {
   type BattleSetup,
   type BattleSummary,
   type Placement,
+  type ReserveSetup,
   type Side,
   type Stage,
   type StageEnemyOrder,
   type UnitView,
 } from '@jinkei/engine';
-import { savedPlacements, savePlacements, starsOf } from './save.ts';
+import { savedPlacements, savePlacements, savedReserve, starsOf } from './save.ts';
 
 export interface ResultData {
   stageId: string;
@@ -31,6 +32,8 @@ export interface ResultData {
 interface Session {
   stageId: string;
   placements: Placement[];
+  /** その面の遊軍（design §7.8）。枠が空なら null */
+  reserve: ReserveSetup | null;
   result: ResultData | null;
 }
 
@@ -39,6 +42,7 @@ const first = STAGES[0];
 export const session: Session = {
   stageId: first ? first.id : '',
   placements: [],
+  reserve: null,
   result: null,
 };
 
@@ -89,9 +93,9 @@ export function stanceOk(stage: Stage, p: Pick<Placement, 'kind' | 'stance'>): b
 }
 
 /** 置いた途中の配置として使えるか。本陣がない・部隊が足りないのは途中なのでよい。エリアの外や手持ちを超えるものはだめ */
-function usable(stage: Stage, placements: Placement[]): boolean {
+function usable(stage: Stage, placements: Placement[], reserve: ReserveSetup | null = null): boolean {
   const bad = new Set(['invalid_kind', 'invalid_stance', 'invalid_cell', 'out_of_zone', 'overlap', 'over_roster', 'too_many_units']);
-  return !validateStageArmy(stage, placements).some((e) => bad.has(e.code));
+  return !validateStageArmy(stage, placements, reserve).some((e) => bad.has(e.code));
 }
 
 /** 面を開く。前にその面で置いた配置があれば戻す（面のデータが変わって合わなくなっていたら捨てる） */
@@ -100,13 +104,17 @@ export function openStage(id: string): Stage {
   session.stageId = stage.id;
   const saved = savedPlacements(stage.id);
   session.placements = saved && usable(stage, saved) ? saved : [];
+  // 遊軍は、配置と組にして使えるときだけ戻す（合わなければ遊軍だけを捨て、配置は残す）
+  const reserve = savedReserve(stage.id);
+  session.reserve = reserve && usable(stage, session.placements, reserve) ? reserve : null;
   return stage;
 }
 
-/** 配置を変えたら呼ぶ。面ごとの最後の配置として残す */
-export function setPlacements(list: Placement[]): void {
+/** 配置（と遊軍）を変えたら呼ぶ。面ごとの最後の配置として、遊軍と一緒に残す。reserve を省くと、いまの遊軍のまま */
+export function setPlacements(list: Placement[], reserve: ReserveSetup | null = session.reserve): void {
   session.placements = list;
-  savePlacements(session.stageId, list);
+  session.reserve = reserve;
+  savePlacements(session.stageId, list, reserve);
 }
 
 /** ひな形などで並べた配置の方針を、その面で選べるものに直す（選べない方針は兵種の初期設定へ） */
@@ -114,14 +122,14 @@ export function fitStances(stage: Stage, list: Placement[]): Placement[] {
   return list.map((p) => (stanceOk(stage, p) ? p : { ...p, stance: defaultStance(p.kind) }));
 }
 
-export function armyErrors(placements: Placement[]): ReturnType<typeof validateStageArmy> {
-  // 全部隊を置かなくても、本陣と1部隊以上あれば開戦できる
-  return validateStageArmy(currentStage(), placements);
+export function armyErrors(placements: Placement[], reserve: ReserveSetup | null = session.reserve): ReturnType<typeof validateStageArmy> {
+  // 全部隊を置かなくても、本陣と1部隊以上あれば開戦できる。遊軍は手持ちと部隊数に含めて数える（design §7.6）
+  return validateStageArmy(currentStage(), placements, reserve);
 }
 
 /** 開戦の設定。myOrders は開発用（見本の号令を予定に入れて確かめる）で、ふつうは空 */
 export function battleSetup(myOrders: StageEnemyOrder[] = []): BattleSetup {
   // 種は client が毎回決める（engine は乱数の元を持たない）。同じ配置でも戦いごとに少し違う展開になる
   const seed = (Math.random() * 0x100000000) >>> 0;
-  return stageSetupWith(currentStage(), session.placements.map((p) => ({ ...p })), seed, myOrders);
+  return stageSetupWith(currentStage(), session.placements.map((p) => ({ ...p })), seed, myOrders, session.reserve ? { ...session.reserve } : null);
 }

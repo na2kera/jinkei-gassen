@@ -13,6 +13,8 @@ import type {
   ServerMessage,
   SnapMessage,
 } from '@jinkei/server/protocol';
+// cv は client の版。遊軍（design §7）を知っている版は 2（両方の席が 2 以上の部屋だけ、遊軍を使える）
+import { CLIENT_VERSION } from './reserveMessages.ts';
 
 export type NetStatus =
   /** 部屋に入っていない */
@@ -260,7 +262,7 @@ export class RoomClient {
     const code = this.code;
     if (!code) return;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${window.location.host}/api/rooms/${encodeURIComponent(code)}/ws?pid=${encodeURIComponent(this.pid)}&name=${encodeURIComponent(this.name)}`;
+    const url = `${proto}//${window.location.host}/api/rooms/${encodeURIComponent(code)}/ws?pid=${encodeURIComponent(this.pid)}&name=${encodeURIComponent(this.name)}&cv=${CLIENT_VERSION}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
