@@ -28,6 +28,11 @@ export type Timing = {
    * 「期限は過ぎたがアラームはまだ鳴っていない」場面を作り、テストからアラームを2回呼ぶために使う。
    */
   testAlarmLagMs: number;
+  /**
+   * テスト専用：1 なら、戦闘の刻みを実時間で進めず、テスト用の経路（test/step）で手で進める（本番は常に 0）。
+   * 「同じ刻みに届いた入力」や、届くメッセージの列そのものを、実時間に頼らずに確かめるために使う
+   */
+  testManualTicks: number;
 };
 
 export const DEFAULT_TIMING: Readonly<Timing> = Object.freeze({
@@ -40,6 +45,7 @@ export const DEFAULT_TIMING: Readonly<Timing> = Object.freeze({
   tickMs: 100,
   maxTicks: 1800,
   testAlarmLagMs: 0,
+  testManualTicks: 0,
 });
 
 /** 1回の呼び出しで進める刻みの上限（design §4.2） */
@@ -65,6 +71,8 @@ function range(k: keyof Timing): [number, number] {
   switch (k) {
     case 'testAlarmLagMs':
       return [0, 3_600_000];
+    case 'testManualTicks':
+      return [0, 1];
     case 'tickMs':
       // 5ms より短いと setInterval の精度を超え、早回しのテストが不安定になる
       return [5, 1_000];

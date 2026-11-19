@@ -75,6 +75,8 @@ export interface RoomState {
   timing: Timing;
   /** テスト専用：選ぶ戦場を決めておく（本番は常に null で、毎回ランダムに選ぶ） */
   testMap: string | null;
+  /** テスト専用：戦いの乱数の種を決めておく（本番は常に null か未設定で、毎回乱数）。同じ戦いを部屋をまたいで比べるために使う */
+  testSeed?: number | null;
 }
 
 /** 戦闘の状態。部屋の状態とは別の鍵 "battle" に書く（毎刻みは書かないため、design §4.2） */
@@ -84,6 +86,11 @@ export interface BattleRecord {
   armies: [Placement[], Placement[]];
   /** 両軍の遊軍（なければ null）。公開の段階で、自分のぶんだけを送る。遊軍の前に保存した記録にはないので、ないときは両方 null */
   reserves?: [ReserveSetup | null, ReserveSetup | null];
+  /**
+   * この戦いで遊軍を呼べるか（戦いを作った時点の rules.reserve）。その戦いが終わるまで変えない（design §7.7）。
+   * 遊軍の前に保存した記録にはない（呼べない扱い。その記録には遊軍もいない）
+   */
+  reserveOk?: boolean;
   startsAt: number;
   state: BattleState;
   /**

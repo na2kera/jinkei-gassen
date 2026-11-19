@@ -263,7 +263,7 @@ export class Room extends DurableObject<Env> {
    * 部屋を作る（design §4.3）。部屋がないときだけ、世代を乱数で決めて reserved にし、作った人の pid を覚える。
    * 空きの確認と予約を、await を挟まない1回の処理で行う（同時に来た2つの作成が両方通ることはない）。
    */
-  async create(code: string, pid: string, timing: Timing, testMap: string | null = null): Promise<boolean> {
+  async create(code: string, pid: string, timing: Timing, testMap: string | null = null, testSeed: number | null = null): Promise<boolean> {
     if (this.room !== null) return false;
     if (!isPid(pid)) return false;
     const now = Date.now();
@@ -272,6 +272,7 @@ export class Room extends DurableObject<Env> {
     s.seats = [newSeat(pid, ''), null];
     s.deadlines.reserve = now + timing.reserveMs;
     s.testMap = testMap;
+    s.testSeed = testSeed;
     this.room = s;
     this.battle = null;
     this.settle(tx);
@@ -287,6 +288,21 @@ export class Room extends DurableObject<Env> {
   /** テスト用：アラームの処理をいま実行する（2回鳴った場合の確認） */
   async runAlarmNow(): Promise<void> {
     await this.alarm();
+  }
+
+  /**
+   * テスト用：刻みを手で進める（timing.testManualTicks が 1 の部屋だけ。戦闘中でなければ何もしない）。
+   * 実時間で刻むときと同じ処理（advance）を、steps 回ぶん通す。進めたあとの刻みを返す
+   */
+  async stepNow(steps: number): Promise<number | null> {
+    const s = this.room;
+    if (s === null || s.timing.testManualTicks !== 1 || s.phase !== 'battle') return this.battle?.state.tick ?? null;
+    const tx = new Tx(s, Date.now());
+    this.ensureBattle(tx);
+    this.settle(tx);
+    this.commit(tx);
+    this.advance(Math.max(0, Math.min(steps, 100)), Date.now());
+    return this.battle?.state.tick ?? null;
   }
 
   /** テスト用：保存してある内容（段階・成績・保存した刻み）と、メモリの刻み */
@@ -380,8 +396,10 @@ export class Room extends DurableObject<Env> {
       seat = newSeat(pid, name, cv);
       s.seats[side] = seat;
     }
-    // client の版は、いまの接続のものに合わせる（入り直すたびに変わりうる。遊軍を使える部屋かは settle で見直す）
-    seat.cv = cv;
+    // client の版は下げない（design §7.7）。同じ席（同じ pid）が、いまより小さい cv（cv なしを含む）で入り直しても、
+    // 大きいほうのまま（接続は受け付ける）。下げると、古い画面を装って入り直すだけで、相手の遊軍を封じられるため。
+    // 本物の利用者が新しい画面から古い画面へ戻ることは起きない。席が空いて別の人が座ったときは、newSeat でその人の cv から始まる
+    seat.cv = Math.max(seat.cv, cv);
     // 1つの席に有効な接続は1つ。古い接続は閉じ、その「切れた」の知らせは接続の番号の違いで無視する
     for (const o of this.openSockets()) {
       if (o.ws !== ws && o.att.seat === side) tx.closes.push({ ws: o.ws, code: 4001, reason: 'replaced by a newer connection' });
@@ -567,8 +585,9 @@ export class Room extends DurableObject<Env> {
         if (s.phase !== 'battle' || msg.battleNo !== s.battleNo) return;
         const b = this.battle;
         if (b === null || b.battleNo !== s.battleNo) return;
-        // 遊軍を使えない部屋（古い画面の人がいる）では、始まった戦いに遊軍がいても呼ばせない（古い画面は途中で増えた部隊を描けない）
-        if (!reserveAllowed(s)) {
+        // 遊軍を使えるかは、戦いを作った時点の可否（rec.reserveOk）で決め、その戦いが終わるまで変えない（design §7.7）。
+        // 受け付けたあとに渡す刻みで扱いが変わらないよう、step に渡すときは見直さない。遊軍の前の記録（項目なし）は使えない扱い
+        if (b.reserveOk !== true) {
           tx.error(ws, 'reserve_disabled', 'reserves are not available in this room', { op: 'reserve' });
           return;
         }
@@ -733,7 +752,8 @@ export class Room extends DurableObject<Env> {
       createBattle({
         field,
         armies,
-        seed: randomSeed(),
+        // テスト専用の決めた種（本番は常に null で、毎回乱数）
+        seed: s.testSeed ?? randomSeed(),
         maxTicks: s.timing.maxTicks,
         timeout: 'compare',
         ...(reserves[0] !== null || reserves[1] !== null ? { reserves } : {}),
@@ -755,7 +775,15 @@ export class Room extends DurableObject<Env> {
     delete s.deadlines.setup;
     s.deadlines.reveal = tx.now + s.timing.revealMs;
     for (const seat of s.seats) if (seat !== null) seat.ready = false;
-    const rec: BattleRecord = { battleNo: s.battleNo, armies, reserves, startsAt: s.deadlines.reveal, state: created.value, evCount: 0 };
+    const rec: BattleRecord = {
+      battleNo: s.battleNo,
+      armies,
+      reserves,
+      reserveOk: allowed,
+      startsAt: s.deadlines.reveal,
+      state: created.value,
+      evCount: 0,
+    };
     this.battle = rec;
     this.put(BATTLE_KEY, rec);
     tx.sends.push({ all: (side) => this.revealMsg(side, rec, field) });
@@ -827,20 +855,31 @@ export class Room extends DurableObject<Env> {
     this.timer = null;
   }
 
-  /** setInterval から呼ばれる。実時間に追いつく分だけ step を呼ぶ（1回に最大5刻み） */
+  /**
+   * setInterval から呼ばれる。実時間に追いつく分だけ step を呼ぶ（1回に最大5刻み）。
+   * テストで刻みを手で進める部屋（timing.testManualTicks が 1）では、ここでは進めない（stepNow で進める）
+   */
   private onTick(): void {
+    const s = this.room;
+    const rec = this.battle;
+    if (s === null || s.phase !== 'battle' || rec === null || rec.battleNo !== s.battleNo) {
+      this.stopTimer();
+      return;
+    }
+    if (s.timing.testManualTicks === 1) return;
+    const now = Date.now();
+    const due = Math.floor((now - this.clockBase) / s.timing.tickMs) - rec.state.tick;
+    this.advance(Math.min(Math.max(due, 0), MAX_STEPS_PER_CALL), now);
+  }
+
+  /** steps 回 step を呼び、保存・決着・snap の送信まで行う（実時間で刻むときも、テストで手で進めるときも、これを通す） */
+  private advance(steps: number, now: number): void {
     try {
       const s = this.room;
       const rec = this.battle;
-      if (s === null || s.phase !== 'battle' || rec === null || rec.battleNo !== s.battleNo) {
-        this.stopTimer();
-        return;
-      }
+      if (s === null || s.phase !== 'battle' || rec === null || rec.battleNo !== s.battleNo) return;
       const st = rec.state;
       const tickMs = s.timing.tickMs;
-      const now = Date.now();
-      const due = Math.floor((now - this.clockBase) / tickMs) - st.tick;
-      const steps = Math.min(Math.max(due, 0), MAX_STEPS_PER_CALL);
       let save = false;
       let snap = false;
       for (let i = 0; i < steps && st.outcome === null; i++) {
@@ -927,8 +966,8 @@ export class Room extends DurableObject<Env> {
         seat.goneSince = now;
       }
     }
-    // 遊軍を使えない部屋になったら（setup の途中で古い画面の人が入り直した）、両者の下書きと確定した組から遊軍を外す
-    // （design §7.7）。確定はそのまま（取り消すと、遊軍を持っていた側だけ確定が外れ、相手に遊軍があったことが伝わるため）。
+    // 遊軍を使えない部屋の setup では、両者の下書きと確定した組から遊軍を外す（design §7.7）。
+    // 席の cv は下げないので（join）、同じ顔ぶれのあいだに true から false に変わることはなく、ふだんは何も外れない（念のための守り）。確定はそのまま（取り消すと、遊軍を持っていた側だけ確定が外れ、相手に遊軍があったことが伝わるため）。
     // room は rules.reserve が変わったことで両者に送り直される（publicSignature）。遊軍を外したかどうかでは送り分けない
     if (s.phase === 'setup' && !reserveAllowed(s)) {
       for (const seat of s.seats) {
