@@ -6,32 +6,23 @@
 // snap の evBase（通し番号）は、重複の判断には使わない（やり直しの区間に新しい号令が入ると番号がずれるため）。
 // 「受け取った」と「渡した」は分ける。onFrame を登録する前に届いた出来事・決着は、登録した時点で渡す。
 
-import { canOrderView, type BattleEvent, type BattleSummary, type BattleView, type OrderKind, type OrderTarget, type Side, type UnitView } from '@jinkei/engine';
-import type { PackedUnit, SnapMessage } from '@jinkei/server/protocol';
+import { canOrderView, canSummonView, type BattleEvent, type BattleSummary, type BattleView, type OrderKind, type OrderTarget, type ReserveFrom, type ReserveView, type Side } from '@jinkei/engine';
+import type { SnapMessage } from '@jinkei/server/protocol';
 import type { BattleFrame, BattleSource } from '../battle/BattleSource.ts';
 import type { RoomClient } from './RoomClient.ts';
 import { acceptEvents, createEventDedup } from './eventDedup.ts';
+import { reserveAllowed, summonMessage } from './reserveMessages.ts';
+import { summonEnabled } from '../battle/reserveUi.ts';
+import { unpackUnit, viewOfSnap } from './snapView.ts';
 
 /**
- * 詰めた配列を UnitView に戻す（並びは protocol の PackedUnit のとおり）。
- * server の flip.ts には戻す関数がないので、client 側で戻す。
+ * 遊軍を呼んだあと、snap の遊軍が 'ready' のまま、この刻み数より進んだら「送った」印を外す。
+ * 受け付けたあと、現れるマスがふさがると、server は何も返さずに捨てるため（もう一度押せるようにする）
  */
-export function unpackUnit(p: PackedUnit): UnitView {
-  const [id, side, kind, wing, x, y, fx, fy, men, maxMen, morale, status, order, attacking, stance] = p;
-  const u: UnitView = { id, side, kind, wing, x, y, fx, fy, men, maxMen, morale, status, order, attacking };
-  if (stance !== null) u.stance = stance;
-  return u;
-}
+const SUMMON_WAIT_TICKS = 6;
 
-export function viewOfSnap(m: SnapMessage): BattleView {
-  return {
-    tick: m.tick,
-    maxTicks: m.maxTicks,
-    units: m.units.map(unpackUnit),
-    ordersLeft: [m.ordersLeft[0], m.ordersLeft[1]],
-    outcome: m.outcome,
-  };
-}
+// snap を場面に直す関数は snapView.ts（画面なしで確かめるため）。ここからも同じ名前で読めるようにしておく
+export { unpackUnit, viewOfSnap };
 
 export class RemoteBattleSource implements BattleSource {
   private readonly frameListeners: ((f: BattleFrame) => void)[] = [];
@@ -47,25 +38,47 @@ export class RemoteBattleSource implements BattleSource {
    * 減らすのは、残りの回数が減った snap が届いたとき・invalid_order が返ったとき・つなぎ直して最初の snap のとき
    */
   private pending = 0;
+  /** 遊軍を呼んで、まだ返事（現れた・エラー）がない。送った刻み。なければ null */
+  private summonSentAt: number | null = null;
   /** この source が見た、client の入り直しの回数（変わったら、つなぎ直したあと） */
   private session: number;
   private summary: BattleSummary | null = null;
   private readonly unsubscribe: (() => void)[] = [];
+  /** 押せるかが、場面以外の理由（つながりの状態）で変わったときに呼ぶ */
+  private readonly controlListeners: (() => void)[] = [];
+  /** 最後に知らせた、つながっているか */
+  private lastConnected: boolean;
+  // 引数のプロパティ（constructor(private readonly …)）にしない。node の型を外す読み込み（テスト）が受け付けないため
+  private readonly client: RoomClient;
+  readonly battleNo: number;
+  private readonly you: Side;
 
-  constructor(
-    private readonly client: RoomClient,
-    readonly battleNo: number,
-    private readonly you: Side,
-  ) {
+  constructor(client: RoomClient, battleNo: number, you: Side) {
+    this.client = client;
+    this.battleNo = battleNo;
+    this.you = you;
     this.session = client.session;
+    this.lastConnected = this.connected();
     this.unsubscribe.push(client.onSnap((m) => this.onSnap(m)));
     this.unsubscribe.push(
       client.onError((m) => {
         // 号令が受け付けられなかったら、使った数に入れていた分を1つ戻す
         if (m.reason === 'invalid_order' && this.pending > 0) this.pending--;
+        // 遊軍が呼べなかった：もう一度押せるようにする（号令の「返事待ち」の数は減らさない）
+        if (m.op === 'reserve') this.summonSentAt = null;
       }),
     );
-    this.unsubscribe.push(client.subscribe(() => this.checkResult()));
+    this.unsubscribe.push(
+      client.subscribe(() => {
+        this.checkResult();
+        // 切れた・つなぎ直したら、ボタンの見た目を直してもらう（切れている間は場面が届かないため）
+        const now = this.connected();
+        if (now !== this.lastConnected) {
+          this.lastConnected = now;
+          for (const cb of [...this.controlListeners]) cb();
+        }
+      }),
+    );
     // すでに届いている場面があれば、受け取っておく（入り直したときも、その時点の戦況から描ける）
     const last = client.snap;
     if (last && last.battleNo === battleNo) this.onSnap(last);
@@ -95,16 +108,44 @@ export class RemoteBattleSource implements BattleSource {
     return v.ordersLeft[this.you] - this.pending > 0;
   }
 
+  onControls(cb: () => void): void {
+    this.controlListeners.push(cb);
+  }
+
+  /** いま送れるか（切れている間・つなぎ直している間は false） */
+  private connected(): boolean {
+    return this.client.status === 'open';
+  }
+
+  reserve(): ReserveView | null {
+    return this.view?.reserve?.[this.you] ?? null;
+  }
+
+  canSummon(): boolean {
+    const v = this.view;
+    // 切れている間・つなぎ直している間は押せない（押しても送れないため。つながったら、また押せる）
+    if (!v || !this.connected() || !canSummonView(v, this.you)) return false;
+    // ボタンを押せるかは、遊軍が 'ready' であることと、この部屋で遊軍を使えること（rules.reserve）の両方で決める
+    return summonEnabled(this.reserve(), { ended: !!v.outcome, allowed: reserveAllowed(this.client.room), sent: this.summonSentAt !== null });
+  }
+
+  summon(from: ReserveFrom): void {
+    if (!this.canSummon()) return;
+    if (this.client.send(summonMessage(this.battleNo, from))) this.summonSentAt = this.tick;
+  }
+
   dispose(): void {
     for (const u of this.unsubscribe) u();
     this.frameListeners.length = 0;
     this.endListeners.length = 0;
+    this.controlListeners.length = 0;
   }
 
   private onSnap(m: SnapMessage): void {
     if (m.battleNo !== this.battleNo) return;
-    const view = viewOfSnap(m);
+    const view = viewOfSnap(m, this.you);
     if (this.client.session !== this.session) {
+      this.summonSentAt = null;
       // つなぎ直したあとの最初の場面：サーバーの残りの回数を正とし、送った号令の数え方を正し直す
       this.session = this.client.session;
       this.pending = 0;
@@ -114,6 +155,9 @@ export class RemoteBattleSource implements BattleSource {
     }
     this.view = view;
     this.tick = m.tick;
+    // 呼んだ遊軍が現れた（'ready' でなくなった）か、しばらく 'ready' のまま（黙って捨てられた）なら、送った印を外す
+    const mine = view.reserve?.[this.you] ?? null;
+    if (this.summonSentAt !== null && (!mine || mine.state !== 'ready' || m.tick >= this.summonSentAt + SUMMON_WAIT_TICKS)) this.summonSentAt = null;
     // 入り直して最初の snap は events が空なので、その間の出来事は演出しない
     this.undelivered.push(...acceptEvents(this.dedup, m.tick, m.events));
     if (this.frameListeners.length > 0) this.emit();

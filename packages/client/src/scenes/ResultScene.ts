@@ -3,6 +3,7 @@
 
 import { starsFor, type BattleSummary, type Side, type UnitView } from '@jinkei/engine';
 import Phaser from 'phaser';
+import { remainingShown } from '../battle/reserveUi.ts';
 import { drawStar, STAR_SIZE } from '../art/icons.ts';
 import { COLOR } from '../art/palette.ts';
 import { playStar } from '../audio/sfx.ts';
@@ -141,7 +142,7 @@ export class ResultScene extends Phaser.Scene {
       center(r.review + 40, `敵軍 ${unitName(s.firstBroken[enemy], units, viewer)}`);
       center(r.review + 68, '一番崩した', 16, COLOR.muted);
       center(r.review + 88, unitName(best ? best.id : null, units, viewer));
-      center(r.review + 116, `残った兵 自軍${percent(s.remaining[viewer])} 敵軍${percent(s.remaining[enemy])}`);
+      center(r.review + 116, `残った兵 自軍${percent(remainingShown(s, viewer))} 敵軍${percent(remainingShown(s, enemy))}`);
     }
 
     const [b1, b2, b3] = r.buttons;

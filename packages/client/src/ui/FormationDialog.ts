@@ -6,7 +6,7 @@
 // 保存の知らせは、窓の下の端の1行に出す（窓の外に出すと、窓に隠れるため）。
 // 名前の入力欄は、一覧を作り直しても作り直さない（打っている途中で焦点が外れないように）。
 
-import type { Kind } from '@jinkei/engine';
+import type { Kind, ReserveSetup } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { COLOR } from '../art/palette.ts';
 import type { Layout, Rect } from '../layout.ts';
@@ -41,6 +41,8 @@ export interface FormationDialogHost {
   current(): SavedFormation['units'] | null;
   /** 配置エリアの幅 */
   zoneWidth(): number;
+  /** いまの遊軍（design §7.8）。陣形と一緒に保存する。なければ null */
+  reserve(): ReserveSetup | null;
   /** 呼び出した陣形を置く */
   recall(f: SavedFormation): void;
 }
@@ -179,7 +181,8 @@ export class FormationDialog {
       this.say('部隊を置いてから保存してください');
       return;
     }
-    const f: SavedFormation = { name, width: this.host.zoneWidth(), units };
+    const reserve = this.host.reserve();
+    const f: SavedFormation = { name, width: this.host.zoneWidth(), units, ...(reserve ? { reserve } : {}) };
     if (saveFormation(f)) {
       if (this.input) this.input.el.value = '';
       this.say(`「${name}」を保存しました`);

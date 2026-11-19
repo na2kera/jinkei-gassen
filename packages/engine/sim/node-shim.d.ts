@@ -4,10 +4,14 @@
 declare const process: {
   argv: string[];
   exitCode: number | undefined;
+  /** 子プロセスを同じ node と同じ起動の引数で立てるため（sim reserve） */
+  execPath: string;
+  execArgv: string[];
 };
 
 declare const console: {
   log(...args: unknown[]): void;
+  error(...args: unknown[]): void;
 };
 
 declare const performance: {
@@ -30,4 +34,9 @@ declare class URL {
 
 declare module 'node:fs' {
   export function writeFileSync(path: string, data: string): void;
+  export function mkdirSync(path: string, options?: { recursive?: boolean }): void;
+}
+
+declare module 'node:child_process' {
+  export function spawn(command: string, args: string[], options?: { stdio?: 'inherit' }): { on(event: 'exit', listener: (code: number | null) => void): void };
 }

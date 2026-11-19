@@ -31,7 +31,13 @@ export type EngineErrorCode =
   | 'battle_over'
   | 'no_orders_left'
   | 'no_target_units'
-  | 'invalid_order';
+  | 'invalid_order'
+  /** 遊軍がいない、または呼んだあと（§7.3） */
+  | 'no_reserve'
+  /** 開戦から T.reserveMinTick 刻み（5 秒）までは遊軍を呼べない */
+  | 'reserve_not_ready'
+  /** 遊軍が現れるマスがない（§7.4） */
+  | 'no_spawn_cell';
 
 export interface EngineError {
   code: EngineErrorCode;
@@ -73,6 +79,40 @@ export interface ScriptedOrder {
   kind: OrderKind;
 }
 
+/** 控えさせる部隊（遊軍。design §7）。兵種は本陣以外 */
+export interface ReserveSetup {
+  kind: Kind;
+  stance: Stance;
+}
+
+/** 遊軍を呼ぶ側。その陣営から見た左右（翼と同じ向き） */
+export type ReserveFrom = 'left' | 'right';
+
+/** step に渡す、遊軍を呼ぶ入力 */
+export interface ReserveInput {
+  side: Side;
+  from: ReserveFrom;
+}
+
+/** 予定された遊軍（面の敵と、見本・測定の自軍が呼ぶ予定）。陣営ごとに1つまで */
+export interface ScriptedReserve {
+  tick: number;
+  side: Side;
+  from: ReserveFrom;
+}
+
+/**
+ * 遊軍の状態。used が true なら呼んだあと（unit は現れた部隊の id）。呼ぶ前は unit が null。
+ * auto は予定された遊軍（なければ null）。tick になったら from から呼ぶ
+ */
+export interface ReserveState {
+  kind: Kind;
+  stance: Stance;
+  used: boolean;
+  unit: number | null;
+  auto: null | { tick: number; from: ReserveFrom };
+}
+
 export interface BattleSetup {
   field: Field;
   /** 戦場の座標で書く */
@@ -91,6 +131,10 @@ export interface BattleSetup {
   stalemate?: boolean;
   /** この陣営の配置は「配置エリアの中」の検査をしない（面の敵の配置用）。戦場の中・城壁のマスでない・兵種・方針・本陣・部隊数は調べる */
   skipZoneCheck?: Side;
+  /** 陣営ごとの遊軍（§7）。書かない・両方 null なら、遊軍のない戦い */
+  reserves?: [ReserveSetup | null, ReserveSetup | null];
+  /** 予定された遊軍。陣営ごとに1つまで。その陣営に遊軍がいること */
+  scriptedReserves?: ScriptedReserve[];
 }
 
 export interface GateSetup {
@@ -206,6 +250,8 @@ export interface BattleState {
   flankY: [number, number];
   /** 門（ない戦場は null）。id は門の部隊の id */
   gate: null | (GateSetup & { id: number });
+  /** 陣営ごとの遊軍（いなければ null）。呼ぶ前の遊軍は units に入れない（§7.1） */
+  reserves: [ReserveState | null, ReserveState | null];
 }
 
 export interface OrderInput {
@@ -242,6 +288,18 @@ export interface BattleView {
   outcome: BattleState['outcome'];
   /** 門（ない戦場では項目ごとない）。門は units には入れない */
   gate?: GateView;
+  /**
+   * 遊軍（§7.2）。見る人の陣営のぶんだけ値を入れ、相手のぶんはいつも null（viewer が both なら両方入れる）。
+   * 入れる値が1つもないとき（遊軍のない戦い、相手だけが遊軍を持つ戦い）は、項目ごと入れない（遊軍のない戦いの場面の形を、いままでと同じに保つため）
+   */
+  reserve?: [ReserveView | null, ReserveView | null];
+}
+
+/** 映す側に渡す遊軍。state が waiting はまだ呼べない（開戦 5 秒まで）、ready は呼べる、used は呼んだあと */
+export interface ReserveView {
+  kind: Kind;
+  stance: Stance;
+  state: 'waiting' | 'ready' | 'used';
 }
 
 /** 映す側に渡す門 */
@@ -264,7 +322,9 @@ export type BattleEvent =
   | { type: 'rout'; tick: number; unit: number }
   | { type: 'destroyed'; tick: number; unit: number }
   | { type: 'impact'; tick: number; attacker: number; defender: number; facing: Facing }
-  | { type: 'end'; tick: number; winner: Side | 'draw'; reason: string };
+  | { type: 'end'; tick: number; winner: Side | 'draw'; reason: string }
+  /** 遊軍が現れた（unit は現れた部隊の id） */
+  | { type: 'reserve'; tick: number; side: Side; unit: number; from: ReserveFrom };
 
 export interface BattleSummary {
   winner: Side | 'draw';
@@ -285,6 +345,10 @@ export interface BattleSummary {
     fate: 'alive' | 'routed' | 'destroyed';
   }[];
   firstBroken: [number | null, number | null];
+  /** 呼ばなかった遊軍（陣営ごと。いなければ、または呼んだなら null） */
+  unusedReserve: [{ kind: Kind; men: number } | null, { kind: Kind; men: number } | null];
+  /** 星の条件に使う割合（§7.5）。呼ばなかった遊軍を、無傷で残ったものとして数える。遊軍のない戦いでは remaining と同じ */
+  remainingForStars: [number, number];
 }
 
 export type ArmyErrorCode =
@@ -319,6 +383,8 @@ export interface ArmyLimits {
   costs?: Partial<Record<Kind, number>>;
   /** 本陣がちょうど1つ必要か。既定は true */
   requireHq?: boolean;
+  /** 遊軍（§7.6）。あれば、予算と部隊数に含めて数える。値の検査は reserveErrors */
+  reserve?: ReserveSetup | null;
 }
 
 /** 手持ちの部隊（兵種ごとの数） */

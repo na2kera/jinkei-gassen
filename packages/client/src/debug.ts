@@ -19,6 +19,9 @@ import {
   type Placement,
   type Side,
   type TemplateId,
+  type Kind,
+  type ReserveFrom,
+  type ReserveSetup,
 } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import { effectCounts } from './art/effects.ts';
@@ -57,6 +60,10 @@ interface DebugHooks {
   /** 戦闘の画面の視点を切り替える */
   toggleView: (() => void) | null;
   formationOps: { save: (name: string, replaceIndex?: number) => boolean; recall: (name: string) => boolean } | null;
+  /** 配置の画面の遊軍の枠（get はいまの遊軍、put はその兵種を選んで枠を押す、tap は枠を押す） */
+  reserveOps: { get: () => ReserveSetup | null; put: (kind: Kind) => boolean; tap: () => void } | null;
+  /** 戦闘の画面の遊軍（画面のボタンと同じ）。呼べたら true */
+  summon: ((from: ReserveFrom) => boolean) | null;
   /** 矢を飛ばした組（射手の id と、その刻みの attacking）。最後の 50 組 */
   arrows: [number, number][];
 }
@@ -78,6 +85,8 @@ export const debug: DebugHooks = {
   placeSolution: null,
   startSolution: null,
   formationOps: null,
+  reserveOps: null,
+  summon: null,
   toggleView: null,
   arrows: [],
 };
@@ -162,6 +171,10 @@ export function installDebug(game: Phaser.Game): void {
         result: client.result ? { winner: client.result.winner, reason: client.result.reason, score: client.result.score } : null,
         snapTick: client.snap?.tick ?? null,
         myArmy: r?.myArmy ?? null,
+        myReserve: r?.myReserve ?? null,
+        rulesReserve: r?.rules.reserve ?? null,
+        reserve: pvpLocal.reserve ? { ...pvpLocal.reserve } : null,
+        snapReserve: client.snap?.reserve ?? null,
         draftDirty: pvpLocal.draftDirty,
         wantReady: pvpLocal.wantReady,
         local: pvpLocal.placements.map((p) => ({ ...p })),
@@ -194,6 +207,9 @@ export function installDebug(game: Phaser.Game): void {
       viewer?: Side;
       fog?: { col: number; row: number }[];
       survive?: boolean;
+      /** 遊軍（design §7）。engine の BattleSetup にそのまま渡す */
+      reserves?: [ReserveSetup | null, ReserveSetup | null];
+      scriptedReserves?: { tick: number; side: Side; from: ReserveFrom }[];
     }): unknown {
       const viewer = opts.viewer ?? 0;
       const made = LocalBattleSource.create(
@@ -205,6 +221,8 @@ export function installDebug(game: Phaser.Game): void {
           timeout: opts.survive ? 'side0_wins' : 'compare',
           skipZoneCheck: 1,
           ...(opts.gate ? { gate: opts.gate } : {}),
+          ...(opts.reserves ? { reserves: opts.reserves } : {}),
+          ...(opts.scriptedReserves ? { scriptedReserves: opts.scriptedReserves } : {}),
         },
         viewer,
       );
@@ -295,6 +313,41 @@ export function installDebug(game: Phaser.Game): void {
     /** 保存した陣形を呼び出す（配置の画面だけ） */
     recallFormation(name: string): boolean {
       return debug.formationOps ? debug.formationOps.recall(name) : false;
+    },
+    /** 配置の画面の遊軍（design §7.8）。なければ null */
+    get reserve(): ReserveSetup | null {
+      return debug.reserveOps ? debug.reserveOps.get() : null;
+    },
+    /** その兵種を選んで「遊軍」の枠を押す（画面の操作と同じ）。枠に入ったら true */
+    putReserve(kind: Kind): boolean {
+      return debug.reserveOps ? debug.reserveOps.put(kind) : false;
+    },
+    /** 「遊軍」の枠を押す（入っていれば、方針と「外す」の箱が開く・閉じる） */
+    tapReserve(): boolean {
+      if (!debug.reserveOps) return false;
+      debug.reserveOps.tap();
+      return true;
+    },
+    /** 戦闘の画面の「遊軍 左から」「遊軍 右から」と同じ。呼べたら true */
+    summon(from: ReserveFrom): boolean {
+      return debug.summon ? debug.summon(from) : false;
+    },
+    /**
+     * 面の敵に遊軍を持たせる（いまの15面は使わないので、面のデータに書いたときの流れを確かめるため）。
+     * 面のデータを写して enemyReserve を足し、addStage で置き換える。null を渡すと外す。開き直すと反映される
+     */
+    setEnemyReserve(stageId: string, r: { kind: Kind; stance: ReserveSetup['stance']; atSec: number; from: ReserveFrom } | null): boolean {
+      const s = STAGES.find((x) => x.id === stageId);
+      if (!s) return false;
+      const { enemyReserve: _old, ...rest } = s;
+      api.addStage(r ? { ...rest, enemyReserve: { ...r } } : rest);
+      return true;
+    },
+    /** 部屋を作って入る（部屋の画面の「部屋を作る」と同じ。確かめるときに画面の操作を省くため）。部屋のコードを返す */
+    async pvpCreate(name = '試し'): Promise<string | null> {
+      pvp.begin();
+      await client.create(playerId(), name);
+      return client.code;
     },
     /** 部屋を出る（画面の「出る」と同じ） */
     pvpLeave(): void {

@@ -2,7 +2,7 @@
 // 配置の中身（エリア・重なり・予算）は、ここでは見ない。engine の validateArmy に任せる。
 // ここで見るのは「engine に渡してよい形か」と「保存してよい大きさか」まで。
 
-import { KINDS, ORDER_KINDS, ORDER_TARGETS, STANCES, type OrderKind, type OrderTarget, type Placement } from '@jinkei/engine';
+import { KINDS, ORDER_KINDS, ORDER_TARGETS, STANCES, type OrderKind, type OrderTarget, type Placement, type ReserveSetup } from '@jinkei/engine';
 import type { ClientMessage } from './protocol.ts';
 
 /** 受け付けるメッセージの最大の長さ（文字数）。16部隊の配置でも 1KB ほど */
@@ -47,6 +47,25 @@ export function parseArmy(v: unknown): Placement[] | null {
   return out;
 }
 
+/** 遊軍の値の文字列の長さの上限（兵種・方針の名前より十分長い。保存する前に大きさを抑えるため） */
+const MAX_RESERVE_STRING = 16;
+
+/**
+ * 遊軍の値を、決まった鍵だけの新しい値に写す（design §7.7）。undefined（省略）と null は null（なし）。形が違えば 'bad'。
+ * ここでは形（鍵が kind と stance だけ、どちらも短い文字列）しか見ない。兵種・方針が正しいかは engine の reserveErrors
+ * （validateArmy の limits.reserve）に任せる。知らない方針や本陣の遊軍を、ここで黙って捨てずに invalid_army として返すため。
+ * 中身が正しくない値も ReserveSetup の形で返す（検査を通るまで lastValid にはならない）
+ */
+export function parseReserve(v: unknown): ReserveSetup | null | 'bad' {
+  if (v === undefined || v === null) return null;
+  if (!isObj(v) || !onlyKeys(v, ['kind', 'stance'])) return 'bad';
+  const kind = v['kind'];
+  const stance = v['stance'];
+  if (typeof kind !== 'string' || typeof stance !== 'string') return 'bad';
+  if (kind.length > MAX_RESERVE_STRING || stance.length > MAX_RESERVE_STRING) return 'bad';
+  return { kind, stance } as ReserveSetup;
+}
+
 /** WebSocket で受け取った1件を検査する。形が違えば null（呼ぶ側は黙って捨てる） */
 export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage | null {
   if (typeof raw !== 'string' || raw.length > MAX_MESSAGE_LENGTH) return null;
@@ -59,15 +78,24 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage | n
   if (!isObj(v)) return null;
   switch (v['type']) {
     case 'draft': {
-      if (!onlyKeys(v, ['type', 'army'])) return null;
+      if (!onlyKeys(v, ['type', 'army', 'reserve'])) return null;
       const army = parseArmy(v['army']);
-      return army === null ? null : { type: 'draft', army };
+      const reserve = parseReserve(v['reserve']);
+      return army === null || reserve === 'bad' ? null : { type: 'draft', army, reserve };
     }
     case 'ready': {
-      if (!onlyKeys(v, ['type', 'army'])) return null;
+      if (!onlyKeys(v, ['type', 'army', 'reserve'])) return null;
+      // army を付けないときは、いまの下書きの組で確定する。reserve の値は（形も）見ない（design §7.7）
       if (!('army' in v)) return { type: 'ready' };
+      const reserve = parseReserve(v['reserve']);
       const army = parseArmy(v['army']);
-      return army === null ? null : { type: 'ready', army };
+      return army === null || reserve === 'bad' ? null : { type: 'ready', army, reserve };
+    }
+    case 'reserve': {
+      if (!onlyKeys(v, ['type', 'battleNo', 'from'])) return null;
+      const from = v['from'];
+      if (!isBattleNo(v['battleNo']) || (from !== 'left' && from !== 'right')) return null;
+      return { type: 'reserve', battleNo: v['battleNo'], from };
     }
     case 'unready':
       return onlyKeys(v, ['type']) ? { type: 'unready' } : null;
@@ -89,6 +117,15 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage | n
 /** pid は端末が作る128ビットの乱数（16進の小文字32文字）。席に戻るための合言葉 */
 export function isPid(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9a-f]{32}$/.test(v);
+}
+
+/**
+ * 接続の URL の cv（client の版。design §7.7）。付けない・形が違うときは 1（遊軍を知らない古い画面）として扱う。
+ * 遊軍を使えるのは、両方の席が 2 以上のとき
+ */
+export function parseClientVersion(v: string | null): number {
+  if (v === null || !/^[0-9]{1,4}$/.test(v)) return 1;
+  return Math.max(1, Number(v));
 }
 
 /** 部屋のコード（4桁の数字） */

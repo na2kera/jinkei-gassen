@@ -1,7 +1,7 @@
 // 戦闘の画面が見る唯一の窓口（design §5.2）。戦闘の画面は engine の状態を直接読まず、ここから届く場面だけを描く。
 // 1人用は LocalBattleSource、対戦は RemoteBattleSource（段階3）が同じ形で場面を流す。
 
-import type { BattleEvent, BattleSummary, BattleView, OrderKind, OrderTarget } from '@jinkei/engine';
+import type { BattleEvent, BattleSummary, BattleView, OrderKind, OrderTarget, ReserveFrom, ReserveView } from '@jinkei/engine';
 
 export interface BattleFrame {
   tick: number;
@@ -25,6 +25,17 @@ export interface BattleSource {
    * まだ step に渡していない号令のぶんも数に入れる。
    */
   canOrder(target: OrderTarget, kind: OrderKind): boolean;
+  /** 自分の遊軍（design §7.8）。遊軍を控えさせていない戦いでは null */
+  reserve(): ReserveView | null;
+  /** いま遊軍を呼べそうか（送って返事を待っている間は false） */
+  canSummon(): boolean;
+  /** 遊軍を呼ぶ。from は見ている人から見た左右（engine の from と同じ向き） */
+  summon(from: ReserveFrom): void;
+  /**
+   * 押せるかが場面以外の理由で変わったときに呼んでほしい（対戦だけ。つながりが切れた・戻ったとき）。
+   * 切れている間は場面が届かず、ボタンの見た目を直す機会がないため
+   */
+  onControls?(cb: () => void): void;
   /** 1人用だけ。画面のボタンは 1 と 2 だけを渡す（開発用の口は大きな倍率も渡す） */
   setSpeed?(mult: number): void;
   dispose(): void;

@@ -85,6 +85,9 @@ export const T = {
   /** 膠着（§3.6.4）：静かな刻みがこの数だけ続いたら、時間切れと同じ決め方で終える */
   stalemateTicks: 100,
 
+  /** 遊軍（design §7）：開戦からこの刻み数（5 秒）たつまでは呼べない（decisions §15） */
+  reserveMinTick: 50,
+
   /** 敗走 */
   routSpeedMult: 1.3,
   routTicks: 50,

@@ -10,7 +10,9 @@
 //
 // 接続の流れ:
 //   1. POST /api/rooms（本文 { pid }）→ 201 { code }。作った人は60秒以内につなぐ。
-//   2. GET /api/rooms/:code/ws?pid=…&name=…（WebSocket）。
+//   2. GET /api/rooms/:code/ws?pid=…&name=…&cv=2（WebSocket）。
+//      cv は client の版。遊軍（design §7）を知っている画面は cv=2 を付ける。付けない（古い画面）は 1 として扱う。
+//      両方の席が cv>=2 のときだけ、room.rules.reserve が true になり、遊軍を使える。
 //      つながると、まず `room` が届く。続けて段階に応じて、reveal なら `reveal`、battle なら `snap`、result なら `result` が届く。
 //      入れないとき（部屋がない・満員）は `error` が届き、server が接続を閉じる（4003 / 4002）。
 //   3. 部屋の様子（段階・席・成績・期限など）が変わるたびに `room` が届く。
@@ -26,6 +28,9 @@ import type {
   OrderKind,
   OrderTarget,
   Outcome,
+  ReserveFrom,
+  ReserveSetup,
+  ReserveView,
   Placement,
   Roster,
   Side,
@@ -36,14 +41,21 @@ import type {
 
 // ---------- client → server ----------
 
-/** 配置の下書き（setup の間だけ。確定中は無視される）。配置が変わるたびに送る（0.5秒に1回まで）。 */
-export type DraftMessage = { type: 'draft'; army: Placement[] };
+/**
+ * 配置の下書き（setup の間だけ。確定中は無視される）。配置が変わるたびに送る（0.5秒に1回まで）。
+ * reserve は遊軍（design §7）。省略と null は「遊軍なし」。配置と遊軍は一組で扱い、組ごと入れ替わる。
+ * 遊軍を使えない部屋（room.rules.reserve が false）で reserve に値を付けると、下書きごと捨てられ、error（reserve_disabled）が返る。
+ */
+export type DraftMessage = { type: 'draft'; army: Placement[]; reserve?: ReserveSetup | null };
 
 /**
- * 配置の確定（setup の間だけ）。army を付けると、それを下書きとして受け取ってから確定する（下書きの送信を待たずに確定できる）。
- * 付けなければ、最後に届いた下書きで確定する。検査を通らなければ `error`（invalid_army）が返り、確定しない。
+ * 配置の確定（setup の間だけ）。army を付けると、それと同じメッセージの reserve（省略なら「なし」）を一組の下書きとして
+ * 受け取ってから確定する（下書きの送信を待たずに確定できる）。
+ * army を付けなければ、最後に届いた下書きの組（配置と遊軍）で確定し、reserve の値は見ない。
+ * 検査を通らなければ `error`（invalid_army）が返り、確定しない。遊軍の誤りは armyErrors に index なしで入る。
+ * 遊軍を使えない部屋で遊軍つきの組を確定しようとすると、error（reserve_disabled）が返り、確定しない。
  */
-export type ReadyMessage = { type: 'ready'; army?: Placement[] };
+export type ReadyMessage = { type: 'ready'; army?: Placement[]; reserve?: ReserveSetup | null };
 
 /** 確定の取り消し（setup の間だけ）。 */
 export type UnreadyMessage = { type: 'unready' };
@@ -55,10 +67,20 @@ export type UnreadyMessage = { type: 'unready' };
  */
 export type OrderMessage = { type: 'order'; battleNo: number; target: OrderTarget; kind: OrderKind };
 
+/**
+ * 遊軍を呼ぶ（battle の間だけ、battleNo が今の戦いと同じときだけ。それ以外は黙って捨てる）。from は自分から見た左右（返さない）。
+ * 受け付けられると次の刻みで engine に渡り、両者の `snap` の events に { type: 'reserve' } が出て、現れた部隊が units に入る。
+ * 呼べなければ、本人にだけ error（reason: 'invalid_reserve'、op: 'reserve'、code は engine の理由）が返る。
+ * まだ engine に渡していない遊軍の入力は陣営ごとに1つまで（2つ目にも error が返る。code は 'no_reserve'）。
+ * 受け付けたあとでも、渡す刻みまでに現れるマスがふさがると、engine が黙って捨てる（snap.reserve.state が 'ready' のまま残る）。
+ * 遊軍を使えない部屋（room.rules.reserve が false）では error（reserve_disabled、op: 'reserve'）が返る。
+ */
+export type ReserveMessage = { type: 'reserve'; battleNo: number; from: ReserveFrom };
+
 /** もう一戦（result の間だけ、battleNo が終わった戦いと同じときだけ）。両者がそろうと setup に戻る。 */
 export type RematchMessage = { type: 'rematch'; battleNo: number };
 
-export type ClientMessage = DraftMessage | ReadyMessage | UnreadyMessage | OrderMessage | RematchMessage;
+export type ClientMessage = DraftMessage | ReadyMessage | UnreadyMessage | OrderMessage | ReserveMessage | RematchMessage;
 
 // ---------- server → client ----------
 
@@ -80,6 +102,15 @@ export type PvpRulesView = {
   maxUnits: number;
   /** 時間切れで配置がないときに使う既定の編成（横陣で並べる） */
   standardRoster: Roster;
+  /**
+   * この部屋で遊軍（design §7）を使えるか。両方の席が cv>=2 でつないでいるときだけ true（相手を待っている間は false）。
+   * 席の cv は下げない（同じ人が cv なしで入り直しても、大きいほうのまま）ので、同じ顔ぶれのあいだは true から false に変わらない。
+   * false から true には変わりうる（古い画面の人が新しい画面で入り直したとき。変わると room が送り直される）。
+   * false の間は、遊軍つきの draft / ready が error（reserve_disabled）で断られる。
+   * 戦闘中の reserve のメッセージは、その戦いを作った時点（公開に入るとき）の可否で受け付け、戦いが終わるまで変わらない。
+   * 古い server は項目自体を送らないので、ない場合は false として読む。
+   */
+  reserve?: boolean;
 };
 
 export type RoomMessage = {
@@ -111,6 +142,11 @@ export type RoomMessage = {
    * 下書きがなければ null。
    */
   myArmy: Placement[] | null;
+  /**
+   * 自分の、最後に検査を通った下書きの遊軍（myArmy と同じ組）。なければ null。相手の遊軍は、あるかないかも含めて送らない。
+   * 古い server は項目を送らないので、ない場合は null として読む。
+   */
+  myReserve?: ReserveSetup | null;
 };
 
 /** 公開の段階で届く配置。自軍だけ stance が付く */
@@ -122,8 +158,11 @@ export type RevealMessage = {
   /**
    * 両軍の配置（自分が下の座標、陣営の順）。
    * 部隊の id は、陣営0の配列の順に 0 から、続けて陣営1の配列の順に振られる（engine §3.1）。snap の id と対応する。
+   * 遊軍はここには入らない。呼ばれた刻みに、そのときの部隊の数を id にして snap の units に加わる。
    */
   armies: [RevealUnit[], RevealUnit[]];
+  /** 自分の遊軍（なければ null）。相手の遊軍は、あるかないかも含めて送らない */
+  myReserve?: ReserveSetup | null;
   /** 開戦の時刻（server の時計） */
   startsAt: number;
   serverTime: number;
@@ -174,6 +213,12 @@ export type SnapMessage = {
   /** 残りの号令（陣営の順） */
   ordersLeft: [number, number];
   outcome: Outcome | null;
+  /**
+   * 自分の遊軍の様子（engine の ReserveView。'waiting' は開戦 5 秒まで、'ready' は呼べる、'used' は呼んだあと）。
+   * 自分に遊軍がいなければ null。相手のぶんは送らない（RemoteBattleSource は BattleView.reserve の自分の側に入れ、相手の側を null にする）。
+   * 古い server は項目を送らないので、ない場合は null として読む。
+   */
+  reserve?: ReserveView | null;
 };
 
 export type ResultMessage = {
@@ -181,6 +226,10 @@ export type ResultMessage = {
   battleNo: number;
   winner: Side | 'draw';
   reason: string;
+  /**
+   * 振り返り。見る人ごとに作る：相手の unusedReserve は null に、相手の remainingForStars は remaining と同じ値にしてある
+   * （呼ばなかった遊軍がいたことを、戦いのあとも相手に知らせない）。
+   */
   summary: BattleSummary;
   /** 加算したあとの成績 */
   score: [number, number, number];
@@ -190,15 +239,29 @@ export type ErrorReason =
   | 'not_found' // 部屋がない（入室時。この後、接続が閉じられる）
   | 'full' // 満員（入室時。この後、接続が閉じられる）
   | 'invalid_army' // 配置が不正（ready のとき）
-  | 'invalid_order'; // 号令が受け付けられない（残りがない・対象の部隊がいない・決着した）
+  | 'invalid_order' // 号令が受け付けられない（残りがない・対象の部隊がいない・決着した）
+  | 'invalid_reserve' // 遊軍を呼べない（op: 'reserve'。code に engine の理由）
+  | 'reserve_disabled'; // この部屋では遊軍を使えない（room.rules.reserve が false。draft / ready / reserve のとき）
 
 export type ErrorMessage = {
   type: 'error';
   reason: ErrorReason;
   message: string;
-  /** invalid_army のとき、engine の validateArmy が返した誤り（index は送った配列の添字） */
+  /** invalid_army のとき、engine の validateArmy が返した誤り（index は送った配列の添字。遊軍の誤りは index なし） */
   armyErrors?: ArmyError[];
+  /**
+   * どのメッセージへの返事か。いまは遊軍（reserve のメッセージ）への返事にだけ 'reserve' を付ける。
+   * client は、号令の「送って返事待ち」の数を、op が 'reserve' のエラーで減らさない
+   */
+  op?: 'reserve';
+  /**
+   * invalid_reserve のときの engine の理由：'no_reserve'（遊軍がいない・呼んだあと・まだ渡していない入力がある）、
+   * 'reserve_not_ready'（開戦 5 秒まで）、'no_spawn_cell'（現れるマスがない）、'battle_over'（決着した）
+   */
+  code?: ReserveErrorCode;
 };
+
+export type ReserveErrorCode = 'no_reserve' | 'reserve_not_ready' | 'no_spawn_cell' | 'battle_over';
 
 export type ServerMessage = RoomMessage | RevealMessage | SnapMessage | ResultMessage | ErrorMessage;
 

@@ -13,6 +13,7 @@ import {
   type Field,
   type OrderKind,
   type OrderTarget,
+  type ReserveFrom,
   type Side,
   type UnitView,
 } from '@jinkei/engine';
@@ -44,12 +45,13 @@ import { nextView, usableView, type ViewMode } from '../battle/viewMode.ts';
 import { followInspect, type Inspect } from '../battle/inspect.ts';
 import { FrameInterpolator, type UnitSample } from '../battle/interp.ts';
 import { debug, pushCapped } from '../debug.ts';
-import { battlePanel, CELL, getLayout, LAYOUT_EVENT, type Rect } from '../layout.ts';
+import { battlePanel, battleReserveButtons, CELL, getLayout, LAYOUT_EVENT, type Rect } from '../layout.ts';
+import { reserveNoticeAt, summonShown } from '../battle/reserveUi.ts';
 import { pvp } from '../net/pvp.ts';
 import { savedView, saveView } from '../save.ts';
 import { session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
-import { ORDER_LABEL, TARGET_LABEL, VIEW_LABEL, wingForViewer } from '../ui/labels.ts';
+import { ORDER_LABEL, RESERVE_FROM_LABEL, RESERVE_LABEL, TARGET_LABEL, VIEW_LABEL, wingForViewer } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
 import { unitBoxAt } from '../ui/unitBox.ts';
@@ -125,6 +127,9 @@ export class BattleScene extends Phaser.Scene {
   /** 視点（design §5.7、§5.8）。選んだ視点は保存し、次の戦いでも使う */
   private mode: ViewMode = 'top';
   private soldierLayer!: Phaser.GameObjects.Container;
+  private markLayer!: Phaser.GameObjects.Container;
+  /** 現れた遊軍の「遊軍」の知らせ（部隊の id と、消す時刻。0 はまだ出していない）。作り直しても続けて出すよう、表示物とは別に持つ */
+  private reserveNotices: { unit: number; until: number }[] = [];
   /** 戦場の描き場所（12列×16行ぶん。斜めや横からのときは戦場より縦に広い） */
   private area: Rect = { x: 0, y: 0, w: 0, h: 0 };
   /** 立てる視点のときの、高さのある城壁の絵（門が破れたら、両隣を消すため。列ごと） */
@@ -161,6 +166,10 @@ export class BattleScene extends Phaser.Scene {
   private speedButton: Button | null = null;
   private targetButtons = new Map<OrderTarget, Button>();
   private orderButtons = new Map<OrderKind, Button>();
+  /** 「遊軍 左から」「遊軍 右から」。自分に遊軍がいる戦いだけ作る */
+  private reserveButtons = new Map<ReserveFrom, Button>();
+  private noticeBox!: Phaser.GameObjects.Graphics;
+  private noticeTexts: Phaser.GameObjects.Text[] = [];
   private announceBox!: Phaser.GameObjects.Graphics;
   private announceText!: Phaser.GameObjects.Text;
   private infoBox!: Phaser.GameObjects.Graphics;
@@ -203,6 +212,7 @@ export class BattleScene extends Phaser.Scene {
     this.selectedTarget = null;
     this.routStart = new Map();
     this.announceQueue = [];
+    this.reserveNotices = [];
     this.pendingEvents = [];
     this.waveUntil = new Map();
     this.nextShot = new Map();
@@ -214,6 +224,7 @@ export class BattleScene extends Phaser.Scene {
     this.sprites = new Map();
     this.targetButtons = new Map();
     this.orderButtons = new Map();
+    this.reserveButtons = new Map();
 
     const source = this.source;
     if (!source || !this.field) {
@@ -225,6 +236,7 @@ export class BattleScene extends Phaser.Scene {
     this.build();
     source.onFrame((f) => this.onFrame(f));
     source.onEnd((s) => this.onEnd(s));
+    source.onControls?.(() => this.refreshControls());
 
     this.input.on(Phaser.Input.Events.POINTER_DOWN, this.onDown, this);
     this.input.on(Phaser.Input.Events.POINTER_UP, this.onUp, this);
@@ -239,6 +251,7 @@ export class BattleScene extends Phaser.Scene {
       debug.order = null;
       debug.setSpeed = null;
       debug.toggleView = null;
+      debug.summon = null;
     });
     debug.order = (t, k) => {
       if (!this.source || !this.source.canOrder(t, k)) return false;
@@ -247,6 +260,11 @@ export class BattleScene extends Phaser.Scene {
     };
     debug.setSpeed = (n) => this.setSpeed(n);
     debug.toggleView = () => this.toggleView();
+    debug.summon = (from) => {
+      if (!this.source || !this.source.canSummon()) return false;
+      this.summon(from);
+      return true;
+    };
   }
 
   // ---- 表示物の組み立て ----
@@ -266,6 +284,7 @@ export class BattleScene extends Phaser.Scene {
     this.soldierLayer = soldierLayer;
     const effectLayer = this.add.container(0, 0);
     const markLayer = this.add.container(0, 0);
+    this.markLayer = markLayer;
     this.gateLayer = this.add.container(0, 0);
     this.fogLayer = this.add.container(0, 0);
     this.root.add([frame, bg, this.gateLayer, soldierLayer, effectLayer, this.fogLayer, markLayer]);
@@ -313,6 +332,7 @@ export class BattleScene extends Phaser.Scene {
     this.viewButton = new Button(this, panel.view, VIEW_LABEL[this.mode], () => this.toggleView()).addTo(this.root);
     this.targetButtons = new Map();
     this.orderButtons = new Map();
+    this.reserveButtons = new Map();
     // 号令を教える前の面では、号令の欄を出さない
     if (this.ordersShown) this.buildOrders(panel);
 
@@ -322,7 +342,10 @@ export class BattleScene extends Phaser.Scene {
     this.infoText = addText(this, 0, 0, '');
     this.endBox = this.add.graphics();
     this.endText = addText(this, 0, 0, '', 32).setOrigin(0.5, 0.5).setVisible(false);
-    this.root.add([this.announceBox, this.announceText, this.infoBox, this.infoText, this.endBox, this.endText]);
+    // 遊軍の知らせは、号令の知らせと同じ層（切り抜きの板より上、数字の箱と決着より下）
+    this.noticeBox = this.add.graphics();
+    this.noticeTexts = [];
+    this.root.add([this.announceBox, this.announceText, this.noticeBox, this.infoBox, this.infoText, this.endBox, this.endText]);
 
     this.refreshControls();
     this.render();
@@ -441,6 +464,13 @@ export class BattleScene extends Phaser.Scene {
           playRout();
           break;
         }
+        case 'reserve': {
+          // 現れた遊軍の上に「遊軍」と短く出す（自軍でも敵軍でも）。音は号令の太鼓と同じ
+          this.reserveNotices.push({ unit: e.unit, until: 0 });
+          pushCapped(debug.announcements, `${RESERVE_LABEL}:${e.side}:${e.from}`, 50);
+          playOrderDrum(e.side !== this.viewer);
+          break;
+        }
         case 'end':
           break;
       }
@@ -494,6 +524,22 @@ export class BattleScene extends Phaser.Scene {
     this.refreshControls();
   }
 
+  /** 遊軍を呼ぶ（左右は見ている人から見た左右。engine・server へは返さずにそのまま渡す） */
+  private summon(from: ReserveFrom): void {
+    if (!this.source || !this.source.canSummon()) return;
+    this.source.summon(from);
+    this.refreshControls();
+  }
+
+  /** 自分に遊軍がいる戦いだけ、「遊軍 左から」「遊軍 右から」を作る（対戦では最初の場面が届いてから分かる） */
+  private ensureReserveButtons(): void {
+    if (this.reserveButtons.size > 0 || !this.source || !summonShown(this.source.reserve())) return;
+    const [left, right] = battleReserveButtons(getLayout());
+    for (const [from, r] of [['left', left], ['right', right]] as const) {
+      this.reserveButtons.set(from, new Button(this, r, RESERVE_FROM_LABEL[from], () => this.summon(from)).addTo(this.root));
+    }
+  }
+
   private giveOrder(kind: OrderKind): void {
     const t = this.selectedTarget;
     if (!t || !this.source || !this.source.canOrder(t, kind)) return;
@@ -535,6 +581,10 @@ export class BattleScene extends Phaser.Scene {
       const t = this.selectedTarget;
       b.setEnabled(!this.ended && !!src && !!t && src.canOrder(t, k));
     }
+    // 遊軍：開戦 5 秒まで・呼んだあと・返事待ちの間・決着のあとは、押せない色（呼んだあとも出したまま）
+    this.ensureReserveButtons();
+    const summonable = !this.ended && !!src && src.canSummon();
+    for (const b of this.reserveButtons.values()) b.setEnabled(summonable);
   }
 
   // ---- 描画 ----
@@ -556,9 +606,14 @@ export class BattleScene extends Phaser.Scene {
     // いま描いている部隊（全滅して消えた部隊を除く）
     const drawn: { id: number; x: number; y: number; s: UnitSample }[] = [];
     for (const s of samples) {
-      const sprite = this.sprites.get(s.view.id);
-      if (!sprite) continue;
       const u = s.view;
+      let sprite = this.sprites.get(u.id);
+      if (!sprite) {
+        // 戦闘の途中で増えた部隊（遊軍）は、その場で絵を作る（design §7.8。相手の遊軍も同じ）
+        if (u.status === 'gone') continue;
+        sprite = new UnitSprite(this, u.side === this.viewer ? 0 : 1, u.kind, u.id, this.soldierLayer, this.markLayer, this.fv);
+        this.sprites.set(u.id, sprite);
+      }
       if (u.status === 'gone') {
         sprite.hide();
         continue;
@@ -599,6 +654,7 @@ export class BattleScene extends Phaser.Scene {
     this.drawTime(frame);
     this.drawMarks(frame);
     this.drawAnnounce(now);
+    this.drawReserveNotices(samples, now);
     this.drawInfo(inspected);
     if (this.summary && this.interp.caughtUp) this.showEnd(now);
   }
@@ -723,6 +779,37 @@ export class BattleScene extends Phaser.Scene {
     drawBox(this.announceBox, r);
     drawDrum(this.announceBox, r.x + 12, r.y + 11);
     this.announceText.setPosition(r.x + 12 + 12 + 6, Math.round(r.y + r.h / 2)).setVisible(true);
+  }
+
+  /**
+   * 現れた遊軍の上に「遊軍」と出す（号令の知らせと同じ長さ）。部隊について動く。
+   * 将軍の視点で部隊が枠の外にいるときは、現れた側の枠の端・その奥行きの高さに寄せて出す（battle/reserveUi.ts）
+   */
+  private drawReserveNotices(samples: UnitSample[], now: number): void {
+    this.noticeBox.clear();
+    this.reserveNotices = this.reserveNotices.filter((n) => n.until === 0 || n.until > now);
+    let used = 0;
+    for (const n of this.reserveNotices) {
+      const s = samples.find((v) => v.view.id === n.unit);
+      // 場面に部隊がまだ来ていない（出来事が先に届いた）ときは、来てから時間を数え始める
+      if (!s) continue;
+      if (n.until === 0) n.until = now + ANNOUNCE_MS;
+      if (this.endShownAt > 0 || s.view.status === 'gone') continue;
+      let text = this.noticeTexts[used];
+      if (!text) {
+        text = addText(this, 0, 0, RESERVE_LABEL);
+        this.root.addAt(text, this.root.getIndex(this.noticeBox) + 1);
+        this.noticeTexts.push(text);
+      }
+      used++;
+      // 箱の作りは、兵数と士気の箱と同じ
+      const w = Math.ceil(text.width / 2) * 2 + 16;
+      const h = Math.ceil(text.height / 2) * 2 + 12;
+      const at = reserveNoticeAt(this.fv, this.area, s.x, s.y, w, h);
+      drawBox(this.noticeBox, { x: at.x, y: at.y, w, h });
+      text.setPosition(at.x + 8, at.y + 6).setVisible(true);
+    }
+    for (let i = used; i < this.noticeTexts.length; i++) this.noticeTexts[i]!.setVisible(false);
   }
 
   private drawInfo(s: UnitSample | null): void {

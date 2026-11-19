@@ -19,24 +19,53 @@ import {
   PVP_RULES,
   applyTemplate,
   canOrder,
+  canSummon,
   createBattle,
   pvpArmyLimits,
   step,
   summarize,
   validateArmy,
   viewFor,
+  type ArmyError,
   type BattleEvent,
+  type BattleSummary,
   type Field,
   type OrderInput,
   type Placement,
+  type ReserveInput,
+  type ReserveSetup,
+  type ReserveView,
   type Side,
+  type Zone,
 } from '@jinkei/engine';
 import { fieldFor, packView, placementsFor, revealFor } from './flip.ts';
 import { fieldOf, pickMap } from './maps.ts';
-import type { ClientMessage, CloseCode, ErrorMessage, ErrorReason, RoomMessage, ServerMessage, SnapMessage } from './protocol.ts';
-import { anyConnected, newRoom, newSeat, nextDeadline, publicSignature, type BattleRecord, type RoomState, type Seat } from './state.ts';
+import type {
+  ClientMessage,
+  CloseCode,
+  ErrorMessage,
+  ErrorReason,
+  ReserveErrorCode,
+  ResultMessage,
+  RoomMessage,
+  ServerMessage,
+  SnapMessage,
+} from './protocol.ts';
+import {
+  anyConnected,
+  newRoom,
+  newSeat,
+  nextDeadline,
+  normalizeRoom,
+  publicSignature,
+  reserveAllowed,
+  type BattleRecord,
+  type Deploy,
+  type RoomState,
+  type Seat,
+} from './state.ts';
 import { LAG_RESET_TICKS, MAX_STEPS_PER_CALL, SAVE_EVERY_TICKS, SNAP_EVERY_TICKS, type Timing } from './timing.ts';
-import { MAX_MESSAGE_LENGTH, isPid, normalizeName, parseClientMessage } from './validate.ts';
+import { MAX_MESSAGE_LENGTH, isPid, normalizeName, parseClientMessage, parseClientVersion } from './validate.ts';
 
 const ROOM_KEY = 'room';
 const BATTLE_KEY = 'battle';
@@ -83,6 +112,29 @@ function randomSeed(): number {
   return a[0] ?? 1;
 }
 
+/** 配置と遊軍の組を検査する（design §7.6。予算・部隊数は戦場の部隊 + 遊軍で数え、遊軍の値は reserveErrors で見る） */
+function deployErrors(d: Deploy, zone: Zone): ArmyError[] {
+  return validateArmy(d.army, zone, { ...pvpArmyLimits(), reserve: d.reserve });
+}
+
+/**
+ * 見る人に渡す振り返り（design §7.7）。相手の呼ばなかった遊軍を消し、相手の星の割合を判定の割合と同じ値にする
+ * （呼ばなかった遊軍がいたことを、戦いのあとも相手に知らせない）。保存してある振り返りは書き換えず、写しを作る。
+ * 遊軍の前に保存した振り返り（項目がない）は、そのまま写す
+ */
+function summaryFor(viewer: Side, r: BattleSummary): BattleSummary {
+  const out: BattleSummary = structuredClone(r);
+  const other: Side = viewer === 0 ? 1 : 0;
+  if (Array.isArray(out.unusedReserve)) out.unusedReserve[other] = null;
+  if (Array.isArray(out.remainingForStars) && Array.isArray(out.remaining)) out.remainingForStars[other] = out.remaining[other];
+  return out;
+}
+
+/** 遊軍の様子を、決まった項目だけ写す（engine の ReserveView に項目が増えても、勝手に外へ出ないように） */
+function reserveViewOf(r: ReserveView | null): ReserveView | null {
+  return r === null ? null : { kind: r.kind, stance: r.stance, state: r.state };
+}
+
 /** 1つの入力の処理の作業領域 */
 class Tx {
   readonly beforeJson: string;
@@ -95,7 +147,7 @@ class Tx {
    * room より先に、席の全員へ送るもの（決着の result）。決着と同時に不在の席が空いて waiting に戻る場合でも、
    * 「戦いの結果 → 部屋の様子」の順で届くようにする
    */
-  readonly early: ServerMessage[] = [];
+  readonly early: ((side: Side) => ServerMessage)[] = [];
   readonly closes: { ws: WebSocket; code: CloseCode | 1000; reason: string }[] = [];
   /** アラームが鳴った（保存領域のアラームは消えているので、同じ時刻でも入れ直す） */
   alarmFired = false;
@@ -108,9 +160,11 @@ class Tx {
     this.beforePublic = publicSignature(s);
   }
 
-  error(ws: WebSocket, reason: ErrorReason, message: string, extra?: Pick<ErrorMessage, 'armyErrors'>): void {
+  error(ws: WebSocket, reason: ErrorReason, message: string, extra?: Pick<ErrorMessage, 'armyErrors' | 'op' | 'code'>): void {
     const msg: ErrorMessage = { type: 'error', reason, message };
     if (extra?.armyErrors !== undefined) msg.armyErrors = extra.armyErrors;
+    if (extra?.op !== undefined) msg.op = extra.op;
+    if (extra?.code !== undefined) msg.code = extra.code;
     this.sends.push({ ws, msg });
   }
 
@@ -130,6 +184,8 @@ export class Room extends DurableObject<Env> {
   private clockBase = 0;
   /** 届いて、まだ step に渡していない号令 */
   private pendingOrders: OrderInput[] = [];
+  /** 届いて、まだ step に渡していない遊軍の入力（陣営ごとに1つまで。design §7.7） */
+  private pendingSummons: ReserveInput[] = [];
   /** 前の snap のあとに起きた出来事 */
   private pendingEvents: BattleEvent[] = [];
   private readonly rates = new WeakMap<WebSocket, { tokens: number; at: number; over: number }>();
@@ -147,7 +203,9 @@ export class Room extends DurableObject<Env> {
     super(ctx, env);
     // "ping" には Durable Object を起こさずに "pong" を返す
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
-    this.room = this.ctx.storage.kv.get<RoomState>(ROOM_KEY) ?? null;
+    const saved = this.ctx.storage.kv.get<RoomState>(ROOM_KEY) ?? null;
+    // 遊軍の前の形で保存された部屋（下書きが配置の配列、席に cv がない）も読めるようにそろえる
+    this.room = saved === null ? null : normalizeRoom(saved);
     // 起動時の点検：接続の突き合わせ（再起動で消えた接続）、期限、戦闘の再開。
     // ここで戦闘を再開しておけば、起こしたのが見張りのアラームでも、入り直した人の接続でも同じに続く
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -205,7 +263,7 @@ export class Room extends DurableObject<Env> {
    * 部屋を作る（design §4.3）。部屋がないときだけ、世代を乱数で決めて reserved にし、作った人の pid を覚える。
    * 空きの確認と予約を、await を挟まない1回の処理で行う（同時に来た2つの作成が両方通ることはない）。
    */
-  async create(code: string, pid: string, timing: Timing, testMap: string | null = null): Promise<boolean> {
+  async create(code: string, pid: string, timing: Timing, testMap: string | null = null, testSeed: number | null = null): Promise<boolean> {
     if (this.room !== null) return false;
     if (!isPid(pid)) return false;
     const now = Date.now();
@@ -214,6 +272,7 @@ export class Room extends DurableObject<Env> {
     s.seats = [newSeat(pid, ''), null];
     s.deadlines.reserve = now + timing.reserveMs;
     s.testMap = testMap;
+    s.testSeed = testSeed;
     this.room = s;
     this.battle = null;
     this.settle(tx);
@@ -229,6 +288,21 @@ export class Room extends DurableObject<Env> {
   /** テスト用：アラームの処理をいま実行する（2回鳴った場合の確認） */
   async runAlarmNow(): Promise<void> {
     await this.alarm();
+  }
+
+  /**
+   * テスト用：刻みを手で進める（timing.testManualTicks が 1 の部屋だけ。戦闘中でなければ何もしない）。
+   * 実時間で刻むときと同じ処理（advance）を、steps 回ぶん通す。進めたあとの刻みを返す
+   */
+  async stepNow(steps: number): Promise<number | null> {
+    const s = this.room;
+    if (s === null || s.timing.testManualTicks !== 1 || s.phase !== 'battle') return this.battle?.state.tick ?? null;
+    const tx = new Tx(s, Date.now());
+    this.ensureBattle(tx);
+    this.settle(tx);
+    this.commit(tx);
+    this.advance(Math.max(0, Math.min(steps, 100)), Date.now());
+    return this.battle?.state.tick ?? null;
   }
 
   /** テスト用：保存してある内容（段階・成績・保存した刻み）と、メモリの刻み */
@@ -285,7 +359,7 @@ export class Room extends DurableObject<Env> {
         this.reject(server, side, side === 'full' ? 4002 : 4003);
         return new Response(null, { status: 101, webSocket: client });
       }
-      this.join(tx, server, side, pid, name);
+      this.join(tx, server, side, pid, name, parseClientVersion(url.searchParams.get('cv')));
       this.settle(tx);
       this.commit(tx);
       return new Response(null, { status: 101, webSocket: client });
@@ -314,14 +388,18 @@ export class Room extends DurableObject<Env> {
     return 'full';
   }
 
-  private join(tx: Tx, ws: WebSocket, side: Side, pid: string, name: string): void {
+  private join(tx: Tx, ws: WebSocket, side: Side, pid: string, name: string, cv: number): void {
     const s = this.room;
     if (s === null) return;
     let seat = s.seats[side];
     if (seat === null) {
-      seat = newSeat(pid, name);
+      seat = newSeat(pid, name, cv);
       s.seats[side] = seat;
     }
+    // client の版は下げない（design §7.7）。同じ席（同じ pid）が、いまより小さい cv（cv なしを含む）で入り直しても、
+    // 大きいほうのまま（接続は受け付ける）。下げると、古い画面を装って入り直すだけで、相手の遊軍を封じられるため。
+    // 本物の利用者が新しい画面から古い画面へ戻ることは起きない。席が空いて別の人が座ったときは、newSeat でその人の cv から始まる
+    seat.cv = Math.max(seat.cv, cv);
     // 1つの席に有効な接続は1つ。古い接続は閉じ、その「切れた」の知らせは接続の番号の違いで無視する
     for (const o of this.openSockets()) {
       if (o.ws !== ws && o.att.seat === side) tx.closes.push({ ws: o.ws, code: 4001, reason: 'replaced by a newer connection' });
@@ -442,22 +520,40 @@ export class Room extends DurableObject<Env> {
     switch (msg.type) {
       case 'draft': {
         if (s.phase !== 'setup' || seat.ready) return;
-        this.takeDraft(seat, side, msg.army, field);
+        // 遊軍を使えない部屋では、遊軍つきの下書きを組ごと捨てる（配置だけを受け取ることもしない。組で扱うため）
+        if (msg.reserve != null && !reserveAllowed(s)) {
+          tx.error(ws, 'reserve_disabled', 'reserves are not available in this room');
+          return;
+        }
+        this.takeDraft(seat, side, { army: msg.army, reserve: msg.reserve ?? null }, field);
         return;
       }
       case 'ready': {
         if (s.phase !== 'setup' || seat.ready) return;
-        if (msg.army !== undefined) this.takeDraft(seat, side, msg.army, field);
-        if (seat.draft === null) {
+        // army を付けたときは、同じメッセージの reserve（省略なら「なし」）と組にする。付けなければ、いまの下書きの組のまま
+        if (msg.army !== undefined) {
+          if (msg.reserve != null && !reserveAllowed(s)) {
+            tx.error(ws, 'reserve_disabled', 'reserves are not available in this room');
+            return;
+          }
+          this.takeDraft(seat, side, { army: msg.army, reserve: msg.reserve ?? null }, field);
+        }
+        const draft = seat.draft;
+        if (draft === null) {
           tx.error(ws, 'invalid_army', 'no army to confirm');
           return;
         }
-        const errors = validateArmy(seat.draft, field.zones[side], pvpArmyLimits());
+        // 遊軍を使えなくなった部屋では、下書きの遊軍を settle で外しているので、ここには来ないはず（念のため断る）
+        if (draft.reserve !== null && !reserveAllowed(s)) {
+          tx.error(ws, 'reserve_disabled', 'reserves are not available in this room');
+          return;
+        }
+        const errors = deployErrors(draft, field.zones[side]);
         if (errors.length > 0) {
           tx.error(ws, 'invalid_army', 'the army is not valid', { armyErrors: errors });
           return;
         }
-        seat.lastValid = seat.draft;
+        seat.lastValid = draft;
         seat.ready = true;
         return;
       }
@@ -484,6 +580,30 @@ export class Room extends DurableObject<Env> {
         this.pendingOrders.push({ side, target: msg.target, kind: msg.kind });
         return;
       }
+      case 'reserve': {
+        // 受け付けの作りは号令と同じ（design §7.7）。段階と battleNo が違えば黙って捨てる
+        if (s.phase !== 'battle' || msg.battleNo !== s.battleNo) return;
+        const b = this.battle;
+        if (b === null || b.battleNo !== s.battleNo) return;
+        // 遊軍を使えるかは、戦いを作った時点の可否（rec.reserveOk）で決め、その戦いが終わるまで変えない（design §7.7）。
+        // 受け付けたあとに渡す刻みで扱いが変わらないよう、step に渡すときは見直さない。遊軍の前の記録（項目なし）は使えない扱い
+        if (b.reserveOk !== true) {
+          tx.error(ws, 'reserve_disabled', 'reserves are not available in this room', { op: 'reserve' });
+          return;
+        }
+        const r = canSummon(b.state, side, msg.from);
+        if (!r.ok) {
+          tx.error(ws, 'invalid_reserve', r.error.message, { op: 'reserve', code: r.error.code as ReserveErrorCode });
+          return;
+        }
+        // まだ step に渡していない入力は陣営ごとに1つまで（2つ目は渡さない。号令の4回目と同じく、本人にだけ断りを返す）
+        if (this.pendingSummons.some((o) => o.side === side)) {
+          tx.error(ws, 'invalid_reserve', 'a reserve call is already pending', { op: 'reserve', code: 'no_reserve' });
+          return;
+        }
+        this.pendingSummons.push({ side, from: msg.from });
+        return;
+      }
       case 'rematch': {
         if (s.phase !== 'result' || msg.battleNo !== s.battleNo) return;
         s.rematch[side] = true;
@@ -493,11 +613,14 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  /** 「自分が下」の座標で届いた下書きを、戦場の座標にして持つ。検査を通れば lastValid にもする */
-  private takeDraft(seat: Seat, side: Side, army: Placement[], field: Field): void {
-    const placed = placementsFor(side, army, field);
+  /**
+   * 「自分が下」の座標で届いた下書きの組を、戦場の座標にして持つ。組ごと検査を通れば lastValid にもする
+   * （配置だけ、遊軍だけを入れ替えることはしない）。遊軍の値は座標を持たないので返さない
+   */
+  private takeDraft(seat: Seat, side: Side, d: Deploy, field: Field): void {
+    const placed: Deploy = { army: placementsFor(side, d.army, field), reserve: d.reserve === null ? null : { kind: d.reserve.kind, stance: d.reserve.stance } };
     seat.draft = placed;
-    if (validateArmy(placed, field.zones[side], pvpArmyLimits()).length === 0) seat.lastValid = placed;
+    if (deployErrors(placed, field.zones[side]).length === 0) seat.lastValid = placed;
   }
 
   // ---------- 切断 ----------
@@ -582,6 +705,7 @@ export class Room extends DurableObject<Env> {
     this.battle = null;
     this.watchdogAt = null;
     this.pendingOrders = [];
+    this.pendingSummons = [];
     this.pendingEvents = [];
     this.alarmAt = null;
     this.counts.alarmSet += 1;
@@ -618,14 +742,29 @@ export class Room extends DurableObject<Env> {
     const s = this.room;
     if (s === null || s.phase !== 'setup') return;
     const field = fieldOf(s.map);
-    // 確定した人は確定した配置、していない人は最後に検査を通った下書き、それもなければ既定の編成（assumptions S8）
-    const armies = SIDES.map((side) => s.seats[side]?.lastValid ?? this.defaultArmy(side, field)) as [Placement[], Placement[]];
-    let created = createBattle({ field, armies, seed: randomSeed(), maxTicks: s.timing.maxTicks, timeout: 'compare' });
+    // 確定した人は確定した組、していない人は最後に検査を通った下書きの組、それもなければ既定の編成で遊軍なし（assumptions S8）。
+    // 配置と遊軍は組で選ぶ（design §7.7）。遊軍を使えない部屋では遊軍を外す（settle で外してあるはずだが、念のため）
+    const allowed = reserveAllowed(s);
+    const armies = SIDES.map((side) => s.seats[side]?.lastValid?.army ?? this.defaultArmy(side, field)) as [Placement[], Placement[]];
+    const reserves = SIDES.map((side) => (allowed ? (s.seats[side]?.lastValid?.reserve ?? null) : null)) as [ReserveSetup | null, ReserveSetup | null];
+    // 遊軍がどちらにもなければ、reserves の項目を書かない（遊軍のない戦いを、いままでとまったく同じ設定で作る。design §7.1）
+    const make = () =>
+      createBattle({
+        field,
+        armies,
+        // テスト専用の決めた種（本番は常に null で、毎回乱数）
+        seed: s.testSeed ?? randomSeed(),
+        maxTicks: s.timing.maxTicks,
+        timeout: 'compare',
+        ...(reserves[0] !== null || reserves[1] !== null ? { reserves } : {}),
+      });
+    let created = make();
     if (!created.ok && created.error.side !== undefined) {
-      // 検査を通った配置しか持たないので起きないはずだが、起きても戦いは始める
+      // 検査を通った組しか持たないので起きないはずだが、起きても戦いは始める（その陣営は既定の編成・遊軍なしにする）
       console.error('createBattle rejected an army', created.error);
       armies[created.error.side] = this.defaultArmy(created.error.side, field);
-      created = createBattle({ field, armies, seed: randomSeed(), maxTicks: s.timing.maxTicks, timeout: 'compare' });
+      reserves[created.error.side] = null;
+      created = make();
     }
     if (!created.ok) {
       console.error('createBattle failed', created.error);
@@ -636,7 +775,15 @@ export class Room extends DurableObject<Env> {
     delete s.deadlines.setup;
     s.deadlines.reveal = tx.now + s.timing.revealMs;
     for (const seat of s.seats) if (seat !== null) seat.ready = false;
-    const rec: BattleRecord = { battleNo: s.battleNo, armies, startsAt: s.deadlines.reveal, state: created.value, evCount: 0 };
+    const rec: BattleRecord = {
+      battleNo: s.battleNo,
+      armies,
+      reserves,
+      reserveOk: allowed,
+      startsAt: s.deadlines.reveal,
+      state: created.value,
+      evCount: 0,
+    };
     this.battle = rec;
     this.put(BATTLE_KEY, rec);
     tx.sends.push({ all: (side) => this.revealMsg(side, rec, field) });
@@ -699,6 +846,7 @@ export class Room extends DurableObject<Env> {
     this.clockBase = now - rec.state.tick * s.timing.tickMs;
     this.pendingEvents = [];
     this.pendingOrders = [];
+    this.pendingSummons = [];
     this.timer = setInterval(() => this.onTick(), s.timing.tickMs);
   }
 
@@ -707,32 +855,46 @@ export class Room extends DurableObject<Env> {
     this.timer = null;
   }
 
-  /** setInterval から呼ばれる。実時間に追いつく分だけ step を呼ぶ（1回に最大5刻み） */
+  /**
+   * setInterval から呼ばれる。実時間に追いつく分だけ step を呼ぶ（1回に最大5刻み）。
+   * テストで刻みを手で進める部屋（timing.testManualTicks が 1）では、ここでは進めない（stepNow で進める）
+   */
   private onTick(): void {
+    const s = this.room;
+    const rec = this.battle;
+    if (s === null || s.phase !== 'battle' || rec === null || rec.battleNo !== s.battleNo) {
+      this.stopTimer();
+      return;
+    }
+    if (s.timing.testManualTicks === 1) return;
+    const now = Date.now();
+    const due = Math.floor((now - this.clockBase) / s.timing.tickMs) - rec.state.tick;
+    this.advance(Math.min(Math.max(due, 0), MAX_STEPS_PER_CALL), now);
+  }
+
+  /** steps 回 step を呼び、保存・決着・snap の送信まで行う（実時間で刻むときも、テストで手で進めるときも、これを通す） */
+  private advance(steps: number, now: number): void {
     try {
       const s = this.room;
       const rec = this.battle;
-      if (s === null || s.phase !== 'battle' || rec === null || rec.battleNo !== s.battleNo) {
-        this.stopTimer();
-        return;
-      }
+      if (s === null || s.phase !== 'battle' || rec === null || rec.battleNo !== s.battleNo) return;
       const st = rec.state;
       const tickMs = s.timing.tickMs;
-      const now = Date.now();
-      const due = Math.floor((now - this.clockBase) / tickMs) - st.tick;
-      const steps = Math.min(Math.max(due, 0), MAX_STEPS_PER_CALL);
       let save = false;
       let snap = false;
       for (let i = 0; i < steps && st.outcome === null; i++) {
-        // 号令は、届いた次の step に渡す
+        // 号令と遊軍の入力は、届いた次の step に渡す（engine は遊軍を先に呼び、続けて号令を受け付ける。design §7.3）
         const orders = this.pendingOrders;
         this.pendingOrders = [];
-        const events = step(st, orders);
+        const summons = this.pendingSummons;
+        this.pendingSummons = [];
+        const events = summons.length > 0 ? step(st, orders, summons) : step(st, orders);
         for (const e of events) this.pendingEvents.push(e);
         // 出来事の通し番号は、state と同じ記録に持つ（保存した刻みと、そこまでの出来事の数が必ずそろう）
         rec.evCount += events.length;
-        // 号令を受け付けた step の直後は書く（作り直されても、使った回数が巻き戻らないように）
-        if (events.some((e) => e.type === 'order')) save = true;
+        // 号令を受け付けた step と、遊軍が現れた step の直後は書く（作り直されても、使った回数が巻き戻らず、
+        // 相手に見せた遊軍が消えて二度呼べることがないように。design §7.7）
+        if (events.some((e) => e.type === 'order' || e.type === 'reserve')) save = true;
         if (st.tick % SAVE_EVERY_TICKS === 0) save = true;
         if (st.tick % SNAP_EVERY_TICKS === 0) snap = true;
       }
@@ -779,7 +941,11 @@ export class Room extends DurableObject<Env> {
     s.rematch = [false, false];
     this.watchdogAt = null;
     this.pendingOrders = [];
-    tx.early.push(this.resultMsg(s));
+    this.pendingSummons = [];
+    // 結果は見る人ごとに作る（相手の呼ばなかった遊軍を消す。design §7.7）。いま作っておく
+    // （送るのは settle のあと。不在の席が空くと lastResult が消えるため、送るときに作ると作れない）
+    const results = [this.resultMsg(s, 0), this.resultMsg(s, 1)] as const;
+    tx.early.push((side) => results[side]);
   }
 
   /**
@@ -798,6 +964,16 @@ export class Room extends DurableObject<Env> {
       if (!open.some((o) => o.att.seat === side && o.att.conn === seat.conn)) {
         seat.conn = null;
         seat.goneSince = now;
+      }
+    }
+    // 遊軍を使えない部屋の setup では、両者の下書きと確定した組から遊軍を外す（design §7.7）。
+    // 席の cv は下げないので（join）、同じ顔ぶれのあいだに true から false に変わることはなく、ふだんは何も外れない（念のための守り）。確定はそのまま（取り消すと、遊軍を持っていた側だけ確定が外れ、相手に遊軍があったことが伝わるため）。
+    // room は rules.reserve が変わったことで両者に送り直される（publicSignature）。遊軍を外したかどうかでは送り分けない
+    if (s.phase === 'setup' && !reserveAllowed(s)) {
+      for (const seat of s.seats) {
+        if (seat === null) continue;
+        if (seat.draft !== null && seat.draft.reserve !== null) seat.draft = { army: seat.draft.army, reserve: null };
+        if (seat.lastValid !== null && seat.lastValid.reserve !== null) seat.lastValid = { army: seat.lastValid.army, reserve: null };
       }
     }
     if (s.phase === 'setup' && s.seats[0]?.ready === true && s.seats[1]?.ready === true) this.toReveal(tx);
@@ -880,7 +1056,7 @@ export class Room extends DurableObject<Env> {
     }
     const publicChanged = publicSignature(s) !== tx.beforePublic;
     const targets = this.currentSockets(tx);
-    for (const msg of tx.early) for (const o of targets) this.sendTo(o.ws, msg);
+    for (const make of tx.early) for (const o of targets) this.sendTo(o.ws, make(o.att.seat));
     for (const o of targets) {
       if (publicChanged || tx.fullFor.has(o.ws)) this.sendTo(o.ws, this.roomMsg(s, o.att.seat, tx.now));
     }
@@ -895,7 +1071,7 @@ export class Room extends DurableObject<Env> {
       const rec = s.phase === 'reveal' || s.phase === 'battle' ? this.loadBattle() : null;
       if (s.phase === 'reveal' && rec !== null) this.sendTo(o.ws, this.revealMsg(o.att.seat, rec, field));
       if (s.phase === 'battle' && rec !== null) this.sendTo(o.ws, this.snapMsg(o.att.seat, rec, [], field));
-      if (s.phase === 'result' && s.lastResult !== null) this.sendTo(o.ws, this.resultMsg(s));
+      if (s.phase === 'result' && s.lastResult !== null) this.sendTo(o.ws, this.resultMsg(s, o.att.seat));
     }
     for (const c of tx.closes) this.safeClose(c.ws, c.code, c.reason);
   }
@@ -923,9 +1099,12 @@ export class Room extends DurableObject<Env> {
         costs: { ...PVP_RULES.costs },
         maxUnits: PVP_RULES.maxUnits,
         standardRoster: { ...PVP_RULES.standardRoster },
+        reserve: reserveAllowed(s),
       },
       rematch: [s.rematch[0], s.rematch[1]],
-      myArmy: me?.lastValid ? placementsFor(side, me.lastValid, field) : null,
+      // 配置と遊軍は、同じ組（最後に検査を通った組）から返す。相手の遊軍は入れない
+      myArmy: me?.lastValid ? placementsFor(side, me.lastValid.army, field) : null,
+      myReserve: me?.lastValid?.reserve ? { kind: me.lastValid.reserve.kind, stance: me.lastValid.reserve.stance } : null,
     };
   }
 
@@ -936,10 +1115,13 @@ export class Room extends DurableObject<Env> {
   }
 
   private revealMsg(side: Side, rec: BattleRecord, field: Field): ServerMessage {
+    // 自分の遊軍だけ。相手の遊軍は、あるかないかも含めて入れない（遊軍の前の記録には reserves がない）
+    const mine = rec.reserves?.[side] ?? null;
     return {
       type: 'reveal',
       battleNo: rec.battleNo,
       armies: [revealFor(side, 0, rec.armies[0], field), revealFor(side, 1, rec.armies[1], field)],
+      myReserve: mine === null ? null : { kind: mine.kind, stance: mine.stance },
       startsAt: rec.startsAt,
       serverTime: Date.now(),
     };
@@ -961,6 +1143,8 @@ export class Room extends DurableObject<Env> {
       events,
       ordersLeft: [view.ordersLeft[0], view.ordersLeft[1]],
       outcome: view.outcome,
+      // 自分の遊軍の様子だけ（viewFor は相手のぶんを入れないが、ここでも自分の側だけを取り出す）
+      reserve: reserveViewOf(view.reserve?.[side] ?? null),
     };
   }
 
@@ -976,10 +1160,11 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  private resultMsg(s: RoomState): ServerMessage {
+  /** 結果。見る人ごとに作る（相手の呼ばなかった遊軍を消す。design §7.7） */
+  private resultMsg(s: RoomState, side: Side): ResultMessage {
     const r = s.lastResult;
     if (r === null) throw new Error('no result');
-    return { type: 'result', battleNo: s.battleNo, winner: r.winner, reason: r.reason, summary: r, score: [s.score[0], s.score[1], s.score[2]] };
+    return { type: 'result', battleNo: s.battleNo, winner: r.winner, reason: r.reason, summary: summaryFor(side, r), score: [s.score[0], s.score[1], s.score[2]] };
   }
 
   private sendTo(ws: WebSocket, msg: ServerMessage): void {
