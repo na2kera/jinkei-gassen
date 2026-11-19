@@ -71,10 +71,16 @@ describe('両者の不在', () => {
 
 describe('各段階での作り直し（ctx.abort）', () => {
   it('setup・reveal・result で作り直しても、状態・席と接続の対応・期限が戻り、先へ進める', async () => {
-    const timing = { tickMs: 10, revealMs: 1500, maxTicks: 60, setupMs: 30_000, watchdogMs: 1000 };
+    // 公開の段階で、状態を読む → 作り直す → 読む、を終えるまで公開が続くよう、長めにとる
+    // （機械が混んでいて作り直しに時間がかかると、1.5 秒では戦闘に移ってしまい、段階の検査が落ちることがあった）
+    const timing = { tickMs: 10, revealMs: 5000, maxTicks: 60, setupMs: 30_000, watchdogMs: 1000 };
     let { A, B, code } = await setupPair(server.base, timing);
+    // 下書きが処理済みであることは、時間で待たず、自分の接続に返る room で確かめる（確定して、取り消す。下書きは残る）
     A.send({ type: 'draft', army: holdArmy() });
-    await sleep(200);
+    A.send({ type: 'ready' });
+    await A.waitRoom((r) => r.seats[0].ready === true, 5000, 'A ready (draft processed)');
+    A.send({ type: 'unready' });
+    await A.waitRoom((r) => r.seats[0].ready === false, 5000, 'A unready');
 
     // --- setup
     let before = await testRoute(server.base, code, 'state');
