@@ -84,6 +84,12 @@ class PvpFlow {
       this.unsubscribe = client.subscribe(() => this.route());
       // 部屋にいるあいだ（status が idle でないあいだ）は画面を消さない（design §9.5、§9.9-7）
       client.subscribe(() => syncPvpWake());
+      // 画面へ戻ってきたとき、切れていたら待たずにつなぎ直す（design §9.6）
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') client.wake();
+      });
+      window.addEventListener('pageshow', () => client.wake());
+      window.addEventListener('online', () => client.wake());
       client.onError((m) => {
         // 確定が断られたら、確定の望みを取り下げる（送り直し続けないため）
         if (m.reason === 'invalid_army') {
