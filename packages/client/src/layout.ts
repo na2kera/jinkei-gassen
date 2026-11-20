@@ -2,6 +2,8 @@
 // シーンはここで決めた矩形を読むだけにし、座標の数字を直書きしない。
 // 向きが変わったときに、ここを計算し直すだけで全画面が組み直せるようにするため。
 
+import { PVP_RULES_LINES } from './pvpRules.ts';
+
 export type Mode = 'landscape' | 'portrait';
 
 export interface Rect {
@@ -309,6 +311,8 @@ export function stageSelectLayout(l: Layout, count: number): StageSelectLayout {
 /** 部屋の画面。画面の中央に縦に並べる。入力欄は HTML の input をこの矩形に重ねる */
 export interface LobbyLayout {
   back: Rect;
+  /** 「ルール」のボタン（右上。入る前・入ったあとの両方に出す。design §10.5） */
+  rules: Rect;
   centerX: number;
   title: number;
   /** 名前の見出しと入力欄 */
@@ -337,6 +341,8 @@ export function lobbyLayout(l: Layout): LobbyLayout {
   const codeW = 112;
   return {
     back: { x: GAP, y: GAP, w: BACK_W, h: 32 },
+    // 「戻る」と同じ段・同じ高さ。幅は音のボタンと同じ
+    rules: { x: l.width - GAP - MUTE_W, y: GAP, w: MUTE_W, h: 32 },
     centerX: l.width / 2,
     title: top,
     nameLabel: { x, y: top + 70 },
@@ -352,6 +358,47 @@ export function lobbyLayout(l: Layout): LobbyLayout {
     waiting: top + 192,
     leave: { x: even(l.width / 2 - 80), y: top + 228, w: 160, h: 40 },
     waitStatus: top + 284,
+  };
+}
+
+/** 対戦のルール説明のダイアログ（design §10.4）。箱は画面の中央、高さは中身から決める */
+export interface RulesDialogLayout {
+  box: Rect;
+  /** 見出しの左上 */
+  title: { x: number; y: number };
+  /** 本文の各行の左上の x と、1行目の上の y、行の高さ */
+  lineX: number;
+  lineY: number;
+  lineH: number;
+  /** 本文を書ける幅（箱の内側の左右の余白を除いた幅） */
+  textW: number;
+  close: Rect;
+}
+
+/** ルール説明の箱の、上下左右の余白・見出しの高さ・見出しと本文のすき間・本文と「閉じる」のすき間 */
+const RULES_PAD = 16;
+const RULES_TITLE_H = 22;
+const RULES_TITLE_GAP = 8;
+const RULES_LINE_H = 22;
+const RULES_CLOSE_GAP = 12;
+const RULES_CLOSE_W = 96;
+const RULES_CLOSE_H = 36;
+
+export function rulesDialogLayout(l: Layout): RulesDialogLayout {
+  const lines = PVP_RULES_LINES.length;
+  const w = l.mode === 'landscape' ? 320 : l.width - 16;
+  const h = RULES_PAD + RULES_TITLE_H + RULES_TITLE_GAP + lines * RULES_LINE_H + RULES_CLOSE_GAP + RULES_CLOSE_H + RULES_PAD;
+  const x = even((l.width - w) / 2);
+  const y = even((l.height - h) / 2);
+  const lineY = y + RULES_PAD + RULES_TITLE_H + RULES_TITLE_GAP;
+  return {
+    box: { x, y, w, h },
+    title: { x: x + RULES_PAD, y: y + RULES_PAD },
+    lineX: x + RULES_PAD,
+    lineY,
+    lineH: RULES_LINE_H,
+    textW: w - RULES_PAD * 2,
+    close: { x: even(x + w / 2 - RULES_CLOSE_W / 2), y: y + h - RULES_PAD - RULES_CLOSE_H, w: RULES_CLOSE_W, h: RULES_CLOSE_H },
   };
 }
 

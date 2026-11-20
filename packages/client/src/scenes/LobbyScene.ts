@@ -3,6 +3,8 @@
 // このシーンは自分を作り直す予約（scene.restart）をしない。入る前と入ったあとの表示の切り替えは、
 // シーンの中の表示物だけを組み直して行う（pvp.ts の画面の切り替えとぶつかって、2つの画面が動くのを防ぐため）。
 // 入力途中のコードと「作成中」の状態はシーンの外（pvp.ts・RoomClient）に持ち、作り直しても消えない・二重に始まらない。
+// 対戦のルール説明（design §10.5）：初めて開いたとき（まだ「閉じる」を押していない）は自動で出し、右上の「ルール」でいつでも出す。
+// 開いているかもシーンの外（lobbyInput.rulesOpen）に持ち、向きが変わって作り直しても開き直す。
 
 import Phaser from 'phaser';
 import { COLOR, css } from '../art/palette.ts';
@@ -10,9 +12,10 @@ import { debug } from '../debug.ts';
 import { getLayout, LAYOUT_EVENT, lobbyLayout } from '../layout.ts';
 import { normalizeName } from '../net/name.ts';
 import { client, lobbyInput, notice, notify, pvp, resumableCode } from '../net/pvp.ts';
-import { playerId, savedName, saveName } from '../save.ts';
+import { markPvpRulesSeen, playerId, pvpRulesSeen, savedName, saveName } from '../save.ts';
 import { Button } from '../ui/Button.ts';
 import { HtmlInput } from '../ui/htmlInput.ts';
+import { RulesDialog } from '../ui/RulesDialog.ts';
 import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
 
@@ -24,6 +27,7 @@ export class LobbyScene extends Phaser.Scene {
   private statusText!: Phaser.GameObjects.Text;
   private shownInRoom: boolean | null = null;
   private unsubscribe: (() => void) | null = null;
+  private rulesDialog: RulesDialog | null = null;
 
   constructor() {
     super('Lobby');
@@ -39,11 +43,17 @@ export class LobbyScene extends Phaser.Scene {
     this.content = null;
     this.createButton = null;
     this.shownInRoom = null;
+    this.rulesDialog = null;
     const l = lobbyLayout(layout);
     this.statusText = addText(this, Math.round(l.centerX), l.status, '', 16, COLOR.red).setOrigin(0.5, 0);
     this.build();
     // 部屋の様子が変わったら、表示物だけを組み直す（入った・失敗した など）。画面を移すのは pvp.ts
     this.unsubscribe = client.subscribe(() => this.build());
+    // まだ見ていなければ自動で出す。開いたまま向きが変わって作り直したときも、開き直す
+    if (!pvpRulesSeen()) lobbyInput.rulesOpen = true;
+    if (lobbyInput.rulesOpen) this.openRules();
+    debug.rulesOpen = () => this.openRules();
+    debug.rulesClose = () => this.closeRules();
 
     const onLayout = (): void => {
       // 対戦の途中なら pvp.ts に作り直しを頼む（切り替えの予約とぶつからないように）
@@ -55,6 +65,11 @@ export class LobbyScene extends Phaser.Scene {
       this.game.events.off(LAYOUT_EVENT, onLayout);
       this.unsubscribe?.();
       this.clear();
+      // ここでは「見た」とも「閉じた」とも覚えない（作り直しでも、配置の画面へ進むときも通るため）
+      this.rulesDialog?.destroy();
+      this.rulesDialog = null;
+      debug.rulesOpen = null;
+      debug.rulesClose = null;
     });
   }
 
@@ -83,6 +98,33 @@ export class LobbyScene extends Phaser.Scene {
     else this.buildEntry(l);
     this.statusText.setY(inRoom ? l.waitStatus : l.status);
     this.children.bringToTop(this.statusText);
+    // 開いているあいだに作り直した入力欄も、隠したままにする
+    this.syncInputs();
+  }
+
+  /** ルールの説明を出す（「ルール」のボタン・自動で出すとき・開発用の口）。もう出ていれば何もしない */
+  private openRules(): void {
+    if (this.rulesDialog) return;
+    lobbyInput.rulesOpen = true;
+    this.rulesDialog = new RulesDialog(this, getLayout(), () => this.closeRules());
+    this.syncInputs();
+  }
+
+  /** 「閉じる」：見たと覚えて、次からは自動では出さない */
+  private closeRules(): void {
+    if (!this.rulesDialog) return;
+    markPvpRulesSeen();
+    lobbyInput.rulesOpen = false;
+    this.rulesDialog.destroy();
+    this.rulesDialog = null;
+    this.syncInputs();
+  }
+
+  /**
+   * 入力欄は canvas の上に重ねた HTML なので、何もしないとダイアログの上に出る。開いているあいだは隠す（design §10.4）
+   */
+  private syncInputs(): void {
+    for (const i of this.inputs) i.setVisible(!this.rulesDialog);
   }
 
   private button(...args: ConstructorParameters<typeof Button>): Button {
@@ -94,9 +136,11 @@ export class LobbyScene extends Phaser.Scene {
   /** 部屋に入る前：名前・部屋を作る・コードで入る・前の部屋に戻る */
   private buildEntry(l: ReturnType<typeof lobbyLayout>): void {
     const c = this.content!;
+    this.button(this, l.rules, 'ルール', () => this.openRules());
     this.button(this, l.back, '戻る', () => {
       // 作っている途中なら、その応答を捨てる（あとから対戦の画面へ連れ戻されないように）
       pvp.cancel();
+      lobbyInput.rulesOpen = false;
       this.scene.start('Title');
     });
     c.add(addText(this, Math.round(l.centerX), l.title, '対戦', 32, COLOR.goldHi).setOrigin(0.5, 0));
@@ -127,6 +171,7 @@ export class LobbyScene extends Phaser.Scene {
   /** 部屋に入ったあと：コード・写す・相手を待っています・出る */
   private buildWaiting(l: ReturnType<typeof lobbyLayout>): void {
     const c = this.content!;
+    this.button(this, l.rules, 'ルール', () => this.openRules());
     const code = client.room?.code ?? client.code ?? '';
     c.add(addText(this, Math.round(l.centerX), l.codeLabel, '部屋のコード', 16, COLOR.muted).setOrigin(0.5, 0.5));
     const g = this.add.graphics();

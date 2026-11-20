@@ -88,12 +88,6 @@ export function chapters(): number[] {
   return [...new Set(STAGES.map((s) => s.chapter))].sort((a, b) => a - b);
 }
 
-/** 対戦は、第1章の面をすべて勝ったら開く（decisions §8） */
-export function pvpUnlocked(): boolean {
-  const ch1 = STAGES.filter((s) => s.chapter === 1);
-  return ch1.length > 0 && ch1.every((s) => starsOf(s.id) > 0);
-}
-
 /** その面で選べる方針か（engine の兵種の決まりと、面の決まりの両方） */
 export function stanceOk(stage: Stage, p: Pick<Placement, 'kind' | 'stance'>): boolean {
   return stanceAllowed(p.kind, p.stance) && stanceAllowedInStage(stage, p.kind, p.stance);
