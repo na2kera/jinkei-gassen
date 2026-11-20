@@ -113,6 +113,7 @@ describe('配置と結果の途中で出る', () => {
     B.send({ type: 'ready', army: holdArmy() });
     await B.waitRoom((r) => r.seats[1].ready === true);
     const before = B.room.deadlines.setup;
+    const battleNoBefore = B.room.battleNo;
     expect(B.room.myArmy).not.toBeNull();
     A.send(LEAVE);
     await B.waitRoom((r) => r.phase === 'waiting' && r.opponentLeft === true, 5000, 'waiting');
@@ -122,6 +123,9 @@ describe('配置と結果の途中で出る', () => {
     const r = await B.waitRoom((x) => x.phase === 'setup', 5000, 'setup');
     expect(r.seats[1].ready).toBe(false);
     expect(r.seats[0].ready).toBe(false);
+    // 対戦の番号が進んでいる（公開の前から開いたままの古い画面でも、新しい配置だと分かるように。古い画面は、
+    // 「コード + 番号」が同じだと、前の「完了」を送り直す）
+    expect(r.battleNo).toBe(battleNoBefore + 1);
     expect(r.seats[0].name).toBe('C');
     expect(r.myArmy).toBeNull();
     expect(r.deadlines.setup).toBeGreaterThan(before);
@@ -165,11 +169,14 @@ describe('戦闘の途中で出る', () => {
     A.send(LEAVE);
     await B.waitRoom((x) => x.seats[0]?.left === true, 5000, 'A left');
     await B.waitMsg((m) => m.type === 'result', { ms: 20_000 });
-    const t0 = Date.now();
-    await sleep(800);
-    expect(B.room.phase).toBe('result');
+    // 期限は server が結果に入った時刻から数える。受け取った時刻から測ると、届くのが遅れただけで落ちるので、
+    // server が持っている期限（deadlines.left。同じ機械の時計）と比べる
+    const before = await testRoute(server.base, code, 'state');
     const w = await B.waitRoom((x) => x.phase === 'waiting', 10_000, 'waiting');
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(1300);
+    if (before.phase === 'result') {
+      expect(typeof before.deadlines.left).toBe('number');
+      expect(Date.now()).toBeGreaterThanOrEqual(before.deadlines.left);
+    }
     expect(w.opponentLeft).toBe(true);
     expect(w.seats[0]).toBeNull();
     const st = await testRoute(server.base, code, 'state');
@@ -270,9 +277,13 @@ describe('戦闘の途中で出る', () => {
     A.send(LEAVE);
     await B.waitRoom((x) => x.seats[0]?.left === true, 5000, 'A left');
     await B.waitMsg((m) => m.type === 'result', { ms: 20_000 });
-    const t0 = Date.now();
+    // S8 と同じく、server が持っている期限と比べる。awayMs（0.3秒）はとうに過ぎているので、
+    // 不在の扱いが left の席に当たっていたら、state を読む前に待機へ戻っている
+    const before = await testRoute(server.base, code, 'state');
+    expect(before.phase).toBe('result');
+    expect(typeof before.deadlines.left).toBe('number');
     const w = await B.waitRoom((x) => x.phase === 'waiting', 10_000, 'waiting');
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(1700);
+    expect(Date.now()).toBeGreaterThanOrEqual(before.deadlines.left);
     expect(w.opponentLeft).toBe(true);
     expect((await testRoute(server.base, code, 'state')).counts.skippedPastAlarm).toBe(0);
     B.close();

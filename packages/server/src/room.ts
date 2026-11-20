@@ -807,6 +807,10 @@ export class Room extends DurableObject<Env> {
     const s = this.room;
     if (s === null) return;
     for (const side of SIDES) if (s.seats[side]?.left === true) s.seats[side] = null;
+    // 配置の途中から戻るときは、対戦の番号を進める。client は配置を「コード + 番号」で見分けていて、番号は公開に入るまで増えない。
+    // 進めないと、公開の前から開いたままの古い画面（待機で配置の覚えを捨てない）が、次の相手との配置を前の続きと取り違え、
+    // 前の「完了」を送り直してしまう（結果から戻るときは、公開のときに番号が進んでいるので要らない）
+    if (s.phase === 'setup') s.battleNo += 1;
     s.phase = 'waiting';
     s.score = [0, 0, 0];
     s.lastResult = null;

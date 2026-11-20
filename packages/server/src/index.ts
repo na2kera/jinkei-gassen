@@ -57,13 +57,17 @@ async function withinLimit(limiter: RateLimit, key: string): Promise<boolean> {
   }
 }
 
-/** その pid が、いまその部屋の席にいるか。聞けなかったときは、席にいないものとして扱う（入室の回数に数える側に倒す） */
+/**
+ * その pid が、いまその部屋の席にいるか。聞けなかったときは、席にいるものとして扱う（入室の回数に数えずに通す）。
+ * 数える側に倒すと、入室の上限を使い切っているあいだ、席にいる人のつなぎ直しまで断ってしまう。通しても、
+ * 手前の WS_LIMITER が効いていて、席があるかは部屋が入室のときに決め直す
+ */
 async function seatedIn(stub: DurableObjectStub<Room>, pid: string): Promise<boolean> {
   try {
     return await stub.isSeated(pid);
   } catch (e) {
     console.error('isSeated failed', e);
-    return false;
+    return true;
   }
 }
 
