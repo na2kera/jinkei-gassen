@@ -14,6 +14,7 @@ import { savedRoomCode, saveRoomCode, savePvpArmy } from '../save.ts';
 import { RemoteBattleSource } from './RemoteBattleSource.ts';
 import { failureText, RoomClient } from './RoomClient.ts';
 import { draftMessage, readyMessage, reserveAllowed } from './reserveMessages.ts';
+import { holdWake, releaseWake } from '../wake.ts';
 
 export const client = new RoomClient();
 
@@ -81,6 +82,14 @@ class PvpFlow {
     game.events.on(PRE_STEP, () => this.apply());
     if (!this.unsubscribe) {
       this.unsubscribe = client.subscribe(() => this.route());
+      // 部屋にいるあいだ（status が idle でないあいだ）は画面を消さない（design §9.5、§9.9-7）
+      client.subscribe(() => syncPvpWake());
+      // 画面へ戻ってきたとき、切れていたら待たずにつなぎ直す（design §9.6）
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') client.wake();
+      });
+      window.addEventListener('pageshow', () => client.wake());
+      window.addEventListener('online', () => client.wake());
       client.onError((m) => {
         // 確定が断られたら、確定の望みを取り下げる（送り直し続けないため）
         if (m.reason === 'invalid_army') {
@@ -105,6 +114,9 @@ class PvpFlow {
 
   /** 部屋に入る前（作る・入る）に呼ぶ。以降、room が届くたびに画面を選ぶ */
   begin(): void {
+    // 「部屋を作る」「コードで入る」「前の部屋に戻る」を押した流れの中で、通信の前に頼む（部屋に入ってからでは、
+    // 押した流れから外れて Safari が断る。design §9.9-7）。入れた・失敗した・やめたときに syncPvpWake が外す
+    holdWake('pvp-enter');
     this.active = true;
     this.battleDone = -1;
     this.battleShown = -1;
@@ -343,6 +355,21 @@ class PvpFlow {
 }
 
 export const pvp = new PvpFlow();
+
+/**
+ * 部屋の様子に合わせて、画面を消さない理由を出し入れする。
+ * 先に 'pvp' を入れてから 'pvp-enter' を外す（逆だと理由が一度空になり、見張りを放してしまうため）
+ */
+function syncPvpWake(): void {
+  if (client.status !== 'idle') {
+    holdWake('pvp');
+    releaseWake('pvp-enter');
+    return;
+  }
+  releaseWake('pvp');
+  // 部屋を作っている途中（まだ入室していない）は持ったまま。失敗・やめたときは creating が false に戻る
+  if (!client.creating) releaseWake('pvp-enter');
+}
 
 /** 読み込み直したときに「前の部屋に戻る」を出すか */
 export function resumableCode(): string | null {

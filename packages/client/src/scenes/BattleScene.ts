@@ -50,9 +50,12 @@ import { debug, pushCapped } from '../debug.ts';
 import { battlePanel, battleReserveButtons, CELL, getLayout, LAYOUT_EVENT, tutorialLine, tutorialNext, type Rect } from '../layout.ts';
 import { reserveNoticeAt, summonShown } from '../battle/reserveUi.ts';
 import { pvp } from '../net/pvp.ts';
+import { RemoteBattleSource } from '../net/RemoteBattleSource.ts';
 import { savedView, saveView } from '../save.ts';
 import { session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
+import { addHitObstacle, FIELD_FRAME, padRect } from '../ui/hitRegistry.ts';
+import { holdWake, releaseWake } from '../wake.ts';
 import { ORDER_LABEL, RESERVE_FROM_LABEL, RESERVE_LABEL, TARGET_LABEL, VIEW_LABEL, wingForViewer } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
@@ -173,6 +176,8 @@ export class BattleScene extends Phaser.Scene {
   // 表示物（向きが変わると作り直す）
   private fv!: FieldView;
   private root!: Phaser.GameObjects.Container;
+  /** 戦場の障害物を名簿から外す（design §9.9-3） */
+  private fieldHit: (() => void) | null = null;
   private effects: Effects | null = null;
   private sprites = new Map<number, UnitSprite>();
   private timeText!: Phaser.GameObjects.Text;
@@ -242,6 +247,10 @@ export class BattleScene extends Phaser.Scene {
     this.targetButtons = new Map();
     this.orderButtons = new Map();
     this.reserveButtons = new Map();
+    this.fieldHit = null;
+    // 画面を消さないのは1人用の戦闘のあいだだけ（design §9.5）。シーンを出るとき（結果の画面へ進むときも）外す。
+    // 下の早い戻りの前に受け手を付ける（配置の画面が押した流れで入れた理由を、残さないため）
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => releaseWake('battle'));
 
     const source = this.source;
     if (!source || !this.field) {
@@ -250,6 +259,9 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    // 1人用（対戦の source でない）なら、始まったときにも頼む（配置の画面の「開戦」で入れた理由と同じなので重ならない）。
+    // 対戦は、部屋にいるあいだ pvp.ts が持つ
+    if (!(source instanceof RemoteBattleSource)) holdWake('battle');
     this.build();
     source.onFrame((f) => this.onFrame(f));
     source.onEnd((s) => this.onEnd(s));
@@ -301,6 +313,10 @@ export class BattleScene extends Phaser.Scene {
     // 陣営1の人が見るときは上下左右を返し、自軍がいつも下に映るようにする
     this.fv = centeredFieldView(layout.field, field, this.flip, this.mode);
     this.area = layout.field;
+    // 部隊を押して見る範囲（uiBounds。onDown が受ける所）と枠 4px には、ボタンの押せる範囲を広げない（design §9.9-3）。
+    // 範囲は視点で変わり、rebuild（視点・向き・最初の場面）のたびにここを通るので、外してから入れ直す
+    this.fieldHit?.();
+    this.fieldHit = addHitObstacle(this, padRect(this.fv.uiBounds(this.area), FIELD_FRAME));
     this.root = this.add.container(0, 0);
     const frame = this.add.graphics();
     drawFieldFrame(frame, this.fv, layout.field);

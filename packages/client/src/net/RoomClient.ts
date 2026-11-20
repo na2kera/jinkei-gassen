@@ -57,6 +57,8 @@ const SILENCE_MS = 12000;
 const PING_MS = 4000;
 /** error のあと close が届くのを待つ長さ（ミリ秒） */
 const ERROR_GRACE_MS = 400;
+/** wake() がつないでから、次に wake() でつなぐまでの間（ミリ秒）。visibilitychange・pageshow・online が続けて来ても、つなぐのは1回（design §9.9-10） */
+const WAKE_GAP_MS = 2000;
 
 export class RoomClient {
   status: NetStatus = 'idle';
@@ -94,6 +96,8 @@ export class RoomClient {
   private freshSocket = false;
   private pingTimer = 0;
   private lastHeard = 0;
+  /** 最後に wake() がつなぎ直した時刻（まだなら -Infinity） */
+  private lastWakeAt = Number.NEGATIVE_INFINITY;
   private readonly listeners = new Set<Listener>();
   private readonly snapListeners = new Set<(m: SnapMessage) => void>();
   private readonly errorListeners = new Set<(m: ErrorMessage) => void>();
@@ -218,8 +222,45 @@ export class RoomClient {
   /** 開発用：すぐにつなぎ直す */
   reconnectForDebug(): void {
     if (!this.code) return;
+    this.reconnectNow();
+  }
+
+  /**
+   * 画面へ戻ってきた（visibilitychange・pageshow・online。design §9.6、§9.9-8〜10）。
+   * 部屋に入っていて（code があり room が届いている）、切れていたら、つなぎ直しの待ちを待たずにいますぐつなぐ。
+   *   つなぎ直しを待っている途中・閉じたつながり・最後に届いてから SILENCE_MS を超えた OPEN は、つなぎ直す。
+   *   それ以外の OPEN には ping を1つ送る（応答がなければ、いつもの見張りが切れたとみなす）。
+   * 入室の途中（room がまだ）と、CONNECTING のあいだは何もしない。前に wake() がつないでから WAKE_GAP_MS のうちも何もしない。
+   */
+  wake(): void {
+    if (!this.code || !this.room) return;
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.CONNECTING) return;
+    const now = Date.now();
+    if (now - this.lastWakeAt < WAKE_GAP_MS) return;
+    const stale = this.retryTimer !== 0 || !ws || ws.readyState !== WebSocket.OPEN || now - this.lastHeard > SILENCE_MS;
+    if (!stale) {
+      ws.send('ping');
+      return;
+    }
+    this.lastWakeAt = now;
+    this.reconnectNow();
+  }
+
+  /**
+   * いますぐつなぎ直す。lost() の道（500〜8000ms あとの予約。回数を使い切ると fail('lost')）とは分ける。
+   * 裏にいたあいだの空振りで回数を使い切っていないよう、回数を 0 に戻す。この open() が失敗したら、いつもの lost() の道に戻る
+   */
+  private reconnectNow(): void {
+    this.clearTimer('retry');
+    this.clearTimer('error');
     this.closeSocket();
     this.retry = 0;
+    if (this.status !== 'reconnecting') {
+      // 応答のない OPEN から来たときも、切れて直している最中として見せる（NetOverlay の表示と、押せるボタンを合わせる）
+      this.status = 'reconnecting';
+      this.emit();
+    }
     this.open();
   }
 
@@ -236,13 +277,27 @@ export class RoomClient {
   }
 
   private leaveQuietly(): void {
-    window.clearTimeout(this.retryTimer);
-    window.clearTimeout(this.errorTimer);
+    this.clearTimer('retry');
+    this.clearTimer('error');
     this.closeSocket();
   }
 
+  /** タイマーを止め、番号を 0 に戻す（0 でなければ「待っている」と分かるように。design §9.9-9） */
+  private clearTimer(which: 'retry' | 'error' | 'ping'): void {
+    if (which === 'retry') {
+      window.clearTimeout(this.retryTimer);
+      this.retryTimer = 0;
+    } else if (which === 'error') {
+      window.clearTimeout(this.errorTimer);
+      this.errorTimer = 0;
+    } else {
+      window.clearInterval(this.pingTimer);
+      this.pingTimer = 0;
+    }
+  }
+
   private closeSocket(): void {
-    window.clearInterval(this.pingTimer);
+    this.clearTimer('ping');
     const ws = this.ws;
     this.ws = null;
     if (ws) {
@@ -276,18 +331,19 @@ export class RoomClient {
     ws.onmessage = (ev) => this.onMessage(ev);
     ws.onclose = (ev) => {
       if (this.ws !== ws) return;
-      window.clearTimeout(this.errorTimer);
+      this.clearTimer('error');
       this.closed(ev.code as CloseCode | number);
     };
     ws.onerror = () => {
       // ふつうは続けて close が届き、そのコードでつなぎ直すかを決める。
       // close が届かない環境があるので、少し待っても届かなければ、ふつうの切断としてつなぎ直す
-      window.clearTimeout(this.errorTimer);
+      this.clearTimer('error');
       this.errorTimer = window.setTimeout(() => {
+        this.errorTimer = 0;
         if (this.ws === ws) this.lost();
       }, ERROR_GRACE_MS);
     };
-    window.clearInterval(this.pingTimer);
+    this.clearTimer('ping');
     this.pingTimer = window.setInterval(() => {
       if (this.ws !== ws) return;
       if (Date.now() - this.lastHeard > SILENCE_MS) {
@@ -321,7 +377,7 @@ export class RoomClient {
       return;
     }
     this.closeSocket();
-    window.clearTimeout(this.retryTimer);
+    this.clearTimer('retry');
     this.code = null;
     this.room = null;
     this.status = 'idle';
@@ -350,8 +406,11 @@ export class RoomClient {
     this.retry++;
     this.status = 'reconnecting';
     this.emit();
-    window.clearTimeout(this.retryTimer);
-    this.retryTimer = window.setTimeout(() => this.open(), delay);
+    this.clearTimer('retry');
+    this.retryTimer = window.setTimeout(() => {
+      this.retryTimer = 0;
+      this.open();
+    }, delay);
   }
 
   private onMessage(ev: MessageEvent): void {
@@ -402,7 +461,7 @@ export class RoomClient {
         // 入室の失敗。手元の環境では close が届かないことがあるので、error を受けた時点で失敗として扱う
         if (msg.reason === 'not_found' || msg.reason === 'full') {
           this.closeSocket();
-          window.clearTimeout(this.retryTimer);
+          this.clearTimer('retry');
           this.code = null;
           this.room = null;
           this.status = 'idle';

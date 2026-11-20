@@ -2,6 +2,8 @@
 // 押したボタンの上で離したときだけ反応する。マウスとタッチで同じに動く。
 // 見た目は panel.ts の枠：ふつうは金の線、選んでいる・押しているときは明るい線、押せないときは暗い線。
 // 「開戦」「もう一度」のような大事なボタンは primary にして、金の地で目立たせる。
+// 押せる範囲（Zone）は、シーンの名簿（hitRegistry.ts）に入れ、隣とのすき間の半分まで外へ広げる（design §9.2）。
+// 絵（枠・地・文字）は rect のまま描き、広げるのは Zone だけにする。
 
 import Phaser from 'phaser';
 import { COLOR, css } from '../art/palette.ts';
@@ -9,10 +11,14 @@ import type { Rect } from '../layout.ts';
 import { drawFrame, type FrameStyle } from './panel.ts';
 import { addText, type FontSize } from './text.ts';
 import { checkFit } from './overflow.ts';
+import type { HitGroup } from './hitGrow.ts';
+import { addHitButton } from './hitRegistry.ts';
 
 export interface ButtonOptions {
   size?: FontSize;
   primary?: boolean;
+  /** 押せる範囲の組。重ねて出す箱（方針の箱・陣形の箱）のボタンは 'popup'（design §9.9-4）。既定は 'base' */
+  hitGroup?: HitGroup;
 }
 
 export class Button {
@@ -35,6 +41,8 @@ export class Button {
     this.gfx = scene.add.graphics();
     this.label = addText(scene, 0, 0, text, options.size ?? 16).setOrigin(0.5, 0.5);
     this.zone = scene.add.zone(rect.x, rect.y, rect.w, rect.h).setOrigin(0, 0).setInteractive({ useHandCursor: true });
+    // 名簿から外すのは Zone の destroy の合図で（Container ごと消されたときも外れるように）
+    addHitButton(scene, rect, options.hitGroup ?? 'base', this.zone, text);
     this.zone.on(Phaser.Input.Events.GAMEOBJECT_POINTER_DOWN, () => {
       if (!this.enabled) return;
       this.pressed = true;

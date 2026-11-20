@@ -18,6 +18,7 @@ import { ResultScene } from './scenes/ResultScene.ts';
 import { StageSelectScene } from './scenes/StageSelectScene.ts';
 import { TitleScene } from './scenes/TitleScene.ts';
 import { FONT_FAMILY } from './ui/text.ts';
+import { installWake } from './wake.ts';
 
 function parentSize(): { w: number; h: number } {
   const el = document.getElementById('game');
@@ -29,6 +30,8 @@ async function start(): Promise<void> {
   if (import.meta.env.DEV && installHarness()) return;
   // どの画面でも、最初の操作で音を解禁する（iOS Safari 対策。手本の走れだいごくんと同じ）
   installAudioUnlock();
+  // 戦闘と対戦のあいだ画面を消さない仕組み（design §9.5）。指を離した直後に頼むための受け手を付ける
+  installWake();
   // 前に音を切っていたら、切ったまま始める
   setMuted(savedMuted());
   await document.fonts.load(`16px "${FONT_FAMILY}"`, '陣形合戦');
