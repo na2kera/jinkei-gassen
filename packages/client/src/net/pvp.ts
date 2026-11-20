@@ -257,6 +257,11 @@ class PvpFlow {
     saveRoomCode(r.code);
     switch (r.phase) {
       case 'waiting':
+        // 待機に戻った（相手が出た・不在で席が空いた）。配置の覚え（どの配置の段階か・確定の望み・下書きを送る予約）を捨てる。
+        // 配置の見分けは code#battleNo で、battleNo は公開に入るまで増えないので、「配置 → 待機 → 配置」では同じ鍵のまま
+        // 新しい相手・新しい戦場になる。捨てないと、前の配置の確定の望みが、新しい相手との配置を勝手に確定しうる（design §11.5-1）。
+        // 手元の配置（pvpLocal.placements）は残す（次の配置で置き直し、検査し直して送る）
+        this.resetLocal();
         this.go('Lobby');
         return;
       case 'setup':

@@ -11,6 +11,11 @@ export type Timing = {
   reserveMs: number;
   /** 結果の段階で、切れてからこれだけたった席を空ける（60秒） */
   awayMs: number;
+  /**
+   * 戦闘の途中で自分で出た人（left）の席を、結果に入ってからこれだけたったら空けて待機に戻す（15秒。design §11.2）。
+   * 残った人に結果を見せる間。残った人が「もう一戦」を押せば、待たずに戻す
+   */
+  leftMs: number;
   /** 誰もつながっていない状態がこれだけ続いたら部屋を片付ける（10分） */
   cleanupMs: number;
   /**
@@ -40,6 +45,7 @@ export const DEFAULT_TIMING: Readonly<Timing> = Object.freeze({
   revealMs: 3_000,
   reserveMs: 60_000,
   awayMs: 60_000,
+  leftMs: 15_000,
   cleanupMs: 10 * 60_000,
   watchdogMs: 10_000,
   tickMs: 100,

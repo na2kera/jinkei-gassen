@@ -412,6 +412,12 @@ export class Room extends DurableObject<Env> {
     // 大きいほうのまま（接続は受け付ける）。下げると、古い画面を装って入り直すだけで、相手の遊軍を封じられるため。
     // 本物の利用者が新しい画面から古い画面へ戻ることは起きない。席が空いて別の人が座ったときは、newSeat でその人の cv から始まる
     seat.cv = Math.max(seat.cv, cv);
+    // 自分で出た人が、席が残っているうちに（戦闘中・結果の leftMs の前）同じ pid で入り直した：ふつうの入り直しとして扱い、
+    // 出た印と、その席を空ける期限を消す（design §11.5-2）
+    if (seat.left) {
+      seat.left = false;
+      delete s.deadlines.left;
+    }
     // 1つの席に有効な接続は1つ。古い接続は閉じ、その「切れた」の知らせは接続の番号の違いで無視する
     for (const o of this.openSockets()) {
       if (o.ws !== ws && o.att.seat === side) tx.closes.push({ ws: o.ws, code: 4001, reason: 'replaced by a newer connection' });
@@ -618,10 +624,52 @@ export class Room extends DurableObject<Env> {
       }
       case 'rematch': {
         if (s.phase !== 'result' || msg.battleNo !== s.battleNo) return;
+        // 相手が自分で出ていれば、「2人とも押したか」を見る前に、待たずにその席を空けて待機へ戻す（design §11.5-2）
+        if (s.seats.some((x) => x?.left === true)) {
+          this.toWaiting(true);
+          return;
+        }
         s.rematch[side] = true;
         if (s.rematch[0] && s.rematch[1]) this.startSetup(tx);
         return;
       }
+      case 'leave':
+        this.leave(tx, ws, side);
+        return;
+    }
+  }
+
+  /**
+   * 自分で部屋を出た（design §11.2）。ただ切れたのとは別に扱う。どの段階でも、その接続は server から閉じる（1000）。
+   *   waiting：席を空ける。
+   *   setup・result：席を空けて待機に戻す（不在で席を空けるときと同じ後始末。残った席があれば opponentLeft を立てる）。
+   *   reveal・battle：公開したあとは戦いを最後まで進めるので、席は残して left を立てる（号令が出ないだけ。design §11.5-10）。
+   *     結果に入ったあと、残った人の rematch か leftMs で席を空ける（settle）
+   */
+  private leave(tx: Tx, ws: WebSocket, side: Side): void {
+    const s = this.room;
+    const seat = s?.seats[side] ?? null;
+    if (s === null || seat === null) return;
+    tx.closes.push({ ws, code: 1000, reason: 'left the room' });
+    switch (s.phase) {
+      case 'waiting':
+        s.seats[side] = null;
+        if (s.seats.every((x) => x === null)) s.opponentLeft = false;
+        return;
+      case 'setup':
+      case 'result':
+        s.seats[side] = null;
+        this.toWaiting(true);
+        return;
+      case 'reveal':
+      case 'battle':
+        seat.left = true;
+        seat.conn = null;
+        seat.goneSince = tx.now;
+        return;
+      case 'reserved':
+        // 席に着いた接続は waiting から始まるので、ここには来ない
+        return;
     }
   }
 
@@ -736,6 +784,32 @@ export class Room extends DurableObject<Env> {
     s.deadlines.setup = tx.now + s.timing.setupMs;
     delete s.deadlines.reveal;
     delete s.deadlines.away;
+    delete s.deadlines.left;
+    s.rematch = [false, false];
+    // 新しい相手と（または同じ相手ともう一戦）配置に入った。待機に戻ったわけの知らせは、もう要らない
+    s.opponentLeft = false;
+    for (const seat of s.seats) {
+      if (seat === null) continue;
+      seat.ready = false;
+      seat.draft = null;
+      seat.lastValid = null;
+    }
+  }
+
+  /**
+   * 部屋を待機に戻す、ただ1つの後始末（design §11.5-5）。不在で席を空けたとき・自分で出た人の席を空けたときに使う。
+   * 呼ぶ側が、空ける席を null にしてから呼ぶ。自分で出た席（left）も、ここで一緒に空ける（待機に残すと席が埋まったままになり、
+   * 新しい人が入れないため）。成績・結果・もう一戦・両席の確定と下書き、段階の期限（setup・reveal・away・left）を消す。
+   * 誰もいないときの期限（idle）と次のアラームは、このあとのいつもの settle・commit で決め直す。
+   * byLeave：相手が自分で出たために戻すか。残った席があるときだけ opponentLeft を立てる（不在で戻すときは立てない）
+   */
+  private toWaiting(byLeave: boolean): void {
+    const s = this.room;
+    if (s === null) return;
+    for (const side of SIDES) if (s.seats[side]?.left === true) s.seats[side] = null;
+    s.phase = 'waiting';
+    s.score = [0, 0, 0];
+    s.lastResult = null;
     s.rematch = [false, false];
     for (const seat of s.seats) {
       if (seat === null) continue;
@@ -743,6 +817,11 @@ export class Room extends DurableObject<Env> {
       seat.draft = null;
       seat.lastValid = null;
     }
+    delete s.deadlines.setup;
+    delete s.deadlines.reveal;
+    delete s.deadlines.away;
+    delete s.deadlines.left;
+    s.opponentLeft = byLeave && s.seats.some((x) => x !== null);
   }
 
   /** 既定の編成（PVP_RULES.standardRoster）を横陣で並べる。applyTemplate は戦場の座標で返す */
@@ -989,33 +1068,34 @@ export class Room extends DurableObject<Env> {
       }
     }
     if (s.phase === 'setup' && s.seats[0]?.ready === true && s.seats[1]?.ready === true) this.toReveal(tx);
-    // 不在（design §4.3）：result の間、切れてから awayMs たった席を空ける。2人ともなら片付けに任せる
+    // 自分で出た席（design §11.5-2）：result に入ってから leftMs たったら、その席を空けて待機に戻す（残った人が切れていても行う）
+    if (s.phase === 'result' && s.deadlines.left !== undefined && now >= s.deadlines.left) this.toWaiting(true);
+    // 不在（design §4.3）：result の間、切れてから awayMs たった席を空ける。2人ともなら片付けに任せる。
+    // 自分で出た席（left）は数えない（数えると、退出から awayMs より長く戦闘が続いたとき、決着した瞬間に待機へ戻り、
+    // 結果を見せる leftMs が飛ぶため）
     if (s.phase === 'result') {
       const away = SIDES.filter((side) => {
         const seat = s.seats[side];
-        return seat !== null && seat.conn === null && seat.goneSince !== null && now >= seat.goneSince + s.timing.awayMs;
+        return seat !== null && !seat.left && seat.conn === null && seat.goneSince !== null && now >= seat.goneSince + s.timing.awayMs;
       });
       if (away.length === 1) {
-        const side = away[0] as Side;
-        s.seats[side] = null;
-        s.phase = 'waiting';
-        s.score = [0, 0, 0];
-        s.lastResult = null;
-        s.rematch = [false, false];
-        for (const seat of s.seats) {
-          if (seat === null) continue;
-          seat.ready = false;
-          seat.draft = null;
-          seat.lastValid = null;
-        }
+        s.seats[away[0] as Side] = null;
+        this.toWaiting(false);
       }
+    }
+    // 自分で出た席を空ける期限は、result の間、出た席が1つで、もう1つの席（切れていてもよい）があるときに、まだなければ決める。
+    // 一度決めたら延ばさない（保存するので、作り直されても同じ時刻）。2人とも出た（か、席がない）ときは置かず、片付けに任せる
+    if (s.phase === 'result' && s.deadlines.left === undefined) {
+      const left = s.seats.filter((x) => x?.left === true).length;
+      const stay = s.seats.filter((x) => x !== null && !x.left).length;
+      if (left === 1 && stay === 1) s.deadlines.left = now + s.timing.leftMs;
     }
     // 次の不在の期限は、まだ来ていないものだけ。2人とも過ぎていたら（片付けに任せる場合）、away は残さない
     // （過ぎた期限を残すと、過去の時刻のアラームを入れ直し続けるため）
     let awayAt: number | null = null;
     if (s.phase === 'result') {
       for (const seat of s.seats) {
-        if (seat === null || seat.conn !== null || seat.goneSince === null) continue;
+        if (seat === null || seat.left || seat.conn !== null || seat.goneSince === null) continue;
         const t = seat.goneSince + s.timing.awayMs;
         if (t > now && (awayAt === null || t < awayAt)) awayAt = t;
       }
@@ -1117,13 +1197,14 @@ export class Room extends DurableObject<Env> {
       // 配置と遊軍は、同じ組（最後に検査を通った組）から返す。相手の遊軍は入れない
       myArmy: me?.lastValid ? placementsFor(side, me.lastValid.army, field) : null,
       myReserve: me?.lastValid?.reserve ? { kind: me.lastValid.reserve.kind, stance: me.lastValid.reserve.stance } : null,
+      opponentLeft: s.opponentLeft,
     };
   }
 
   /** 席の見え方。pid と下書きは含めない */
   private seatView(seat: Seat | null): RoomMessage['seats'][number] {
     if (seat === null) return null;
-    return { name: seat.name, connected: seat.conn !== null, ready: seat.ready };
+    return { name: seat.name, connected: seat.conn !== null, ready: seat.ready, left: seat.left };
   }
 
   private revealMsg(side: Side, rec: BattleRecord, field: Field): ServerMessage {

@@ -5,7 +5,7 @@
 // 使われていないコードの Durable Object には何も残らない。
 
 import type { BattleState, BattleSummary, Placement, ReserveSetup } from '@jinkei/engine';
-import type { Timing } from './timing.ts';
+import { DEFAULT_TIMING, type Timing } from './timing.ts';
 
 export type Phase = 'reserved' | 'waiting' | 'setup' | 'reveal' | 'battle' | 'result';
 
@@ -35,6 +35,11 @@ export interface Seat {
   lastValid: Deploy | null;
   /** いまの（最後につないだ）接続の client の版。cv を付けない古い画面は 1 */
   cv: number;
+  /**
+   * 自分で部屋を出た席か（design §11.2）。reveal・battle の途中で leave を受けたときだけ立つ（ほかの段階では席ごと空ける）。
+   * 立っているあいだ conn は null。同じ pid で入り直すと false に戻る。不在（away）の扱いには入れない
+   */
+  left: boolean;
 }
 
 /**
@@ -48,6 +53,11 @@ export interface Deadlines {
   reserve?: number;
   idle?: number;
   away?: number;
+  /**
+   * 自分で出た席（left）を空ける時刻（design §11.5-2）。result に入ったとき、left の席が1つで、もう1つの席があるときだけ、
+   * 「入った時刻 + leftMs」で1度だけ決める（メッセージのたびに延ばさない）
+   */
+  left?: number;
 }
 
 export interface RoomState {
@@ -77,6 +87,11 @@ export interface RoomState {
   testMap: string | null;
   /** テスト専用：戦いの乱数の種を決めておく（本番は常に null か未設定で、毎回乱数）。同じ戦いを部屋をまたいで比べるために使う */
   testSeed?: number | null;
+  /**
+   * 待機に戻ったわけが、相手が自分で出たことか（design §11.2。room.opponentLeft）。leave で待機に戻したときだけ立て、
+   * 新しい相手が席に着いて setup に入るとき・部屋に誰もいなくなったときに戻す
+   */
+  opponentLeft: boolean;
 }
 
 /** 戦闘の状態。部屋の状態とは別の鍵 "battle" に書く（毎刻みは書かないため、design §4.2） */
@@ -115,18 +130,19 @@ export function newRoom(code: string, gen: number, timing: Timing): RoomState {
     lastResult: null,
     timing,
     testMap: null,
+    opponentLeft: false,
   };
 }
 
 export function newSeat(pid: string, name: string, cv = 1): Seat {
-  return { pid, name, conn: null, goneSince: null, ready: false, draft: null, lastValid: null, cv };
+  return { pid, name, conn: null, goneSince: null, ready: false, draft: null, lastValid: null, cv, left: false };
 }
 
 /**
  * アラームに入れる候補の期限のうち、いちばん近いもの。なければ null。
  * その段階でアラームの処理が扱う期限だけを候補にする。扱わない期限が候補に残ると、過ぎたあとも
  * 「過去の時刻のアラーム」を入れ直し続け、すぐ鳴っては何もしない、をくり返すため。
- * - reserve は reserved、setup は setup、reveal は reveal、away は result のときだけ
+ * - reserve は reserved、setup は setup、reveal は reveal、away と left は result のときだけ
  * - idle は battle 以外（戦闘中は片付けない。戦闘は見張りが動かし、終われば result で扱う）
  */
 export function nextDeadline(s: RoomState): number | null {
@@ -135,7 +151,7 @@ export function nextDeadline(s: RoomState): number | null {
   if (s.phase === 'reserved') list.push(d.reserve);
   if (s.phase === 'setup') list.push(d.setup);
   if (s.phase === 'reveal') list.push(d.reveal);
-  if (s.phase === 'result') list.push(d.away);
+  if (s.phase === 'result') list.push(d.away, d.left);
   if (s.phase !== 'battle') list.push(d.idle);
   let t: number | null = null;
   for (const v of list) if (typeof v === 'number' && (t === null || v < t)) t = v;
@@ -158,7 +174,8 @@ export function publicSignature(s: RoomState): string {
     s.battleNo,
     // 下書きは入れない（下書きのたびに相手へ room を送ると、相手が配置を動かしている様子が伝わるため。
     // 自分の下書き（myArmy）は入り直したときの room で届けば足りる）
-    s.seats.map((x) => (x === null ? null : [x.name, x.conn !== null, x.ready])),
+    // left（自分で出た席か）と opponentLeft も外へ見える（入れ忘れると、変わっても画面に届かない。design §11.5-7）
+    s.seats.map((x) => (x === null ? null : [x.name, x.conn !== null, x.ready, x.left])),
     s.score,
     s.map,
     s.deadlines.setup ?? null,
@@ -166,6 +183,7 @@ export function publicSignature(s: RoomState): string {
     s.rematch,
     // 遊軍を使える部屋か（room.rules.reserve）。席の client の版だけで決まり、遊軍の有無には関わらない
     reserveAllowed(s),
+    s.opponentLeft,
   ]);
 }
 
@@ -176,7 +194,9 @@ export function reserveAllowed(s: RoomState): boolean {
 
 /**
  * 保存領域から読んだ部屋の状態を、いまの形にそろえる（その場で書き換える）。
- * 遊軍の前の形（v 2）では、下書きが配置の配列そのままで、席に cv がない。配置は遊軍なしの組に、cv は 1（古い画面）にする
+ * 遊軍の前の形（v 2）では、下書きが配置の配列そのままで、席に cv がない。配置は遊軍なしの組に、cv は 1（古い画面）にする。
+ * 自分で出たことを知らせる前（design §11.5-3）の形では、席の left・部屋の opponentLeft・timing.leftMs がない。
+ * left と opponentLeft は false、leftMs は既定の値にする（ほかの timing の値は保つ。入れないと期限の計算が NaN になる）
  */
 export function normalizeRoom(s: RoomState): RoomState {
   const toDeploy = (v: unknown): Deploy | null => {
@@ -190,7 +210,10 @@ export function normalizeRoom(s: RoomState): RoomState {
     seat.draft = toDeploy(seat.draft);
     seat.lastValid = toDeploy(seat.lastValid);
     if (typeof seat.cv !== 'number') seat.cv = 1;
+    if (typeof seat.left !== 'boolean') seat.left = false;
   }
+  if (typeof s.opponentLeft !== 'boolean') s.opponentLeft = false;
+  if (typeof s.timing.leftMs !== 'number') s.timing.leftMs = DEFAULT_TIMING.leftMs;
   s.v = 3;
   return s;
 }

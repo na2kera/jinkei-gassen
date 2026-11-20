@@ -80,7 +80,17 @@ export type ReserveMessage = { type: 'reserve'; battleNo: number; from: ReserveF
 /** もう一戦（result の間だけ、battleNo が終わった戦いと同じときだけ）。両者がそろうと setup に戻る。 */
 export type RematchMessage = { type: 'rematch'; battleNo: number };
 
-export type ClientMessage = DraftMessage | ReadyMessage | UnreadyMessage | OrderMessage | ReserveMessage | RematchMessage;
+/**
+ * 自分で部屋を出た（design §11.2）。「部屋を出る」などを押したとき、閉じる前に送る。ただ切れたのとは別に扱う。
+ *   waiting：席を空ける。
+ *   setup・result：席を空け、部屋を待機に戻す（成績・結果は消える）。残った人の room の opponentLeft が true になる。
+ *   reveal・battle：席は残し、seats の left を true にする。戦闘は最後まで進み、結果のあと、残った人が rematch を送るか
+ *   15 秒たつと、出た人の席を空けて待機に戻す（opponentLeft が true）。出た人は、それまでなら同じ pid で入り直せる。
+ * どの場合も、server がその接続を閉じる（1000）。知らない古い server は、形の違うメッセージとして捨てる
+ */
+export type LeaveMessage = { type: 'leave' };
+
+export type ClientMessage = DraftMessage | ReadyMessage | UnreadyMessage | OrderMessage | ReserveMessage | RematchMessage | LeaveMessage;
 
 // ---------- server → client ----------
 
@@ -93,6 +103,11 @@ export type SeatView = {
   connected: boolean;
   /** 配置を確定したか（setup の間だけ意味がある） */
   ready: boolean;
+  /**
+   * 自分で部屋を出た席か（design §11.2。戦闘の途中で出たときだけ席が残る。connected は false）。
+   * 古い server は項目を送らないので、ない場合は false として読む
+   */
+  left?: boolean;
 };
 
 /** 対戦の予算（engine の PVP_RULES と同じ）。maxUnits は本陣以外の部隊数の上限 */
@@ -147,6 +162,11 @@ export type RoomMessage = {
    * 古い server は項目を送らないので、ない場合は null として読む。
    */
   myReserve?: ReserveSetup | null;
+  /**
+   * 待機に戻ったわけが、相手が自分で部屋を出たことか（design §11.2）。新しい相手が席に着いて setup に入ると false に戻る。
+   * 古い server は項目を送らないので、ない場合は false として読む
+   */
+  opponentLeft?: boolean;
 };
 
 /** 公開の段階で届く配置。自軍だけ stance が付く */

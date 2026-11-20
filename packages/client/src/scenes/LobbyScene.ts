@@ -12,6 +12,7 @@ import { debug } from '../debug.ts';
 import { getLayout, LAYOUT_EVENT, lobbyLayout } from '../layout.ts';
 import { normalizeName } from '../net/name.ts';
 import { client, lobbyInput, notice, notify, pvp, resumableCode } from '../net/pvp.ts';
+import { lobbyStatusLine } from '../net/pvpText.ts';
 import { markPvpRulesSeen, playerId, pvpRulesSeen, savedName, saveName } from '../save.ts';
 import { Button } from '../ui/Button.ts';
 import { HtmlInput } from '../ui/htmlInput.ts';
@@ -227,7 +228,8 @@ export class LobbyScene extends Phaser.Scene {
   override update(): void {
     // 入力欄の位置は canvas の拡大に合わせる（拡大の決まり直しは resize のあとに来るので、毎フレーム合わせる）
     for (const i of this.inputs) i.place();
-    const text = Date.now() < notice.until ? notice.text : '';
-    if (this.statusText.text !== text) this.statusText.setText(text).setColor(css(notice.error ? COLOR.red : COLOR.muted));
+    // いちばん下の行：生きている知らせ、なければ待機中に相手が自分で出たこと（design §11.5-8）。色は、その文の種類で決める
+    const line = lobbyStatusLine(notice, Date.now(), client.room, pvp.active);
+    if (this.statusText.text !== line.text) this.statusText.setText(line.text).setColor(css(line.error ? COLOR.red : COLOR.muted));
   }
 }

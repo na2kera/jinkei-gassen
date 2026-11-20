@@ -1,4 +1,5 @@
-// 戻ったらすぐつなぎ直す（RoomClient.wake()。design §9.6、§9.9-8〜10。M10・M15）を、
+// 戻ったらすぐつなぎ直す（RoomClient.wake()。design §9.6、§9.9-8〜10。M10・M15）と、
+// 部屋を出るときの「出た」の知らせ（RoomClient.leave()。design §11.2、§11.5-9。C1）を、
 // WebSocket・タイマー・時計を差し替えて、実物の RoomClient で確かめる。
 // node --experimental-strip-types --test で動かす（クライアントにはテストの道具を入れていないため）。
 
@@ -215,4 +216,58 @@ test('M15 2000ms のうちに2回呼んでも、つなぐのは1回。退室の�
   advance(20_000);
   assert.equal(FakeSocket.all.length, n, '退室のあとは何もしない');
   assert.equal(c.status, 'idle');
+});
+
+// ---- C1 部屋を出るときの「出た」（leave）の知らせ ----
+
+function leavesSent(ws: FakeSocket): number {
+  return ws.sent.filter((d) => d !== 'ping' && (JSON.parse(d) as { type: string }).type === 'leave').length;
+}
+
+test('C1 つながっているとき、leave() は leave を1つ送ってから閉じる。2度呼んでも1つ', () => {
+  const c = joined();
+  const ws = last();
+  c.leave();
+  assert.equal(leavesSent(ws), 1);
+  assert.deepEqual(JSON.parse(ws.sent[ws.sent.length - 1]!), { type: 'leave' });
+  assert.equal(ws.readyState, FakeSocket.CLOSED, '送ったあとに閉じた');
+  assert.equal(c.status, 'idle');
+  assert.equal(c.room, null);
+  c.leave();
+  assert.equal(leavesSent(ws), 1, '2度目は送らない');
+  assert.equal(FakeSocket.all.length, 1, 'つなぎ直さない');
+});
+
+test('C1 切れているとき（つなぎ直しを待っている途中）は、送らずに手元を片付ける', () => {
+  const c = joined();
+  const ws = last();
+  ws.serverClose();
+  assert.equal(c.status, 'reconnecting');
+  c.leave();
+  assert.equal(leavesSent(ws), 0);
+  assert.equal(c.status, 'idle');
+  advance(20_000);
+  assert.equal(FakeSocket.all.length, 1, '待っていたつなぎ直しも止まる');
+});
+
+test('C1 つなぎ直し・別の画面に置き換えられた・別の部屋に入り直すときは、leave を送らない', () => {
+  // 応答のない OPEN から、wake() でつなぎ直す
+  let c = joined();
+  let ws = last();
+  clock += 13_000;
+  c.wake();
+  assert.equal(FakeSocket.all.length, 2);
+  assert.equal(leavesSent(ws), 0, 'つなぎ直しでは送らない');
+  // 別の画面で開かれた（4001）
+  c = joined();
+  ws = last();
+  ws.serverClose(4001);
+  assert.equal(c.failure, 'replaced');
+  assert.equal(leavesSent(ws), 0, '置き換えでは送らない');
+  // 別のコードで入り直す（join は leaveQuietly を通る）
+  c = joined();
+  ws = last();
+  c.join('5678', 'pid', '名前');
+  assert.equal(leavesSent(ws), 0, '入り直しでは送らない');
+  assert.equal(ws.readyState, FakeSocket.CLOSED);
 });
