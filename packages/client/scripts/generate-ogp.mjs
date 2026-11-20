@@ -12,9 +12,12 @@ const outputs = {
   banner: new URL('.ogp-alt/banner.png', root),
   field: new URL('.ogp-alt/field.png', root),
   favicon: new URL('public/favicon.png', client),
+  'icon-180': new URL('public/icon-180.png', client),
+  'icon-192': new URL('public/icon-192.png', client),
+  'icon-512': new URL('public/icon-512.png', client),
 };
 // 保存を受け付ける大きさ（幅, 高さ）。favicon だけ 64×64
-const sizes = { favicon: [64, 64] };
+const sizes = { favicon: [64, 64], 'icon-180': [180, 180], 'icon-192': [192, 192], 'icon-512': [512, 512] };
 await mkdir(new URL('.ogp-alt/', root), { recursive: true });
 const saved = new Set();
 const server = createServer(async (req, res) => {
@@ -37,7 +40,7 @@ const server = createServer(async (req, res) => {
       console.log(fileURLToPath(outputs[name]));
       saved.add(name);
       res.end('saved');
-      if (saved.size === 4) server.close();
+      if (saved.size === Object.keys(outputs).length) server.close();
       return;
     }
     const routes = {
@@ -58,5 +61,5 @@ const server = createServer(async (req, res) => {
     res.writeHead(500).end(String(error));
   }
 });
-server.listen(5191, '127.0.0.1', () => console.log('http://127.0.0.1:5191/ を開くと OGP の3案と favicon を保存し、サーバーを停止します。'));
+server.listen(5191, '127.0.0.1', () => console.log('http://127.0.0.1:5191/ を開くと OGP の3案と favicon、ホーム画面用のアイコンを保存し、サーバーを停止します。'));
 server.on('error', (error) => { console.error(error); process.exitCode = 1; });

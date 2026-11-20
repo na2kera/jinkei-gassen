@@ -178,3 +178,19 @@ for (const [name, layout] of Object.entries(layouts)) {
   const response = await fetch('/save/favicon', { method: 'POST', body: png });
   if (!response.ok) throw new Error(await response.text());
 }
+
+// ホーム画面用のアイコン（180・192・512）。端末が角を丸く切るので枠は付けず、地の色の上に本陣だけを置く
+// （絵は中央の 7 割ほどに収める。丸く切られても欠けない）
+for (const size of [180, 192, 512]) {
+  const icon = document.createElement('canvas'); icon.width = size; icon.height = size;
+  const ctx = icon.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  rect(ctx, COLOR.bg, 0, 0, size, size);
+  const image = textures.get(standKey(0, 'general', 1, 0));
+  const scale = Math.max(1, Math.floor((size * 0.7) / Math.max(image.width, image.height)));
+  const w = image.width * scale; const h = image.height * scale;
+  ctx.drawImage(image, Math.floor((size - w) / 2), Math.floor((size - h) / 2), w, h);
+  document.body.append(icon);
+  const png = await new Promise((resolve) => icon.toBlob(resolve, 'image/png'));
+  const response = await fetch(`/save/icon-${size}`, { method: 'POST', body: png });
+  if (!response.ok) throw new Error(await response.text());
+}
