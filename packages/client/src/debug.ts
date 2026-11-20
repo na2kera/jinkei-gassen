@@ -32,8 +32,8 @@ import { runEventDedup } from './net/eventDedup.ts';
 import { overflows, type Overflow } from './ui/overflow.ts';
 import { hitSnapshot, type HitSnapshot } from './ui/hitRegistry.ts';
 import { wakeState, type WakeState } from './wake.ts';
-import { client, pvp, pvpLocal } from './net/pvp.ts';
-import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug, setTutorialDoneForDebug } from './save.ts';
+import { client, lobbyInput, pvp, pvpLocal } from './net/pvp.ts';
+import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, pvpRulesSeen, setPvpRulesSeenForDebug, setStarsForDebug, setTutorialDoneForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
 import { startTutorial, tutorialPaused } from './tutorial/run.ts';
 import type { TutorialAction, TutorialRun } from './tutorial/steps.ts';
@@ -74,6 +74,9 @@ interface DebugHooks {
   tutorialAct: ((a: TutorialAction) => boolean) | null;
   /** チュートリアルの「飛ばす」と同じ */
   tutorialSkip: (() => void) | null;
+  /** ロビーのルール説明を出す・「閉じる」（design §10.6。画面のボタンと同じ道筋） */
+  rulesOpen: (() => void) | null;
+  rulesClose: (() => void) | null;
 }
 
 export const debug: DebugHooks = {
@@ -99,6 +102,8 @@ export const debug: DebugHooks = {
   arrows: [],
   tutorialAct: null,
   tutorialSkip: null,
+  rulesOpen: null,
+  rulesClose: null,
 };
 
 export function pushCapped<T>(arr: T[], v: T, cap: number): void {
@@ -475,6 +480,25 @@ export function installDebug(game: Phaser.Game): void {
     /** 済みの印を付ける・外す */
     setTutorialDone(v: boolean): void {
       setTutorialDoneForDebug(v);
+    },
+    /** ロビーのルール説明（design §10.6）：開いているか・見たか */
+    get rules(): { open: boolean; seen: boolean } {
+      return { open: lobbyInput.rulesOpen, seen: pvpRulesSeen() };
+    },
+    /** ロビーの「ルール」と同じ（ロビーでなければ false） */
+    rulesOpen(): boolean {
+      if (!debug.rulesOpen) return false;
+      debug.rulesOpen();
+      return true;
+    },
+    /** ダイアログの「閉じる」と同じ（ロビーでなければ false） */
+    rulesClose(): boolean {
+      if (!debug.rulesClose) return false;
+      debug.rulesClose();
+      return true;
+    },
+    setPvpRulesSeen(v: boolean): void {
+      setPvpRulesSeenForDebug(v);
     },
   };
   (window as unknown as { __jg: typeof api }).__jg = api;

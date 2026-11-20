@@ -42,7 +42,11 @@ export function setupKey(room: { code: string; battleNo: number }): string {
   return `${room.code}#${room.battleNo}`;
 }
 
-export const lobbyInput = { code: '' };
+export const lobbyInput: {
+  code: string;
+  /** ルール説明のダイアログが開いているか（design §10.5）。ロビーを出たら（タイトル・配置の画面へ）false に戻す */
+  rulesOpen: boolean;
+} = { code: '', rulesOpen: false };
 
 /** 画面に短く出す知らせ（NetOverlay と部屋の画面が出す） */
 export const notice: { text: string; until: number; error: boolean } = { text: '', until: 0, error: true };
@@ -342,6 +346,9 @@ class PvpFlow {
     const want = this.want;
     if (!game || !want) return;
     this.want = null;
+    // ロビーから別の画面へ移るなら、ルール説明は閉じたことにする（「見た」とは覚えない。次にロビーを開いたら、まだ見ていなければまた出る）。
+    // ロビーのシーンの終わりでは戻さない（向きが変わって作り直すときも通り、開き直せなくなるため）
+    if (want.key !== 'Lobby') lobbyInput.rulesOpen = false;
     // 重ねる表示（NetOverlay）以外で、動いている・始まりかけの画面をすべて止めてから、行き先を1回だけ始める。
     // フレームの外なので、stop と start は待ち行列に積まれず、その場で行われる
     for (const s of game.scene.getScenes(false)) {

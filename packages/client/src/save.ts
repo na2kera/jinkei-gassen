@@ -116,6 +116,24 @@ export function setTutorialDoneForDebug(v: boolean): void {
   write();
 }
 
+/** 対戦のルール説明を見たか（design §10.2） */
+export function pvpRulesSeen(): boolean {
+  return loadSave().pvpRulesSeen;
+}
+
+/** ルール説明を見た印を付ける（ダイアログを「閉じる」で閉じたとき）。もう付いていれば書き込まない */
+export function markPvpRulesSeen(): void {
+  if (loadSave().pvpRulesSeen) return;
+  loadSave().pvpRulesSeen = true;
+  write();
+}
+
+/** 開発用：見た印を付ける・外す */
+export function setPvpRulesSeenForDebug(v: boolean): void {
+  loadSave().pvpRulesSeen = v;
+  write();
+}
+
 /** 開発用：記録を消す */
 export function clearSave(): void {
   cache = emptySave();

@@ -39,6 +39,11 @@ export interface SaveData {
    * チュートリアルの前の保存にはないので、ないときは星が1つでもあれば済みとして読む（v は上げない）
    */
   tutorialDone: boolean;
+  /**
+   * 対戦のルール説明を見たか（design §10.2）。ロビーのダイアログを「閉じる」で閉じると付く。
+   * ない保存・真偽でない値は false として読む（前から遊んでいる人にも、1度は出すため。v は上げない）
+   */
+  pvpRulesSeen: boolean;
 }
 
 /**
@@ -57,7 +62,7 @@ export interface SavedFormation {
 export const MAX_FORMATIONS = 8;
 
 export function emptySave(): SaveData {
-  return { v: 1, stars: {}, placements: {}, reserves: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], pvpReserve: null, formations: [], view: 'top', tutorialDone: false };
+  return { v: 1, stars: {}, placements: {}, reserves: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], pvpReserve: null, formations: [], view: 'top', tutorialDone: false, pvpRulesSeen: false };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -134,5 +139,6 @@ export function sanitizeSave(raw: unknown): SaveData {
   data.pvpReserve = cleanReserve(raw.pvpReserve);
   // 済みの印は、星を掃除したあとで決める（design §8.10-6）。真偽値ならその値、そうでなければ、掃除したあとの星に 1 以上があれば済み
   data.tutorialDone = typeof raw.tutorialDone === 'boolean' ? raw.tutorialDone : Object.values(data.stars).some((n) => n >= 1);
+  data.pvpRulesSeen = raw.pvpRulesSeen === true;
   return data;
 }

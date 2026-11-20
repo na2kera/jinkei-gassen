@@ -78,16 +78,14 @@ test('U7 チュートリアルの前・あいだ・あとで、面の一覧を�
     next: STAGES.map((s) => ses.nextStage(s.id)?.id ?? null),
     unlocked: STAGES.map((s) => ses.isUnlocked(s)),
     chapters: ses.chapters(),
-    pvp: ses.pvpUnlocked(),
   });
   const want = answers();
-  // チュートリアルを足す前の答え（STAGES の15面、章 1〜3、1-1〜1-3 が開いている、対戦は閉じている）
+  // チュートリアルを足す前の答え（STAGES の15面、章 1〜3、1-1〜1-3 が開いている。対戦が開く条件は 2026-11-20 にやめたので見ない。design §10.1）
   assert.deepEqual(want, {
     ordered: ['1-1', '1-2', '1-3', '1-4', '1-5', '2-1', '2-2', '2-3', '2-4', '2-5', '3-1', '3-2', '3-3', '3-4', '3-5'],
     next: ['1-2', '1-3', '1-4', '1-5', '2-1', '2-2', '2-3', '2-4', '2-5', '3-1', '3-2', '3-3', '3-4', '3-5', null],
     unlocked: [true, true, true, false, false, false, false, false, false, false, false, false, false, false, false],
     chapters: [1, 2, 3],
-    pvp: false,
   });
   assert.equal(ses.nextStage('tutorial'), null);
   assert.equal(ses.stageById('tutorial')?.name, '遊び方');
