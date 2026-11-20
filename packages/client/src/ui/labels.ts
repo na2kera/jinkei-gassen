@@ -34,6 +34,14 @@ export const TARGET_LABEL: Record<OrderTarget, string> = {
   right: '右翼',
 };
 
+/**
+ * 画面に出す百分率。時間切れの比べ方と同じく、小数点以下を四捨五入する（assumptions S7）。
+ * 1人用と対戦の結果の画面で使う。Phaser を読まない所に置き、文を決める関数を画面なしで試せるようにする
+ */
+export function percent(ratio: number): string {
+  return `${Math.round(ratio * 100)}%`;
+}
+
 export const WING_LABEL: Record<Wing, string> = {
   left: '左翼',
   center: '中央',

@@ -5,15 +5,15 @@
 
 import type { Side } from '@jinkei/engine';
 import Phaser from 'phaser';
-import { remainingShown } from '../battle/reserveUi.ts';
 import { COLOR } from '../art/palette.ts';
 import { debug } from '../debug.ts';
 import { getLayout, LAYOUT_EVENT, resultLayout, type Rect } from '../layout.ts';
 import { client, pvp } from '../net/pvp.ts';
+import { pvpRemainingText } from '../net/pvpText.ts';
 import { Button } from '../ui/Button.ts';
 import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
-import { percent, reasonOf, titleOf, unitName } from './ResultScene.ts';
+import { reasonOf, titleOf, unitName } from './ResultScene.ts';
 
 /** 通算成績（自分から見た勝ち・負け・引き分け） */
 function scoreText(score: [number, number, number], you: Side): string {
@@ -88,7 +88,8 @@ export class PvpResultScene extends Phaser.Scene {
     center(r.review + 40, `敵軍 ${unitName(s.firstBroken[enemy], units, you)}`);
     center(r.review + 68, '一番崩した', 16, COLOR.muted);
     center(r.review + 88, unitName(best ? best.id : null, units, you));
-    center(r.review + 116, `残った兵 自軍${percent(remainingShown(s, you))} 敵軍${percent(remainingShown(s, enemy))}`);
+    // 勝ち負けを決める数え方で出す（2人の画面で同じ数字になる。design §11.3）
+    center(r.review + 116, pvpRemainingText(s, you));
     const b1 = rematchRect(r.buttons);
     if (b1) this.rematchButton = new Button(this, b1, 'もう一戦', () => this.rematch(), { primary: true });
   }
