@@ -162,3 +162,19 @@ for (const [name, layout] of Object.entries(layouts)) {
   const response = await fetch(`/save/${name}`, { method: 'POST', body: png });
   if (!response.ok) throw new Error(await response.text());
 }
+
+// favicon（64×64）。画面の地の色の上に、藍の本陣の立ち姿を整数倍で置き、金の枠で囲む
+{
+  const icon = document.createElement('canvas'); icon.width = 64; icon.height = 64;
+  const ctx = icon.getContext('2d'); ctx.imageSmoothingEnabled = false;
+  rect(ctx, COLOR.gold, 0, 0, 64, 64);
+  rect(ctx, COLOR.bg, 4, 4, 56, 56);
+  const image = textures.get(standKey(0, 'general', 1, 0));
+  const scale = Math.max(1, Math.floor(48 / Math.max(image.width, image.height)));
+  const w = image.width * scale; const h = image.height * scale;
+  ctx.drawImage(image, Math.floor((64 - w) / 2), Math.floor((64 - h) / 2), w, h);
+  document.body.append(icon);
+  const png = await new Promise((resolve) => icon.toBlob(resolve, 'image/png'));
+  const response = await fetch('/save/favicon', { method: 'POST', body: png });
+  if (!response.ok) throw new Error(await response.text());
+}

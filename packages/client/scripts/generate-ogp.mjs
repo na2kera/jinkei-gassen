@@ -11,7 +11,10 @@ const outputs = {
   selected: new URL('public/ogp.png', client),
   banner: new URL('.ogp-alt/banner.png', root),
   field: new URL('.ogp-alt/field.png', root),
+  favicon: new URL('public/favicon.png', client),
 };
+// 保存を受け付ける大きさ（幅, 高さ）。favicon だけ 64×64
+const sizes = { favicon: [64, 64] };
 await mkdir(new URL('.ogp-alt/', root), { recursive: true });
 const saved = new Set();
 const server = createServer(async (req, res) => {
@@ -27,14 +30,14 @@ const server = createServer(async (req, res) => {
         chunks.push(chunk);
       }
       const png = Buffer.concat(chunks);
-      if (png.toString('hex', 0, 8) !== '89504e470d0a1a0a' || png.readUInt32BE(16) !== 1200 || png.readUInt32BE(20) !== 630) {
-        throw new Error('1200×630 の PNG ではありません');
+      if (png.toString('hex', 0, 8) !== '89504e470d0a1a0a' || png.readUInt32BE(16) !== (sizes[name]?.[0] ?? 1200) || png.readUInt32BE(20) !== (sizes[name]?.[1] ?? 630)) {
+        throw new Error('決めた大きさの PNG ではありません');
       }
       await writeFile(outputs[name], png);
       console.log(fileURLToPath(outputs[name]));
       saved.add(name);
       res.end('saved');
-      if (saved.size === 3) server.close();
+      if (saved.size === 4) server.close();
       return;
     }
     const routes = {
@@ -55,5 +58,5 @@ const server = createServer(async (req, res) => {
     res.writeHead(500).end(String(error));
   }
 });
-server.listen(5191, '127.0.0.1', () => console.log('http://127.0.0.1:5191/ を開くと3案を保存し、サーバーを停止します。'));
+server.listen(5191, '127.0.0.1', () => console.log('http://127.0.0.1:5191/ を開くと OGP の3案と favicon を保存し、サーバーを停止します。'));
 server.on('error', (error) => { console.error(error); process.exitCode = 1; });
