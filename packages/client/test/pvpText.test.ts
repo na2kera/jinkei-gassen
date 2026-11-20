@@ -42,11 +42,11 @@ test('C2 相手の印：left なら「相手 退出」、切れているだけ�
 test('ロビーのいちばん下の行：生きている知らせ → 待機中の「相手が部屋を出ました」→ 空 の順で決める', () => {
   const none = { text: '', until: 0, error: true };
   const waitingLeft = { phase: 'waiting' as const, opponentLeft: true };
-  assert.deepEqual(lobbyStatusLine(none, 1000, waitingLeft, true), { text: '相手が部屋を出ました', error: true });
+  assert.deepEqual(lobbyStatusLine(none, 1000, waitingLeft, true), { text: '相手が部屋を出ました', error: false });
   // 失敗の文などの知らせが生きているあいだは、そちらを先に出す。消えたら退出の文に戻る
   const fail = { text: '部屋が満員です', until: 2000, error: true };
   assert.deepEqual(lobbyStatusLine(fail, 1000, waitingLeft, true), { text: '部屋が満員です', error: true });
-  assert.deepEqual(lobbyStatusLine(fail, 2000, waitingLeft, true), { text: '相手が部屋を出ました', error: true });
+  assert.deepEqual(lobbyStatusLine(fail, 2000, waitingLeft, true), { text: '相手が部屋を出ました', error: false });
   const copied = { text: '写しました', until: 2000, error: false };
   assert.deepEqual(lobbyStatusLine(copied, 1000, waitingLeft, true), { text: '写しました', error: false });
   // 相手が出たわけでない・古い server（項目なし）・自分が部屋を出たあと（room なし・active でない）は出さない

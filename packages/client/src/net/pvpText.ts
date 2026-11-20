@@ -37,7 +37,8 @@ export function lobbyStatusLine(
   active: boolean,
 ): { text: string; error: boolean } {
   if (now < notice.until) return { text: notice.text, error: notice.error };
-  if (active && room && room.phase === 'waiting' && room.opponentLeft === true) return { text: OPPONENT_LEFT_NOTICE, error: true };
+  // 失敗ではなく知らせなので、失敗の色（赤）ではなく「写しました」と同じ色で出す
+  if (active && room && room.phase === 'waiting' && room.opponentLeft === true) return { text: OPPONENT_LEFT_NOTICE, error: false };
   return { text: '', error: true };
 }
 
