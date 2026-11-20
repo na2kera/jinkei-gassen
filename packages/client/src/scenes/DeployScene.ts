@@ -703,7 +703,8 @@ export class DeployScene extends Phaser.Scene {
    */
   private beginPvpSetup(): void {
     const room = client.room;
-    if (!room || pvpLocal.setupFor === setupKey(room)) return;
+    // 配置の段階の room だけで始める（待機の room で印を付けると、待機に戻ったときに捨てた印を付け直してしまう。design §11.5-1）
+    if (!room || room.phase !== 'setup' || pvpLocal.setupFor === setupKey(room)) return;
     pvpLocal.setupFor = setupKey(room);
     const fromServer = room.myArmy !== null && room.myArmy.length > 0;
     // 配置と遊軍は一組で選ぶ（サーバーの配置に手元の遊軍を付ける、のように混ぜない。design §7.7）

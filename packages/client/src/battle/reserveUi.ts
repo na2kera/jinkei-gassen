@@ -38,7 +38,8 @@ export function reserveNoticeAt(fv: FieldView, area: Rect, x: number, y: number,
 
 /**
  * 結果の画面の「残った兵」に出す割合（design §7.5）。星と食い違わないよう remainingForStars（呼ばなかった遊軍を
- * 無傷で残ったものとして数える）を使う。遊軍の前の形の振り返り（項目がない・数でない）では remaining を使う
+ * 無傷で残ったものとして数える）を使う。遊軍の前の形の振り返り（項目がない・数でない）では remaining を使う。
+ * 1人用の結果の画面（ResultScene）のためのもの。対戦の結果は勝ち負けの数え方（remaining）で出すので、ここは呼ばない（design §11.3）
  */
 export function remainingShown(s: { remaining: [number, number]; remainingForStars?: [number, number] }, side: 0 | 1): number {
   const v: unknown = s.remainingForStars?.[side];

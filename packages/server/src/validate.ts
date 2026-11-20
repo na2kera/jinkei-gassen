@@ -109,6 +109,8 @@ export function parseClientMessage(raw: string | ArrayBuffer): ClientMessage | n
     case 'rematch':
       if (!onlyKeys(v, ['type', 'battleNo']) || !isBattleNo(v['battleNo'])) return null;
       return { type: 'rematch', battleNo: v['battleNo'] };
+    case 'leave':
+      return onlyKeys(v, ['type']) ? { type: 'leave' } : null;
     default:
       return null;
   }

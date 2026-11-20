@@ -5,6 +5,7 @@ import Phaser from 'phaser';
 import { COLOR } from '../art/palette.ts';
 import { getLayout } from '../layout.ts';
 import { client, notice, pvp } from '../net/pvp.ts';
+import { opponentMark } from '../net/pvpText.ts';
 import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
 
@@ -50,11 +51,9 @@ export class NetOverlayScene extends Phaser.Scene {
         this.text.setPosition(Math.round(r.x + w / 2), r.y + 16);
       }
     }
-    // 戦場の左上：相手が切れているときの小さな印
-    const room = client.room;
-    const other = room ? room.seats[room.you === 0 ? 1 : 0] : null;
-    const away = pvp.active && !!room && room.phase !== 'waiting' && !!other && !other.connected;
-    const mark = away ? '相手 切断' : '';
+    // 戦場の左上：相手が切れているときの小さな印（自分で出たなら「相手 退出」、ただ切れたなら「相手 切断」。design §11.2）
+    const mark = opponentMark(client.room, pvp.active);
+    const away = mark !== '';
     const where = this.scene.isActive('PvpResult') ? 'r' : 'f';
     if (mark + where !== this.lastMark) {
       this.lastMark = mark + where;

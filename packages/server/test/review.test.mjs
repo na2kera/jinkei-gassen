@@ -1,7 +1,22 @@
 // 境目のテスト：両者の不在のあとのアラーム、各段階での作り直し、決まりを破った接続、部屋の世代、書き込みの回数、回数の上限。
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client, createRoom, holdArmy, loneArcherArmy, postRoom, shieldWallArmy, randomPid, setupPair, sleep, startServer, testRoute, upgradeStatus } from './helpers.mjs';
+import {
+  Client,
+  createRoom,
+  freshWindow,
+  holdArmy,
+  inOneWindow,
+  loneArcherArmy,
+  postRoom,
+  shieldWallArmy,
+  randomPid,
+  setupPair,
+  sleep,
+  startServer,
+  testRoute,
+  upgradeStatus,
+} from './helpers.mjs';
 
 let server;
 beforeAll(async () => {
@@ -237,20 +252,25 @@ describe('書き込みの回数', () => {
 });
 
 describe('回数の上限（送信元ごと）', () => {
-  it('部屋の作成は1分に10回、入室の試みは1分に30回まで。超えたら 429', async () => {
-    const key = 'limit-test';
-    const statuses = [];
-    for (let i = 0; i < 11; i++) statuses.push((await postRoom(server.base, { pid: randomPid() }, { rlKey: key })).status);
-    expect(statuses.slice(0, 10).every((s) => s === 201)).toBe(true);
-    expect(statuses[10]).toBe(429);
-    // 別の送信元は数えない
-    expect((await postRoom(server.base, { pid: randomPid() })).status).toBe(201);
-    const joins = [];
-    for (let i = 0; i < 31; i++) joins.push(await upgradeStatus(server.base, `/api/rooms/0000/ws?pid=${randomPid()}&name=x`, { 'X-Test-Rl-Key': key }));
-    expect(joins.slice(0, 30).every((s) => s === 101)).toBe(true);
-    expect(joins[30]).toBe(429);
-    // 形の違うコードの試みも数える
-    expect(await upgradeStatus(server.base, `/api/rooms/abcd/ws?pid=${randomPid()}&name=x`, { 'X-Test-Rl-Key': key })).toBe(429);
+  // S3・S2（design §11.4）。いまの数字（作成 60、席にいない人の入室 120）で。1分の窓をまたいだら、新しい鍵で1度だけやり直す
+  it('部屋の作成は1分に60回、席にいない人の入室の試みは1分に120回まで。超えたら 429', async () => {
+    await inOneWindow(async (key) => {
+      const statuses = [];
+      for (let i = 0; i < 61; i++) statuses.push((await postRoom(server.base, { pid: randomPid() }, { rlKey: key })).status);
+      expect(statuses.slice(0, 60).every((s) => s === 201)).toBe(true);
+      expect(statuses[60]).toBe(429);
+      // 別の送信元は数えない
+      expect((await postRoom(server.base, { pid: randomPid() })).status).toBe(201);
+    });
+    await inOneWindow(async (key) => {
+      // ない部屋（0000）への入室。席にいない人なので、どれも数える
+      const joins = [];
+      for (let i = 0; i < 121; i++) joins.push(await upgradeStatus(server.base, `/api/rooms/0000/ws?pid=${randomPid()}&name=x`, { 'X-Test-Rl-Key': key }));
+      expect(joins.slice(0, 120).every((s) => s === 101)).toBe(true);
+      expect(joins[120]).toBe(429);
+      // 形の違うコードの試みも数える
+      expect(await upgradeStatus(server.base, `/api/rooms/abcd/ws?pid=${randomPid()}&name=x`, { 'X-Test-Rl-Key': key })).toBe(429);
+    });
   });
 });
 
@@ -258,17 +278,19 @@ describe('テスト用のフラグなし（本番と同じ設定）', () => {
   it('テスト用の経路と秒数の差し替えは 404・400 になり、回数の上限は送信元の IP で効く', async () => {
     const prod = await startServer({ port: 8816, testMode: false });
     try {
-      for (const name of ['alarm', 'abort', 'state']) {
+      for (const name of ['alarm', 'abort', 'state', 'step?n=1', 'seated?pid=' + randomPid()]) {
         const r = await fetch(`${prod.base}/api/rooms/1234/test/${name}`, { method: 'POST' });
         expect(r.status).toBe(404);
       }
+      // 鍵を差し替えられないので、窓をまたぐと数え直しに当たる。窓の残りが少なければ、次の窓まで待ってから数える
+      await freshWindow(20_000);
       expect((await postRoom(prod.base, { pid: randomPid(), timing: { setupMs: 100 } })).status).toBe(400);
       expect((await postRoom(prod.base, { pid: randomPid(), codes: ['1234'] })).status).toBe(400);
       // 鍵の差し替え（X-Test-Rl-Key）は効かず、同じ送信元として数えられる。上の2回（400）も数に入る
       const statuses = [];
-      for (let i = 0; i < 9; i++) statuses.push((await postRoom(prod.base, { pid: randomPid() })).status);
-      expect(statuses.slice(0, 8).every((s) => s === 201)).toBe(true);
-      expect(statuses[8]).toBe(429);
+      for (let i = 0; i < 59; i++) statuses.push((await postRoom(prod.base, { pid: randomPid() })).status);
+      expect(statuses.slice(0, 58).every((s) => s === 201)).toBe(true);
+      expect(statuses[58]).toBe(429);
     } finally {
       await prod.stop();
     }

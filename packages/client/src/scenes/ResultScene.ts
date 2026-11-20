@@ -12,7 +12,7 @@ import { getLayout, LAYOUT_EVENT, resultLayout } from '../layout.ts';
 import { recordStars } from '../save.ts';
 import { nextStage, session, stageById } from '../session.ts';
 import { Button } from '../ui/Button.ts';
-import { KIND_LABEL, WING_LABEL, wingForViewer } from '../ui/labels.ts';
+import { KIND_LABEL, percent, WING_LABEL, wingForViewer } from '../ui/labels.ts';
 import { drawBox } from '../ui/panel.ts';
 import { addText } from '../ui/text.ts';
 
@@ -43,11 +43,6 @@ export function reasonOf(s: BattleSummary, viewer: Side, survive = false): strin
     default:
       return '';
   }
-}
-
-/** 画面に出す百分率。時間切れの比べ方と同じく、小数点以下を四捨五入する（assumptions S7） */
-export function percent(ratio: number): string {
-  return `${Math.round(ratio * 100)}%`;
 }
 
 /**

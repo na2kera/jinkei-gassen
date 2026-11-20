@@ -4,8 +4,11 @@
 //   POST /api/rooms              部屋を作る。本文 { pid } → 201 { code }。コードが取れなければ 503 { error: 'busy' }
 //   GET  /api/rooms/:code/ws     WebSocket（?pid=…&name=…）。部屋がない・満員は、つないだあと error を送って閉じる
 //
-// 送信元（IP）ごとに、部屋の作成は1分に10回、入室の試みは1分に30回まで（wrangler.jsonc の ratelimits）。超えたら 429。
+// 送信元（IP）ごとに、部屋の作成は1分に60回、席にいない人の入室の試みは1分に120回、ws の頼みは全部で1分に600回まで
+// （wrangler.jsonc の ratelimits）。超えたら 429。
 // 4桁のコードの総当たりで友達より先に空席を取られることと、作成の連打で予約と Durable Object の呼び出しを起こされることを抑える。
+// すでにその部屋の席にいる人のつなぎ直しは、入室の回数に数えない（会場の Wi-Fi が一瞬切れて、同じ送信元の全員が一斉に
+// つなぎ直しても締め出されないように。decisions §20、design §11.1）。席にいるかは部屋（Durable Object）に聞く。
 //
 // テストのときだけ（開発サーバーに --var JINKEI_TEST_MODE:1 を渡したとき）:
 //   POST /api/rooms の本文に { timing: {...} } を付けて秒数を差し替え、{ codes: [...] } で試すコードの順を、{ map } で戦場を、
@@ -14,6 +17,7 @@
 //   POST /api/rooms/:code/test/abort     Durable Object を作り直させる（再開の確認）
 //   POST /api/rooms/:code/test/state     保存した段階・成績・刻みと、インスタンスの識別子を返す
 //   POST /api/rooms/:code/test/step?n=…  刻みを n 回進める（timing.testManualTicks が 1 の部屋だけ）。{ tick } を返す
+//   POST /api/rooms/:code/test/seated?pid=…  部屋の isSeated(pid) の答えを { seated } で返す（何も書き換えないことの確認）
 //   回数の上限の鍵を、見出し X-Test-Rl-Key か、入室の ?rlkey= で差し替える（テストごとに別の送信元として数えるため）
 
 import { DEFAULT_TIMING, parseTimingOverride, type Timing } from './timing.ts';
@@ -21,6 +25,7 @@ import type { CreateRoomResponse } from './protocol.ts';
 import { originAllowed } from './origin.ts';
 import { isPid, isRoomCode, normalizeName } from './validate.ts';
 import { isMapId } from './maps.ts';
+import type { Room } from './room.ts';
 
 export { Room } from './room.ts';
 
@@ -48,6 +53,20 @@ async function withinLimit(limiter: RateLimit, key: string): Promise<boolean> {
     return (await limiter.limit({ key })).success;
   } catch (e) {
     console.error('rate limiter failed', e);
+    return true;
+  }
+}
+
+/**
+ * その pid が、いまその部屋の席にいるか。聞けなかったときは、席にいるものとして扱う（入室の回数に数えずに通す）。
+ * 数える側に倒すと、入室の上限を使い切っているあいだ、席にいる人のつなぎ直しまで断ってしまう。通しても、
+ * 手前の WS_LIMITER が効いていて、席があるかは部屋が入室のときに決め直す
+ */
+async function seatedIn(stub: DurableObjectStub<Room>, pid: string): Promise<boolean> {
+  try {
+    return await stub.isSeated(pid);
+  } catch (e) {
+    console.error('isSeated failed', e);
     return true;
   }
 }
@@ -145,6 +164,34 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   return json({ error: 'busy' }, 503);
 }
 
+/**
+ * 入室（GET /api/rooms/:code/ws）。順番（design §11.1・§11.5-6）：
+ *   Origin → WS_LIMITER（すべての ws の頼み）→ コードの形（違えば JOIN_LIMITER で数えてから 404）→ Upgrade → pid と名前の形
+ *   → 部屋に「席にいるか」を聞く → 席にいなければ JOIN_LIMITER → 部屋へ渡す。
+ * WS_LIMITER を先に置くのは、席にいるかを聞くこと自体が部屋（Durable Object）を起こすため（総当たりで起こせる部屋を1分に600までにする）。
+ * 2つの上限は同じ鍵（limitKey）で数える
+ */
+async function joinRoom(request: Request, url: URL, env: Env, code: string): Promise<Response> {
+  if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
+  if (!originAllowed(request.headers.get('Origin'), url)) return json({ error: 'forbidden origin' }, 403);
+  const key = limitKey(request, url, env);
+  if (!(await withinLimit(env.WS_LIMITER, key))) return json({ error: 'rate_limited' }, 429);
+  // 形の違うコードの試みも、入室の回数に数える（総当たりを抑えるため。いままでどおり、上限を超えていれば 404 より先に 429）
+  if (!isRoomCode(code)) {
+    if (!(await withinLimit(env.JOIN_LIMITER, key))) return json({ error: 'rate_limited' }, 429);
+    return json({ error: 'room not found' }, 404);
+  }
+  // WebSocket でない頼みは、部屋に聞く前に断る（部屋を起こさない）
+  if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'expected websocket' }, 426);
+  const pid = url.searchParams.get('pid');
+  if (!isPid(pid) || normalizeName(url.searchParams.get('name')) === null) return json({ error: 'bad pid or name' }, 400);
+  const stub = env.ROOM.getByName(code);
+  // 席にいる人のつなぎ直しは数えない。聞いてから入るまでのあいだに席を失った人が、数えられずに入り直すことはあるが許す
+  // （席は入室のときに決め直すので、満員の席は奪えない。design §11.5-6）
+  if (!(await seatedIn(stub, pid)) && !(await withinLimit(env.JOIN_LIMITER, key))) return json({ error: 'rate_limited' }, 429);
+  return await stub.fetch(request);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
@@ -156,24 +203,12 @@ export default {
         if (!(await withinLimit(env.CREATE_LIMITER, limitKey(request, url, env)))) return json({ error: 'rate_limited' }, 429);
         return await createRoom(request, env);
       }
-      const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state|test\/step)$/.exec(path);
+      const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state|test\/step|test\/seated)$/.exec(path);
       if (m !== null) {
         const code = m[1] ?? '';
-        if (m[2] === 'ws') {
-          if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
-          if (!originAllowed(request.headers.get('Origin'), url)) return json({ error: 'forbidden origin' }, 403);
-          // 形の違うコードの試みも数える（総当たりを抑えるため、コードを調べる前に数える）
-          if (!(await withinLimit(env.JOIN_LIMITER, limitKey(request, url, env)))) return json({ error: 'rate_limited' }, 429);
-        }
+        if (m[2] === 'ws') return await joinRoom(request, url, env, code);
         if (!isRoomCode(code)) return json({ error: 'room not found' }, 404);
         const stub = env.ROOM.getByName(code);
-        if (m[2] === 'ws') {
-          if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return json({ error: 'expected websocket' }, 426);
-          if (!isPid(url.searchParams.get('pid')) || normalizeName(url.searchParams.get('name')) === null) {
-            return json({ error: 'bad pid or name' }, 400);
-          }
-          return await stub.fetch(request);
-        }
         if (!isTestMode(env) || request.method !== 'POST') return json({ error: 'not found' }, 404);
         if (m[2] === 'test/alarm') {
           await stub.runAlarmNow();
@@ -187,6 +222,11 @@ export default {
             // 期待どおり
           }
           return json({ ok: true });
+        }
+        if (m[2] === 'test/seated') {
+          const pid = url.searchParams.get('pid');
+          if (!isPid(pid)) return json({ error: 'bad pid' }, 400);
+          return json({ seated: await stub.isSeated(pid) });
         }
         if (m[2] === 'test/step') {
           const n = Number(url.searchParams.get('n') ?? '1');
