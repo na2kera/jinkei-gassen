@@ -53,6 +53,7 @@ import { pvp } from '../net/pvp.ts';
 import { savedView, saveView } from '../save.ts';
 import { session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
+import { addHitObstacle, FIELD_FRAME, padRect } from '../ui/hitRegistry.ts';
 import { ORDER_LABEL, RESERVE_FROM_LABEL, RESERVE_LABEL, TARGET_LABEL, VIEW_LABEL, wingForViewer } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
@@ -173,6 +174,8 @@ export class BattleScene extends Phaser.Scene {
   // 表示物（向きが変わると作り直す）
   private fv!: FieldView;
   private root!: Phaser.GameObjects.Container;
+  /** 戦場の障害物を名簿から外す（design §9.9-3） */
+  private fieldHit: (() => void) | null = null;
   private effects: Effects | null = null;
   private sprites = new Map<number, UnitSprite>();
   private timeText!: Phaser.GameObjects.Text;
@@ -242,6 +245,7 @@ export class BattleScene extends Phaser.Scene {
     this.targetButtons = new Map();
     this.orderButtons = new Map();
     this.reserveButtons = new Map();
+    this.fieldHit = null;
 
     const source = this.source;
     if (!source || !this.field) {
@@ -301,6 +305,10 @@ export class BattleScene extends Phaser.Scene {
     // 陣営1の人が見るときは上下左右を返し、自軍がいつも下に映るようにする
     this.fv = centeredFieldView(layout.field, field, this.flip, this.mode);
     this.area = layout.field;
+    // 戦場の描き場所と枠 4px には、ボタンの押せる範囲を広げない（部隊を押して見る範囲 uiBounds は、どの視点でも描き場所の中）。
+    // rebuild（視点・向き・最初の場面）のたびにここを通るので、外してから入れ直す
+    this.fieldHit?.();
+    this.fieldHit = addHitObstacle(this, padRect(this.area, FIELD_FRAME));
     this.root = this.add.container(0, 0);
     const frame = this.add.graphics();
     drawFieldFrame(frame, this.fv, layout.field);

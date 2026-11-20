@@ -30,6 +30,7 @@ import { unitReach } from './art/formation.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
 import { runEventDedup } from './net/eventDedup.ts';
 import { overflows, type Overflow } from './ui/overflow.ts';
+import { hitSnapshot, type HitSnapshot } from './ui/hitRegistry.ts';
 import { client, pvp, pvpLocal } from './net/pvp.ts';
 import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug, setTutorialDoneForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
@@ -294,6 +295,14 @@ export function installDebug(game: Phaser.Game): void {
       game.loop.wake();
     },
     /** 文字が枠からはみ出したボタンの記録（開発時だけ）。clear で消す */
+    /**
+     * いまのシーン（重ねている NetOverlay を除く）の、ボタンごとの絵の矩形（rect）と、実際の押せる範囲（hit）。
+     * 押せる範囲が決まり（design §9.2）どおりに広がっているかを確かめるため。dirty は、広げ直す前か
+     */
+    get hits(): HitSnapshot & { scene: string | null } {
+      const cur = game.scene.getScenes(true).find((s) => s.scene.key !== 'NetOverlay');
+      return cur ? { scene: cur.scene.key, ...hitSnapshot(cur) } : { scene: null, dirty: false, buttons: [], obstacles: [] };
+    },
     get overflows(): Overflow[] {
       return overflows.map((o) => ({ ...o }));
     },

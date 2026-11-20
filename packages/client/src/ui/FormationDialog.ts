@@ -79,7 +79,8 @@ export class FormationDialog {
   }
 
   private button(r: Rect, label: string, onTap: () => void, primary = false): Button {
-    const b = new Button(this.scene, r, label, onTap, { primary });
+    // 窓の中のボタンは、下の画面と別の組で押せる範囲を広げる（design §9.9-4）
+    const b = new Button(this.scene, r, label, onTap, { primary, hitGroup: 'popup' });
     this.buttons.push(b);
     return b;
   }

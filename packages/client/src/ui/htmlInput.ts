@@ -5,6 +5,7 @@
 import type Phaser from 'phaser';
 import { COLOR, css } from '../art/palette.ts';
 import type { Rect } from '../layout.ts';
+import { addHitObstacle } from './hitRegistry.ts';
 import { FONT_FAMILY } from './text.ts';
 
 export interface HtmlInputOptions {
@@ -20,6 +21,8 @@ export interface HtmlInputOptions {
 export class HtmlInput {
   readonly el: HTMLInputElement;
   private readonly onResize: () => void;
+  /** ボタンの押せる範囲の障害物から外す（design §9.9-3） */
+  private readonly removeHit: () => void;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -66,6 +69,8 @@ export class HtmlInput {
     this.el = el;
     this.onResize = () => this.place();
     window.addEventListener('resize', this.onResize);
+    // 欄の上には、隣のボタンの押せる範囲を広げない（欄は canvas の上に重なるので、広げても押せない所になるため）
+    this.removeHit = addHitObstacle(scene, rect);
     this.place();
   }
 
@@ -96,6 +101,7 @@ export class HtmlInput {
 
   destroy(): void {
     window.removeEventListener('resize', this.onResize);
+    this.removeHit();
     this.el.remove();
   }
 }

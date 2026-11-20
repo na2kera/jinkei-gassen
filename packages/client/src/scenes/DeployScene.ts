@@ -57,6 +57,7 @@ import { client, pvp, pvpLocal, setupKey } from '../net/pvp.ts';
 import { reserveAllowed, roomReserve } from '../net/reserveMessages.ts';
 import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
 import { Button } from '../ui/Button.ts';
+import { addHitObstacle, FIELD_FRAME, padRect } from '../ui/hitRegistry.ts';
 import { checkFit } from '../ui/overflow.ts';
 import { KIND_LABEL, RESERVE_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
@@ -252,6 +253,9 @@ export class DeployScene extends Phaser.Scene {
 
     const field = this.field;
     this.fv = centeredFieldView(layout.field, field);
+    // 戦場の描き場所ぜんぶ（と枠 4px）には、ボタンの押せる範囲を広げない。onDown は自軍の配置のほか、
+    // 敵と地形の表示も cellAt で受けるため（design §9.9-3）。向きが変わるとシーンごと作り直すので、入れ直さなくてよい
+    addHitObstacle(this, padRect(layout.field, FIELD_FRAME));
     drawFieldFrame(this.add.graphics(), this.fv, layout.field);
     addFieldImage(this, this.fv, field, layout.field);
     // 配置エリアは配置の画面だけで見せる。自軍は明るい金、敵軍は暗い色
@@ -1177,7 +1181,8 @@ export class DeployScene extends Phaser.Scene {
     const y = Math.max(f.y, Math.min(f.y + f.h - totalH, Math.round(c.y - h / 2)));
     items.forEach((it, i) => {
       const r: Rect = { x, y: y + i * (h + gap), w, h };
-      const b = new Button(this, r, it.label, () => this.choosePopup(index, it.stance));
+      // 戦場の上に重ねて出す箱なので、押せる範囲は下の画面のボタンと別の組で数える（design §9.9-4）
+      const b = new Button(this, r, it.label, () => this.choosePopup(index, it.stance), { hitGroup: 'popup' });
       b.setSelected(it.stance === p.stance);
       // チュートリアルでは、受け付ける方針（本陣狙い）のほかは押せない見た目（「外す」も）
       const run = this.tut ? session.tutorial : null;
@@ -1258,10 +1263,16 @@ export class DeployScene extends Phaser.Scene {
       y = slot.y - 4 - totalH >= 0 ? slot.y - 4 - totalH : slot.y + slot.h + 4;
     }
     items.forEach((it, i) => {
-      const b = new Button(this, { x, y: y + i * (h + gap), w, h }, it.label, () => {
-        if (it.stance) this.setReserveStance(it.stance);
-        else this.removeReserve();
-      });
+      const b = new Button(
+        this,
+        { x, y: y + i * (h + gap), w, h },
+        it.label,
+        () => {
+          if (it.stance) this.setReserveStance(it.stance);
+          else this.removeReserve();
+        },
+        { hitGroup: 'popup' },
+      );
       b.setSelected(it.stance === r.stance);
       b.addTo(this.popupLayer);
       this.popupButtons.push(b);
