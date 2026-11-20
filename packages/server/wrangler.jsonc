@@ -13,8 +13,12 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
   // 送信元（IP）ごとの回数の上限。部屋の作成の連打と、4桁のコードの総当たりを抑える。
   // 拠点（Cloudflare の場所）ごとのおおよその数で、厳密ではない。namespace_id はこのアカウントの中で一意な整数。同じ番号をほかの Worker が使うと回数を共有してしまうので、ほかのプロジェクトと重ならない番号にする
+  // 会場では同じ Wi-Fi（同じ送信元）から何組も遊ぶので、多めにしてある（decisions §20、design §11.1）。
+  // JOIN_LIMITER は、席にいない人の入室だけを数える（席にいる人のつなぎ直しは数えない）。
+  // WS_LIMITER は、ws の頼みをすべて、部屋に「席にいるか」を聞く前に数える粗い上限（総当たりで部屋を起こしすぎないため）
   "ratelimits": [
-    { "name": "CREATE_LIMITER", "namespace_id": "742101", "simple": { "limit": 10, "period": 60 } },
-    { "name": "JOIN_LIMITER", "namespace_id": "742102", "simple": { "limit": 30, "period": 60 } }
+    { "name": "CREATE_LIMITER", "namespace_id": "742101", "simple": { "limit": 60, "period": 60 } },
+    { "name": "JOIN_LIMITER", "namespace_id": "742102", "simple": { "limit": 120, "period": 60 } },
+    { "name": "WS_LIMITER", "namespace_id": "742103", "simple": { "limit": 600, "period": 60 } }
   ]
 }

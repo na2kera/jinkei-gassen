@@ -280,6 +280,18 @@ export class Room extends DurableObject<Env> {
     return true;
   }
 
+  /**
+   * この pid が、いまこの部屋の席にいるか（design §11.1）。Worker が、入室の回数に数えるかを決めるために聞く。
+   * 部屋がない・その pid の席がないときは false。何も書き換えない（settle・commit を呼ばず、保存もアラームも触らない）。
+   * 席にいない人が聞いただけで、部屋が作られたり長生きしたりしないように。
+   * 保存のある部屋を起こしたときの constructor の点検（戦闘の再開と見張り）は、これとは別に、聞く前に走る（design §11.5-4）
+   */
+  async isSeated(pid: string): Promise<boolean> {
+    const s = this.room;
+    if (s === null || !isPid(pid)) return false;
+    return s.seats.some((x) => x !== null && x.pid === pid);
+  }
+
   /** テスト用：インスタンスの識別子（作り直されたかを確かめる） */
   async instance(): Promise<string> {
     return this.instanceId;

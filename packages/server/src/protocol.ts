@@ -283,6 +283,6 @@ export type CreateRoomRequest = { pid: string };
 export type CreateRoomResponse = { code: string };
 /**
  * HTTP のエラーの応答。部屋のコードが取れないときは 503 { error: 'busy' }（「混み合っています」）。
- * 部屋の作成・入室の試みが多すぎるときは 429 { error: 'rate_limited' }（送信元ごと。作成は1分に10回、入室は1分に30回）
+ * 部屋の作成・入室の試みが多すぎるときは 429 { error: 'rate_limited' }（送信元ごと。作成は1分に60回、席にいない人の入室は1分に120回、ws の頼みは全部で1分に600回）
  */
 export type HttpErrorResponse = { error: string };

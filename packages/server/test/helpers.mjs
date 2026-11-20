@@ -373,3 +373,40 @@ export function collectEvents(clients) {
   }
   return { byIndex, mismatches, gaps };
 }
+
+/**
+ * 回数の上限の窓の番号。手元の開発サーバー（miniflare）の上限は、時計の1分ごとに区切った窓で数える
+ * （floor(いま / 60秒)。どの鍵も同じ瞬間に数え直しになる）
+ */
+export function limitWindow() {
+  return Math.floor(Date.now() / 60_000);
+}
+
+/** いまの窓の残りが needMs より短ければ、次の窓の始めまで待つ（上限を数えるテストが、窓をまたいで数え直しに当たらないように） */
+export async function freshWindow(needMs) {
+  const left = 60_000 - (Date.now() % 60_000);
+  if (left < needMs) await sleep(left + 200);
+}
+
+/**
+ * fn(鍵) を、1つの窓の中で走らせる。走っているあいだに窓をまたいだら（失敗していても）、新しい鍵でもう1度だけ走らせる
+ * （2回目は窓の始めのほうから走るので、1分かからない fn なら、またがない）。fn の返した値を返す
+ */
+export async function inOneWindow(fn) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const w = limitWindow();
+    let out;
+    let err = null;
+    try {
+      out = await fn(randomKey());
+    } catch (e) {
+      err = e;
+    }
+    if (limitWindow() === w) {
+      if (err !== null) throw err;
+      return out;
+    }
+    console.log('crossed a rate limit window; retrying with a new key');
+  }
+  throw new Error('crossed the rate limit window twice');
+}
