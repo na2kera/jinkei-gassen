@@ -313,10 +313,10 @@ export class BattleScene extends Phaser.Scene {
     // 陣営1の人が見るときは上下左右を返し、自軍がいつも下に映るようにする
     this.fv = centeredFieldView(layout.field, field, this.flip, this.mode);
     this.area = layout.field;
-    // 戦場の描き場所と枠 4px には、ボタンの押せる範囲を広げない（部隊を押して見る範囲 uiBounds は、どの視点でも描き場所の中）。
-    // rebuild（視点・向き・最初の場面）のたびにここを通るので、外してから入れ直す
+    // 部隊を押して見る範囲（uiBounds。onDown が受ける所）と枠 4px には、ボタンの押せる範囲を広げない（design §9.9-3）。
+    // 範囲は視点で変わり、rebuild（視点・向き・最初の場面）のたびにここを通るので、外してから入れ直す
     this.fieldHit?.();
-    this.fieldHit = addHitObstacle(this, padRect(this.area, FIELD_FRAME));
+    this.fieldHit = addHitObstacle(this, padRect(this.fv.uiBounds(this.area), FIELD_FRAME));
     this.root = this.add.container(0, 0);
     const frame = this.add.graphics();
     drawFieldFrame(frame, this.fv, layout.field);

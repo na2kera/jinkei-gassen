@@ -134,7 +134,7 @@ interface Screen {
   obstacles: Rect[];
 }
 
-/** 戦場の描き場所に枠 4px を足した矩形（DeployScene・BattleScene が入れる障害物と同じ） */
+/** 戦場の描き場所に枠 4px を足した矩形（DeployScene が入れる障害物と同じ。BattleScene の uiBounds＋4px は、どの視点でもこの中にあるので、これで確かめれば足りる） */
 function fieldObstacle(l: Layout): Rect {
   const f = l.field;
   return { x: f.x - 4, y: f.y - 4, w: f.w + 8, h: f.h + 8 };
