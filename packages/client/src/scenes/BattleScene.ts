@@ -50,10 +50,12 @@ import { debug, pushCapped } from '../debug.ts';
 import { battlePanel, battleReserveButtons, CELL, getLayout, LAYOUT_EVENT, tutorialLine, tutorialNext, type Rect } from '../layout.ts';
 import { reserveNoticeAt, summonShown } from '../battle/reserveUi.ts';
 import { pvp } from '../net/pvp.ts';
+import { RemoteBattleSource } from '../net/RemoteBattleSource.ts';
 import { savedView, saveView } from '../save.ts';
 import { session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { addHitObstacle, FIELD_FRAME, padRect } from '../ui/hitRegistry.ts';
+import { holdWake, releaseWake } from '../wake.ts';
 import { ORDER_LABEL, RESERVE_FROM_LABEL, RESERVE_LABEL, TARGET_LABEL, VIEW_LABEL, wingForViewer } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
@@ -246,6 +248,9 @@ export class BattleScene extends Phaser.Scene {
     this.orderButtons = new Map();
     this.reserveButtons = new Map();
     this.fieldHit = null;
+    // 画面を消さないのは1人用の戦闘のあいだだけ（design §9.5）。シーンを出るとき（結果の画面へ進むときも）外す。
+    // 下の早い戻りの前に受け手を付ける（配置の画面が押した流れで入れた理由を、残さないため）
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => releaseWake('battle'));
 
     const source = this.source;
     if (!source || !this.field) {
@@ -254,6 +259,9 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    // 1人用（対戦の source でない）なら、始まったときにも頼む（配置の画面の「開戦」で入れた理由と同じなので重ならない）。
+    // 対戦は、部屋にいるあいだ pvp.ts が持つ
+    if (!(source instanceof RemoteBattleSource)) holdWake('battle');
     this.build();
     source.onFrame((f) => this.onFrame(f));
     source.onEnd((s) => this.onEnd(s));

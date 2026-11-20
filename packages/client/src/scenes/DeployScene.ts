@@ -70,6 +70,7 @@ import type { BattleSceneData } from './BattleScene.ts';
 import { enemyAt } from './enemyKind.ts';
 import { canPutReserve, newReserve, recallReserve, remainingOf, shrinkKind, templateWithReserve } from './reserveSlot.ts';
 import { drawStanceIcon } from '../art/icons.ts';
+import { holdWake } from '../wake.ts';
 import { blinkOn, finishTutorial, setTutorialBattle, tutorialAct } from '../tutorial/run.ts';
 import { allowed, armyOf, armyReady, line, lit, type TutorialAction } from '../tutorial/steps.ts';
 
@@ -531,6 +532,8 @@ export class DeployScene extends Phaser.Scene {
       tutorial: true,
     };
     playStart();
+    // 押した流れの中で、画面を消さないように頼む（scene.start は予約なので、戦闘の画面が始まってからでは Safari が断る。design §9.9-7）
+    holdWake('battle');
     this.scene.start('Battle', data);
     return true;
   }
@@ -903,6 +906,8 @@ export class DeployScene extends Phaser.Scene {
       backdrop: stageId,
     };
     playStart();
+    // 押した流れの中で、画面を消さないように頼む（design §9.9-7）
+    holdWake('battle');
     this.scene.start('Battle', data);
     return true;
   }

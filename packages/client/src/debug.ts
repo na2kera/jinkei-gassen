@@ -31,6 +31,7 @@ import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
 import { runEventDedup } from './net/eventDedup.ts';
 import { overflows, type Overflow } from './ui/overflow.ts';
 import { hitSnapshot, type HitSnapshot } from './ui/hitRegistry.ts';
+import { wakeState, type WakeState } from './wake.ts';
 import { client, pvp, pvpLocal } from './net/pvp.ts';
 import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, setStarsForDebug, setTutorialDoneForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
@@ -302,6 +303,10 @@ export function installDebug(game: Phaser.Game): void {
     get hits(): HitSnapshot & { scene: string | null } {
       const cur = game.scene.getScenes(true).find((s) => s.scene.key !== 'NetOverlay');
       return cur ? { scene: cur.scene.key, ...hitSnapshot(cur) } : { scene: null, dirty: false, buttons: [], obstacles: [] };
+    },
+    /** 画面を消さない仕組み（design §9.5）：理由の一覧・仕組みの有無・いま持っているか・頼んだ回数・断られた回数 */
+    get wake(): WakeState {
+      return wakeState();
     },
     get overflows(): Overflow[] {
       return overflows.map((o) => ({ ...o }));
