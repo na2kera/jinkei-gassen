@@ -19,7 +19,7 @@ export class Button {
   private readonly gfx: Phaser.GameObjects.Graphics;
   private readonly label: Phaser.GameObjects.Text;
   private readonly zone: Phaser.GameObjects.Zone;
-  private readonly primary: boolean;
+  private primary: boolean;
   private enabled = true;
   private selected = false;
   private pressed = false;
@@ -75,6 +75,15 @@ export class Button {
   setSelected(v: boolean): this {
     if (this.selected !== v) {
       this.selected = v;
+      this.redraw();
+    }
+    return this;
+  }
+
+  /** 主のボタンの見た目にするか（チュートリアルの点滅で、主の見た目とふつうの見た目を入れ替えるため） */
+  setPrimary(v: boolean): this {
+    if (this.primary !== v) {
+      this.primary = v;
       this.redraw();
     }
     return this;

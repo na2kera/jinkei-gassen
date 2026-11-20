@@ -18,7 +18,8 @@ export const SAVE_KEY = saveKey();
 
 function saveKey(): string {
   const base = 'jinkei-gassen/v1';
-  if (!import.meta.env.DEV) return base;
+  // node のテスト（import.meta.env がない）では、本番と同じく別の鍵を使わない
+  if (!import.meta.env?.DEV) return base;
   try {
     const slot = new URLSearchParams(window.location.search).get('save');
     return slot && /^[a-z0-9]{1,8}$/.test(slot) ? `${base}:${slot}` : base;
@@ -94,6 +95,24 @@ export function saveMuted(muted: boolean): void {
 /** 開発用：星だけを書き換える（面を飛ばすため） */
 export function setStarsForDebug(stageId: string, stars: number): void {
   loadSave().stars[stageId] = stars;
+  write();
+}
+
+/** チュートリアルを済ませたか（design §8.7） */
+export function tutorialDone(): boolean {
+  return loadSave().tutorialDone;
+}
+
+/** チュートリアルを済ませた印を付ける（最後まで遊ぶか、飛ばしたとき） */
+export function markTutorialDone(): void {
+  if (loadSave().tutorialDone) return;
+  loadSave().tutorialDone = true;
+  write();
+}
+
+/** 開発用：済みの印を付ける・外す */
+export function setTutorialDoneForDebug(v: boolean): void {
+  loadSave().tutorialDone = v;
   write();
 }
 

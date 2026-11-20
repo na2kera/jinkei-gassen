@@ -8,6 +8,7 @@ import {
   stageSetupWith,
   stanceAllowed,
   stanceAllowedInStage,
+  TUTORIAL_STAGE,
   validateStageArmy,
   type BattleSetup,
   type BattleSummary,
@@ -19,6 +20,7 @@ import {
   type UnitView,
 } from '@jinkei/engine';
 import { savedPlacements, savePlacements, savedReserve, starsOf } from './save.ts';
+import type { TutorialRun } from './tutorial/steps.ts';
 
 export interface ResultData {
   stageId: string;
@@ -35,6 +37,8 @@ interface Session {
   /** その面の遊軍（design §7.8）。枠が空なら null */
   reserve: ReserveSetup | null;
   result: ResultData | null;
+  /** チュートリアルの進み具合（design §8.3）。チュートリアルでないときは null。向きが変わってシーンを作り直しても残るよう、ここに置く */
+  tutorial: TutorialRun | null;
 }
 
 const first = STAGES[0];
@@ -44,9 +48,12 @@ export const session: Session = {
   placements: [],
   reserve: null,
   result: null,
+  tutorial: null,
 };
 
 export function stageById(id: string): Stage | undefined {
+  // チュートリアルの面は STAGES に入れない（design §8.1）が、id からは引けるようにする
+  if (id === TUTORIAL_STAGE.id) return TUTORIAL_STAGE;
   return STAGES.find((s) => s.id === id);
 }
 
@@ -110,10 +117,14 @@ export function openStage(id: string): Stage {
   return stage;
 }
 
-/** 配置（と遊軍）を変えたら呼ぶ。面ごとの最後の配置として、遊軍と一緒に残す。reserve を省くと、いまの遊軍のまま */
+/**
+ * 配置（と遊軍）を変えたら呼ぶ。面ごとの最後の配置として、遊軍と一緒に残す。reserve を省くと、いまの遊軍のまま。
+ * チュートリアルの配置は保存しない（design §8.1）
+ */
 export function setPlacements(list: Placement[], reserve: ReserveSetup | null = session.reserve): void {
   session.placements = list;
   session.reserve = reserve;
+  if (session.stageId === TUTORIAL_STAGE.id) return;
   savePlacements(session.stageId, list, reserve);
 }
 
