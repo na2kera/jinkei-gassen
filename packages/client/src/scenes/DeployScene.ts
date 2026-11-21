@@ -903,8 +903,6 @@ export class DeployScene extends Phaser.Scene {
       stageId,
       ...(this.stage.fog && this.stage.fog.length > 0 ? { fog: this.stage.fog } : {}),
       survive: this.stage.win.type === 'survive',
-      // 将軍の視点の遠景の絵（面ごとに1枚）
-      backdrop: stageId,
     };
     playStart();
     // 押した流れの中で、画面を消さないように頼む（design §9.9-7）

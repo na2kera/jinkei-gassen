@@ -9,7 +9,7 @@ import type { Kind, OrderKind, Stance } from '@jinkei/engine';
 import Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
 import type { Rect } from '../layout.ts';
-import { dirOf, marksShown, SCATTER, slotsOf, soldierPoint, type Slot } from './formation.ts';
+import { dirOf, SCATTER, slotsOf, soldierPoint, type Slot } from './formation.ts';
 import { drawOrderIcon, drawStanceIcon } from './icons.ts';
 import { ART, COLOR, SIDE_COLOR } from './palette.ts';
 import { soldierKey, soldierSize, standKey, standSize, type Dir4, type SoldierShape } from './textures.ts';
@@ -102,8 +102,6 @@ export class UnitSprite {
     const jitter = 8 * look.rout;
     const beat = Math.floor(time / 200);
     const jab = Math.floor(time / 160);
-    // 兵の絵の倍率（将軍だけ 1 以外）。1つの部隊の兵は、部隊の中心で決めた同じ倍率で描く
-    const scale = fv.spriteScale(at.x, at.y);
     this.soldiers.forEach((img, i) => {
       if (i >= count) {
         img.setVisible(false);
@@ -128,8 +126,7 @@ export class UnitSprite {
       if (fv.standing) {
         // 立った兵は、足もとを並びの位置に置く。奥の兵ほど上に描かれ、depth（並べる値）の順で手前が上に重なる
         const size = standSize(slot.shape);
-        if (img.scaleX !== scale) img.setScale(scale);
-        img.setPosition(Math.round(wx - (size.w * scale) / 2), Math.round(wy - size.h * scale + 1));
+        img.setPosition(Math.round(wx - size.w / 2), Math.round(wy - size.h + 1));
         if (fv.depthSorted) img.setDepth(fv.depthAt(wx, wy));
       } else {
         const size = soldierSize(slot.shape, dir);
@@ -138,8 +135,7 @@ export class UnitSprite {
       }
       img.setVisible(true);
     });
-    // 枠の外の部隊（将軍）は、旗・印・号令の相手の枠を描かない（兵の絵は、描き場所の外を覆う板で見えなくなる）
-    this.drawMarks(look, count > 0 && marksShown(fv, at), time, scale);
+    this.drawMarks(look, count > 0, time);
   }
 
   /** いま見えている兵の中心（全滅したときに、その場に倒れた兵を描くため）。大きさは、倍率をかけたあとの表示の大きさ */
@@ -153,17 +149,17 @@ export class UnitSprite {
    * 旗（士気）・号令の印・方針の印・号令の相手の枠。
    * 形は部隊の中心を原点にして描き、毎フレームは位置だけを動かす。描き直すのは、表示する値が変わったときだけ。
    */
-  private drawMarks(look: UnitLook, alive: boolean, time: number, scale: number): void {
+  private drawMarks(look: UnitLook, alive: boolean, time: number): void {
     const g = this.marks;
     const hq = this.kind === 'hq';
     const cx = Math.round(look.x);
     const cy = Math.round(look.y);
     const flagW = hq ? 10 : 6;
     const flagH = hq ? 8 : 4;
-    // 立った兵のときは、兵より高く旗を立てる（高さは兵の絵の倍率に合わせる）
+    // 立った兵のときは、兵より高く旗を立てる
     const standing = this.fv.standing;
-    const poleH = standing ? (hq ? 30 : 26) * scale : hq ? 24 : 20;
-    let poleTop = standing ? (hq ? -34 : -30) * scale : hq ? -22 : -18;
+    const poleH = standing ? (hq ? 30 : 26) : hq ? 24 : 20;
+    let poleTop = standing ? (hq ? -34 : -30) : hq ? -22 : -18;
     // 戦場の右端からはみ出すなら、旗を竿の左に付け替える。上端からはみ出すなら、竿ごと下げる。
     // fitMarks のときは、旗の右の端（竿の右 2px + 旗の幅 + はためく 1px）で判定する（真上・斜めは前の判定のまま）
     let mirror = false;
@@ -175,7 +171,7 @@ export class UnitSprite {
     }
     // 号令の印（7 × 7）の左上。fitMarks のときは、uiBounds に収まるよう寄せる
     let orderX = -12;
-    let orderY = standing ? -26 * scale : -12;
+    let orderY = standing ? -26 : -12;
     if (b && fit) {
       orderX = Math.min(Math.max(orderX, b.x - cx), b.x + b.w - 7 - cx);
       orderY = Math.min(Math.max(orderY, b.y - cy), b.y + b.h - 7 - cy);
@@ -185,7 +181,7 @@ export class UnitSprite {
     const fy = poleTop + Math.round(((1 - m) * (poleH - flagH)) / 2) * 2;
     const wave = look.wave ? Math.floor(time / 120) % 2 : 0;
     const key = alive
-      ? [look.highlight ? 1 : 0, look.rout > 0 ? 1 : 0, fy, poleTop, mirror ? 1 : 0, wave, look.order ?? '', look.stance ?? '', orderX, orderY, scale].join('|')
+      ? [look.highlight ? 1 : 0, look.rout > 0 ? 1 : 0, fy, poleTop, mirror ? 1 : 0, wave, look.order ?? '', look.stance ?? '', orderX, orderY].join('|')
       : 'dead';
     g.setPosition(cx, cy);
     if (key === this.marksKey) return;
@@ -194,10 +190,10 @@ export class UnitSprite {
     if (!alive) return;
     if (look.highlight) {
       // 号令の相手の枠。部隊の中心のまわりに描く（マスには合わせない）。
-      // 立った兵のときは、兵（足もとから上へ伸びる）を囲む平たい形にする。横も縦も兵の絵の倍率ぶん広げる（線の太さは同じ）
-      const top = standing ? -18 * scale : -12;
-      const bottom = standing ? 6 * scale : 12;
-      const half = 12 * scale;
+      // 立った兵のときは、兵（足もとから上へ伸びる）を囲む平たい形にする
+      const top = standing ? -18 : -12;
+      const bottom = standing ? 6 : 12;
+      const half = 12;
       g.fillStyle(COLOR.highlight, 1);
       g.fillRect(-half, top, half * 2, 2);
       g.fillRect(-half, bottom - 2, half * 2, 2);

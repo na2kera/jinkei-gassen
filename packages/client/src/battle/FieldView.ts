@@ -1,5 +1,5 @@
 // 「戦場の座標 → 画面の座標」（投影）と、その逆の変換を閉じ込める唯一の場所（design §5.2、§5.7、§5.8）。
-// 視点（真上・斜め・横から・将軍）の違いと、対戦で上下左右を返す表示の違いは、すべてここで吸収する。
+// 視点（真上・斜め・横から）の違いと、対戦で上下左右を返す表示の違いは、すべてここで吸収する。
 // シーンや絵の側で (x - originX) / CELL のような計算を書かないこと。視点の名前（mode）を見て分けないこと
 // （standing、depthSorted、art などの値と、vecToScreen などの口を使う）。
 //
@@ -7,14 +7,10 @@
 // 横からは、戦場の右の辺の外から左を向いて少し見下ろす：戦場の y（奥行き）を画面の横に 0.75 倍、
 // 戦場の x を画面の縦に 0.6 倍で写す（1マスが 18 × 14.4px。自軍が左、敵軍が右。鏡写しにはならない）。
 // 縮んで空いた分は、戦場を描き場所の中央に寄せる（centeredFieldView）。
-//
-// 将軍は、自分の本陣の位置から低く敵の方を見る、遠近つきの投影（design §5.8.3）：手前の辺からの奥行き d マスで
-// 倍率 s = 3 / (1 + 2d / rows)、画面の横 = cx + (x − cols/2) × CELL × s、画面の縦 = 地平線 + 96 × s。
-// 手前は本陣のまわり 4 列ぶんだけが枠に入り、奥は 12 列ぜんぶが入る。マスは台形になるので、
-// 地形・霧・瓦礫のタイルは走査線（画面の横の1行）ごとに敷く（scanSpans）。
+// 将軍の視点（遠近つきの投影。design §5.8.3）は、盤を 8×11 にするときになくした（design §13.8）。
 
 import type { Rect } from '../layout.ts';
-import { CELL, FIELD_COLS, FIELD_ROWS } from '../layout.ts';
+import { CELL } from '../layout.ts';
 import type { ViewMode } from './viewMode.ts';
 
 export interface Point {
@@ -49,31 +45,6 @@ const PICK_DIST = 0.55;
 const OBLIQUE_PICK_SHIFT = 6;
 /** 立った兵の絵の高さ（10〜11px）の半分。横から部隊を選ぶときの「体のまん中」を、足もとからこれだけ上に取る */
 const STAND_BODY = 5;
-/** 将軍：地平線から、倍率 1 の所（戦場の奥の辺）までの px。倍率 s の所は地平線から GENERAL_H × s */
-export const GENERAL_H = 96;
-/** 将軍：手前の辺の倍率 */
-const GENERAL_NEAR = 3;
-/** 将軍：兵の絵の倍率の境目（2.5・1.5）の、式の丸めの誤差を見込む幅 */
-const SCALE_EPS = 1e-9;
-
-/** 将軍：走査線の上で、1つのマスにあたる横の区間（design §5.8.3 補足2） */
-export interface ScanSpan {
-  /** 画面の横の左端（含む）と右端（含まない）。整数の px */
-  x0: number;
-  x1: number;
-  /** 表示の側の列と行（flipped を返したあと。戦場の外の仮のマスは 0 未満か cols・rows 以上） */
-  dcol: number;
-  drow: number;
-  /** タイルの絵の、使う行（0〜tile−1） */
-  tileRow: number;
-  /**
-   * タイルの絵の、使う横の範囲 [tx0, tx1)（px。小数のことがある）。ふつうは [0, tile)。
-   * 枠の端をまたぐマスでは、枠の外に出る分を、描く先と同じ割合で切り落とした範囲
-   */
-  tx0: number;
-  tx1: number;
-}
-
 export class FieldView {
   /** 戦場を描く画面の矩形（投影したあとの大きさ） */
   readonly rect: Rect;
@@ -101,42 +72,6 @@ export class FieldView {
     return this.mode !== 'top';
   }
 
-  /** 戦場の絵・兵・演出の層を、描き場所の矩形で切り抜くか（将軍だけ true。描き場所の外を板で覆う） */
-  get masked(): boolean {
-    return this.mode === 'general';
-  }
-
-  /** 遠近つきか（将軍だけ true）。マスが台形になるので、地形・霧・瓦礫は走査線で敷き、壁はマスの手前の辺の幅に合わせる */
-  get perspective(): boolean {
-    return this.mode === 'general';
-  }
-
-  /** 将軍：描き場所（12列×16行ぶん）。rect は描き場所の下半分なので、そこから戻す */
-  private get genArea(): Rect {
-    return { x: this.rect.x, y: this.rect.y - this.rect.h, w: this.rect.w, h: this.rect.h * 2 };
-  }
-
-  /** 将軍：画面の横の中央 */
-  private get genCx(): number {
-    return this.rect.x + this.rect.w / 2;
-  }
-
-  /** 将軍：地平線の画面の縦 */
-  get horizonY(): number {
-    return this.rect.y - GENERAL_H;
-  }
-
-  /** 将軍：表示の側の y（自軍が大きい側）での倍率 */
-  private scaleAtDisplay(fy: number): number {
-    const d = this.rows - fy;
-    return GENERAL_NEAR / (1 + (d * 2) / this.rows);
-  }
-
-  /** 将軍：表示の側の x を、倍率 s の走査線の上の画面の横に直す */
-  private scanX(dx: number, s: number): number {
-    return this.genCx + (dx - this.cols / 2) * CELL * s;
-  }
-
   /**
    * 旗と号令の印を、実際に描く矩形（旗のはためく 1px を含む）が uiBounds に収まるよう寄せるか。
    * 真上と斜めは false（§5.8 の前の判定のまま。旗が 1px はみ出すことがあるのも、そのまま残す）
@@ -155,26 +90,12 @@ export class FieldView {
     return this.mode === 'oblique' ? OBLIQUE_Y : 1;
   }
 
-  /**
-   * 兵の絵の倍率（整数。将軍の視点だけ 1 以外になる）。将軍では s を四捨五入した値
-   * （s ≥ 2.5 で 3、1.5 ≤ s < 2.5 で 2、それ未満で 1。境目は、式の丸めの誤差 1e-9 までを境目ちょうどとみなす）
-   */
-  spriteScale(_x: number, y: number): number {
-    if (this.mode !== 'general') return 1;
-    const s = this.scaleAtDisplay(this.flipped ? this.rows - y : y);
-    return s >= 2.5 - SCALE_EPS ? 3 : s >= 1.5 - SCALE_EPS ? 2 : 1;
-  }
-
   /** 戦場の座標（マス単位、連続値）→ 画面の px */
   toScreen(x: number, y: number): Point {
     const fx = this.flipped ? this.cols - x : x;
     const fy = this.flipped ? this.rows - y : y;
     if (this.mode === 'side') {
       return { x: this.rect.x + (this.rows - fy) * CELL * SIDE_X, y: this.rect.y + fx * CELL * SIDE_Y };
-    }
-    if (this.mode === 'general') {
-      const s = this.scaleAtDisplay(fy);
-      return { x: this.scanX(fx, s), y: this.horizonY + GENERAL_H * s };
     }
     return { x: this.rect.x + fx * CELL, y: this.rect.y + fy * CELL * this.yScale };
   }
@@ -186,11 +107,6 @@ export class FieldView {
     if (this.mode === 'side') {
       x = (sy - this.rect.y) / (CELL * SIDE_Y);
       y = this.rows - (sx - this.rect.x) / (CELL * SIDE_X);
-    } else if (this.mode === 'general') {
-      // 地平線より上を押しても、有限の値（戦場のずっと奥）を返す
-      const s = Math.max((sy - this.horizonY) / GENERAL_H, 1 / 64);
-      y = this.rows - (GENERAL_NEAR / s - 1) * (this.rows / 2);
-      x = this.cols / 2 + (sx - this.genCx) / (CELL * s);
     } else {
       x = (sx - this.rect.x) / CELL;
       y = (sy - this.rect.y) / (CELL * this.yScale);
@@ -200,16 +116,10 @@ export class FieldView {
 
   /**
    * 戦場の座標 (x, y) から (x + vx, y + vy) へのベクトルを、画面の px のベクトルに直す（design §5.8.1）。
-   * 値は両端を toScreen に通した差。遠近のない視点では、どこでも同じ値になるので、引き算をせずに直接出す
+   * 値は両端を toScreen に通した差と同じで、どこでも同じ値になるので、引き算をせずに直接出す
    * （引き算の丸めの誤差で、兵の絵の位置が 1px ずれないように）
    */
-  vecToScreen(x: number, y: number, vx: number, vy: number): Point {
-    if (this.mode === 'general') {
-      // 遠近つきでは場所で変わるので、両端を toScreen に通した差
-      const a = this.toScreen(x, y);
-      const b = this.toScreen(x + vx, y + vy);
-      return { x: b.x - a.x, y: b.y - a.y };
-    }
+  vecToScreen(_x: number, _y: number, vx: number, vy: number): Point {
     const ux = this.flipped ? -vx : vx;
     const uy = this.flipped ? -vy : vy;
     if (this.mode === 'side') return { x: -uy * CELL * SIDE_X, y: ux * CELL * SIDE_Y };
@@ -230,21 +140,17 @@ export class FieldView {
       const uy = this.flipped ? -dy : dy;
       return { x: sx + upx - uqx, y: sy + uy * this.yScale };
     }
+    // 横から
     const dx = px - qx;
     const dy = py - qy;
-    if (this.mode === 'side') {
-      const ux = this.flipped ? -dx : dx;
-      const uy = this.flipped ? -dy : dy;
-      return { x: sx + -uy * SIDE_X, y: sy + ux * SIDE_Y };
-    }
-    const v = this.vecToScreen(x, y, dx / CELL, dy / CELL);
-    return { x: sx + v.x, y: sy + v.y };
+    const ux = this.flipped ? -dx : dx;
+    const uy = this.flipped ? -dy : dy;
+    return { x: sx + -uy * SIDE_X, y: sy + ux * SIDE_Y };
   }
 
   /**
    * 戦場の向き (fx, fy) が、画面の上でどちらを向くか（縦横の縮みを除いた向き）。兵の4方向の絵を選ぶために使う。
    * 縮みを除くのは、斜めで縦を縮めた向きから選ぶと、斜めを向いた部隊の絵が変わってしまうため（design §5.8.1）。
-   * 将軍は真上と同じ値（返すだけ）。消える点へ寄る傾きは、絵の向きには入れない（design §5.8.3 補足1）
    */
   facingOnScreen(_x: number, _y: number, fx: number, fy: number): Point {
     const ux = this.flipped ? -fx : fx;
@@ -296,75 +202,6 @@ export class FieldView {
     return { col, row };
   }
 
-  /**
-   * 将軍：画面の整数の行 sy（中心 sy + 0.5 で測る）の上の、表示の側の y と倍率 s。地平線とその上は null
-   * （design §5.8.3 補足2）。ほかの視点では使わない（null）
-   */
-  scanline(sy: number): { y: number; s: number } | null {
-    if (this.mode !== 'general') return null;
-    const s = (sy + 0.5 - this.horizonY) / GENERAL_H;
-    if (s <= 0) return null;
-    return { y: this.rows - (GENERAL_NEAR / s - 1) * (this.rows / 2), s };
-  }
-
-  /** 将軍：画面の縦 sy（連続値）での倍率 s。ほかの視点では 1 */
-  scaleAtScreenY(sy: number): number {
-    return this.mode === 'general' ? (sy - this.horizonY) / GENERAL_H : 1;
-  }
-
-  /** 表示の側の座標（flipped を返したあと）→ 実際の列と行（flipped を戻す）。戦場の外の値もそのまま返す */
-  cellOfDisplay(x: number, y: number): Cell {
-    const c = Math.floor(x);
-    const r = Math.floor(y);
-    return this.flipped ? { col: this.cols - 1 - c, row: this.rows - 1 - r } : { col: c, row: r };
-  }
-
-  /**
-   * 将軍：走査線 sy の上で、画面の横 [bx0, bx1) にかかるマスの区間（左から順）。列の境目は、左右の端をそれぞれ
-   * 四捨五入した値を隣のマスと共有し、左を含み右を含まない（隙間も重なりも出さない）。戦場の外の仮のマスも含む。
-   * tile はタイルの絵の大きさ（px）。地平線より上は空。
-   * 枠の端をまたぐマスは、描く先を枠の中へ切り落とし、タイルの絵の側も同じ割合で切り落とす（tx0・tx1。
-   * 絵を縮めて押し込まない。マスの本来の投影の幅を保つ）
-   */
-  scanSpans(sy: number, bx0: number, bx1: number, tile: number): ScanSpan[] {
-    const sl = this.scanline(sy);
-    if (!sl) return [];
-    const drow = Math.floor(sl.y);
-    const tileRow = Math.min(tile - 1, Math.max(0, Math.floor((sl.y - drow) * tile)));
-    const unit = CELL * sl.s;
-    const c0 = Math.floor(this.cols / 2 + (bx0 - this.genCx) / unit) - 1;
-    const c1 = Math.ceil(this.cols / 2 + (bx1 - this.genCx) / unit) + 1;
-    const out: ScanSpan[] = [];
-    for (let c = c0; c < c1; c++) {
-      // マスの本来の区間（丸めたあと）と、そのうち枠の中に入る部分
-      const a = Math.round(this.scanX(c, sl.s));
-      const b = Math.round(this.scanX(c + 1, sl.s));
-      const x0 = Math.max(bx0, a);
-      const x1 = Math.min(bx1, b);
-      if (x1 <= x0) continue;
-      const tx0 = x0 === a ? 0 : ((x0 - a) / (b - a)) * tile;
-      const tx1 = x1 === b ? tile : ((x1 - a) / (b - a)) * tile;
-      out.push({ x0, x1, dcol: c, drow, tileRow, tx0, tx1 });
-    }
-    return out;
-  }
-
-  /**
-   * 部隊が見えているか：足もとの画面の点が、描き場所の矩形の中（左と上を含み、右と下を含まない）にあること。
-   * 真上・斜め・横からは、いつも true（design §5.8.3 補足8）
-   */
-  visible(x: number, y: number): boolean {
-    if (this.mode !== 'general') return true;
-    const p = this.toScreen(x, y);
-    const a = this.genArea;
-    return p.x >= a.x && p.y >= a.y && p.x < a.x + a.w && p.y < a.y + a.h;
-  }
-
-  /** 号令の知らせと決着の文字を置く基準の矩形。将軍は描き場所（uiBounds）、ほかの視点はいままでどおり rect */
-  noticeBounds(area: Rect): Rect {
-    return this.mode === 'general' ? this.uiBounds(area) : this.rect;
-  }
-
   contains(sx: number, sy: number): boolean {
     const r = this.rect;
     return sx >= r.x && sy >= r.y && sx < r.x + r.w && sy < r.y + r.h;
@@ -385,19 +222,18 @@ export class FieldView {
   /** 部隊を画面の上で選ぶときの、体のまん中（立った兵は、足もとから絵の高さの半分だけ上） */
   pickPoint(x: number, y: number): Point {
     const p = this.toScreen(x, y);
-    return this.standing ? { x: p.x, y: p.y - STAND_BODY * this.spriteScale(x, y) } : p;
+    return this.standing ? { x: p.x, y: p.y - STAND_BODY } : p;
   }
 
   /** 部隊を画面の上で選ぶときの、体のまん中からの離れ（px） */
-  pickRadius(x: number, y: number): number {
-    return PICK_DIST * CELL * this.spriteScale(x, y);
+  pickRadius(_x: number, _y: number): number {
+    return PICK_DIST * CELL;
   }
 
   /**
    * 押した画面の位置から、部隊を1つ選ぶ（なければ null）。
    * 真上と斜めは、押した位置を戦場の座標に戻して、0.55 マス以内でいちばん近い部隊（斜めは 6px 下にずらしてから戻す）。
-   * 横から・将軍は、画面の上で、体のまん中から pickRadius 以内でいちばん近い部隊。同じ離れなら、手前（depthOf が大きい）の部隊。
-   * 枠の外の部隊（visible が false）は選ばない
+   * 横からは、画面の上で、体のまん中から pickRadius 以内でいちばん近い部隊。同じ離れなら、手前（depthOf が大きい）の部隊
    */
   pick(units: readonly PickTarget[], sx: number, sy: number): number | null {
     // 画面の上で選ぶときの「同じ離れ」の幅（px。浮動小数の丸めで、同じ離れが少し違って出るため）
@@ -413,8 +249,6 @@ export class FieldView {
     }
     let best: { id: number; d: number; depth: number } | null = null;
     for (const u of units) {
-      // 枠の外の部隊は選ばない（将軍。ほかの視点ではいつも見えている）
-      if (!this.visible(u.x, u.y)) continue;
       const c = this.pickPoint(u.x, u.y);
       const d = Math.hypot(c.x - sx, c.y - sy);
       if (d > this.pickRadius(u.x, u.y)) continue;
@@ -439,12 +273,6 @@ function projectedSize(field: { width: number; height: number }, mode: ViewMode)
  * 配置と公開の画面は、真上（top）を渡す。
  */
 export function centeredFieldView(area: Rect, field: { width: number; height: number }, flipped = false, mode: ViewMode = 'top'): FieldView {
-  if (mode === 'general') {
-    // 将軍の rect は、戦場の大きさによらず描き場所の下半分（奥の辺が描き場所の縦の中央、手前の辺が下の端。
-    // 戦場の中央の列が画面の中央。手前の左右は枠の外へはみ出す）
-    const gh = (FIELD_ROWS * CELL) / 2;
-    return new FieldView({ x: area.x, y: area.y + area.h - gh, w: FIELD_COLS * CELL, h: gh }, field.width, field.height, flipped, mode);
-  }
   const { w, h } = projectedSize(field, mode);
   // 幅が奇数の戦場は、半マスずらしてちょうど中央に置く（2px 単位に揃える）。外側の岩壁は描き場所の格子で先に全体に敷き、
   // その上に戦場のマスを重ねるので、半マスずれても切れ目は出ない（art/field.ts）

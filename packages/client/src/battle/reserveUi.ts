@@ -22,18 +22,10 @@ export function summonEnabled(reserve: ReserveView | null, opts: { ended: boolea
 
 /**
  * 「遊軍」の知らせの箱（幅 w・高さ h）の左上。部隊の上に出す（兵数と士気の箱と同じ置き方）。
- * 将軍の視点で部隊が枠の外（fv.visible が false）にいるときは、その部隊がいる側の枠の端へ寄せ、
- * 縦はその部隊の奥行きの高さ（画面の縦）に合わせて、枠の中に収める（design §5.8.3）。
  * x, y は部隊の戦場の座標、area は描き場所（12列×16行ぶん）
  */
 export function reserveNoticeAt(fv: FieldView, area: Rect, x: number, y: number, w: number, h: number): Point {
-  const f = fv.uiBounds(area);
-  const p = fv.toScreen(x, y);
-  if (fv.visible(x, y)) return unitBoxAt(f, p, w, h, unitLift(fv, x, y));
-  const left = p.x < f.x + f.w / 2;
-  const bx = left ? f.x + 4 : f.x + f.w - w - 4;
-  const by = Math.max(f.y + 4, Math.min(f.y + f.h - h - 4, p.y - h));
-  return { x: Math.round(bx / 2) * 2, y: Math.round(by / 2) * 2 };
+  return unitBoxAt(fv.uiBounds(area), fv.toScreen(x, y), w, h, unitLift(fv, x, y));
 }
 
 /**

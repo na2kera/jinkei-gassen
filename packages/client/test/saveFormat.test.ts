@@ -83,6 +83,10 @@ test('v が 1・2 でない保存（版なし・知らない版・形の違う�
   for (const raw of [null, 'x', 2, [], [full(2)]]) assert.deepEqual(sanitizeSave(raw), emptySave(), JSON.stringify(raw));
 });
 
+test('将軍の視点が残っている保存（v 1・v 2）は、真上として読む', () => {
+  for (const v of [1, 2]) assert.equal(sanitizeSave({ ...full(v), view: 'general' }).view, 'top');
+});
+
 test('数の上限は engine の MAX_UNITS、陣形の幅は 1〜STANDARD_WIDTH（v 2）', () => {
   const many = (n: number): Placement[] => Array.from({ length: n }, (_, i) => ({ ...inf, col: i % 12 }));
   const at = (n: number, width: number) =>

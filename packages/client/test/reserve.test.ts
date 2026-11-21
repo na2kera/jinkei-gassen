@@ -1,6 +1,6 @@
 // 遊軍の画面（design §7.8）のうち、Phaser なしで確かめられる部分。
 // 保存の読み書きと古い保存、配置の枠の数え方、ひな形で枠が空になる、ボタンを押せるか、対戦のメッセージの組み立て、
-// snap の遊軍の読み方、将軍の視点での知らせの位置、置き場所が今の並びに重ならないこと。
+// snap の遊軍の読み方、「遊軍」の知らせの位置、置き場所が今の並びに重ならないこと。
 // node --experimental-strip-types --test で動かす（クライアントにはテストの道具を入れていないため）。
 
 import assert from 'node:assert/strict';
@@ -207,44 +207,15 @@ test('snap の遊軍は自分の側に入れ、相手の側は null。遊軍が�
   assert.equal(snapReserve({ reserve: { kind: 'cavalry', stance: 'advance', state: 'zzz' } as unknown as ReserveView }), null);
 });
 
-// ---- 将軍の視点での知らせ ----
+// ---- 「遊軍」の知らせの位置 ----
 
 const AREA: Rect = { x: 8, y: 8, w: 288, h: 384 };
 
-test('将軍の視点：枠の外に現れた遊軍の「遊軍」は、現れた側の枠の端・その奥行きの高さに寄せて、枠の中に出す', () => {
-  const fv = centeredFieldView(AREA, { width: 12, height: 16 }, false, 'general');
-  const bounds = fv.uiBounds(AREA);
-  const w = 48;
-  const h = 32;
-  // 陣営0の左（列 0・行 8）と右（列 11・行 8）。陣営1の左右（行 7）も
-  for (const [x, y, left] of [
-    [0.5, 8.5, true],
-    [11.5, 8.5, false],
-    [11.5, 7.5, false],
-    [0.5, 7.5, true],
-  ] as const) {
-    assert.equal(fv.visible(x, y), false, `${x},${y} は枠の外のはず`);
-    const at = reserveNoticeAt(fv, AREA, x, y, w, h);
-    // 枠の中
-    assert.ok(at.x >= bounds.x && at.x + w <= bounds.x + bounds.w, `x ${at.x}`);
-    assert.ok(at.y >= bounds.y && at.y + h <= bounds.y + bounds.h, `y ${at.y}`);
-    // 現れた側の端
-    if (left) assert.ok(at.x <= bounds.x + 8);
-    else assert.ok(at.x + w >= bounds.x + bounds.w - 8);
-    // 奥行きの高さ：箱の下の端が、その部隊の画面の縦にそろう（2px 単位の丸めまで）
-    const p = fv.toScreen(x, y);
-    assert.ok(Math.abs(at.y + h - p.y) <= 2, `y ${at.y + h} vs ${p.y}`);
-    assert.equal(at.x % 2, 0);
-    assert.equal(at.y % 2, 0);
-  }
-});
-
-test('枠の中にいる部隊（ほかの視点と、将軍で見えている部隊）は、兵数と士気の箱と同じく部隊の上に出す', () => {
-  for (const mode of ['top', 'oblique', 'side', 'general'] as const) {
+test('「遊軍」の知らせは、兵数と士気の箱と同じく部隊の上に出す（真上・斜め・横から）', () => {
+  for (const mode of ['top', 'oblique', 'side'] as const) {
     const fv = centeredFieldView(AREA, { width: 12, height: 16 }, false, mode);
-    const x = mode === 'general' ? 6 : 0.5;
+    const x = 0.5;
     const y = 8.5;
-    assert.equal(fv.visible(x, y), true);
     const at = reserveNoticeAt(fv, AREA, x, y, 48, 32);
     const p = fv.toScreen(x, y);
     // 箱は部隊の足もとより上

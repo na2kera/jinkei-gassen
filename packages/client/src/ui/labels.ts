@@ -74,5 +74,4 @@ export const VIEW_LABEL: Record<ViewMode, string> = {
   top: '視点：真上',
   oblique: '視点：斜め',
   side: '視点：横',
-  general: '視点：将軍',
 };

@@ -64,15 +64,7 @@ export function soldierPoint(fv: FieldView, c: Point, at: Point, fx: number, fy:
   return fv.shiftOnScreen(c.x, c.y, at.x, at.y, lx * rx, lx * ry, ly * fx, ly * fy);
 }
 
-/**
- * 部隊の旗・印・号令の相手の枠を描くか。at は部隊の中心の戦場の座標。
- * 枠の外の部隊（FieldView.visible が false。将軍だけ起きる）は描かない（端へ寄せると、見えない部隊の印が積み重なるため）
- */
-export function marksShown(fv: FieldView, at: Point): boolean {
-  return fv.visible(at.x, at.y);
-}
-
 /** 部隊の足もとから、数字の箱の下の端までの離れ（立った兵は絵の高さの分だけ上に離す） */
-export function unitLift(fv: FieldView, x: number, y: number): number {
-  return fv.standing ? 34 * fv.spriteScale(x, y) : 20;
+export function unitLift(fv: FieldView, _x: number, _y: number): number {
+  return fv.standing ? 34 : 20;
 }

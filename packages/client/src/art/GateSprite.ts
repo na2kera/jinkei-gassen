@@ -26,11 +26,10 @@ export class GateSprite {
   ) {
     // 絵と置き方は視点の絵の組で決まる（真上は平たく敷き、立てる視点では、マスの手前の端に下の端を合わせて立てる）。
     // 奥のものから描く視点では、並べる値を depth に入れる
-    // 将軍では、マスの手前の辺の幅に合わせて伸び縮みさせる（遠近のない視点では倍率 1）
     const a = tallArt(fv.art, 'gate')!;
     this.img = scene.add.image(0, 0, a.key).setOrigin(a.originX, a.originY);
-    const at = placeTallCell(a, fv, col, row, { w: this.img.width, h: this.img.height });
-    this.img.setPosition(at.x, at.y).setScale(at.scaleX, at.scaleY);
+    const at = placeTallCell(a, fv, col, row);
+    this.img.setPosition(at.x, at.y);
     if (fv.depthSorted) this.img.setDepth(at.depth);
     layer.add(this.img);
   }
@@ -59,13 +58,12 @@ export class GateSprite {
       // 門のマスと、両隣のうち城壁のマスだけ（field は開戦時のものなので、崩れる前の城壁が入っている）
       if (c !== this.col && t !== 'wall') continue;
       const r = this.fv.cellRect(c, this.row);
-      // 瓦礫は平たい絵なので、立てる視点でもマスの形に合わせて敷き（将軍は走査線で台形に描く）、どの部隊よりも下に描く
+      // 瓦礫は平たい絵なので、立てる視点でもマスの形に合わせて敷き、どの部隊よりも下に描く
       const img = addCellImage(this.scene, this.fv, c, this.row, RUBBLE_KEY).setDepth(-1e6);
       this.layer.add(img);
       this.rubble.push(img);
-      // 演出の場所：遠近つきではマスの中心（矩形の中心は台形の中心からずれる）。ほかの視点はいままでどおり矩形の中心
-      const mid = this.fv.perspective ? this.fv.cellCenter(c, this.row) : { x: r.x + r.w / 2, y: r.y + r.h / 2 };
-      centers.push({ x: mid.x, y: mid.y, col: c });
+      // 演出の場所：マスの矩形の中心
+      centers.push({ x: r.x + r.w / 2, y: r.y + r.h / 2, col: c });
     }
     return centers;
   }
