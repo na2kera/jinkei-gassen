@@ -3,7 +3,7 @@
 // 保存してある部屋の形の版が 3 以下なら、読み込みで保存領域とアラームを消して、ないものとして扱う。
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client, CURRENT_CV, createRoom, randomPid, startServer, testRoute } from './helpers.mjs';
+import { Client, CURRENT_CV, createRoom, holdArmy, randomPid, setupPair, sleep, startServer, stepTicks, testRoute } from './helpers.mjs';
 
 let server;
 beforeAll(async () => {
@@ -105,6 +105,39 @@ describe('盤が変わる前の部屋（RoomState の v が 3 以下）', () => 
     expect(again.first).toMatchObject({ type: 'room', phase: 'waiting' });
     expect((await testRoute(server.base, code, 'state')).keys).toBeGreaterThan(0);
     again.c.close();
+  });
+
+  it('戦闘の途中の v: 3 の部屋も、部屋と戦闘の記録・アラームが消え、作り直したあとに古い戦闘は再開しない（刻みが進まない）', async () => {
+    // 刻みを手で進める部屋で、戦闘に入れて少し進め、戦闘の記録（battle）を保存させる
+    const timing = { tickMs: 100, revealMs: 300, maxTicks: 300, setupMs: 30_000, testManualTicks: 1 };
+    const { A, B, code } = await setupPair(server.base, timing);
+    A.send({ type: 'ready', army: holdArmy() });
+    B.send({ type: 'ready', army: holdArmy() });
+    await A.waitRoom((r) => r.phase === 'battle', 10_000, 'battle');
+    expect(await stepTicks(server.base, code, 30)).toBeGreaterThanOrEqual(30);
+    const before = await testRoute(server.base, code, 'state');
+    expect(before.phase).toBe('battle');
+    expect(before.savedBattleNo).toBe(1);
+    expect(before.savedTick).toBeGreaterThanOrEqual(20);
+    expect(before.alarm).not.toBeNull();
+    // 保存した部屋を盤が変わる前の形にしてから、作り直させる
+    expect(await setSavedVersion(code, 3)).toBe(true);
+    await testRoute(server.base, code, 'abort');
+    const after = await testRoute(server.base, code, 'state');
+    expect(after.instance).not.toBe(before.instance);
+    expect(after).toMatchObject({ phase: null, savedTick: null, savedBattleNo: null, liveTick: null, running: false, alarm: null, keys: 0 });
+    // 古い戦闘は動かない：刻みを進めようとしても進まず、時間がたっても何も保存されない
+    expect(await stepTicks(server.base, code, 10)).toBeNull();
+    await sleep(1500);
+    const later = await testRoute(server.base, code, 'state');
+    expect(later).toMatchObject({ phase: null, savedTick: null, liveTick: null, running: false, alarm: null, keys: 0 });
+    expect(later.instance).toBe(after.instance);
+    // 席にいた人が入り直そうとしても、部屋は見つからない
+    const { c, first } = await tryJoin(code, { pid: A.pid, name: 'A' });
+    expect(first).toMatchObject({ type: 'error', reason: 'not_found' });
+    c.close();
+    A.close();
+    B.close();
   });
 
   it('v: 4 の部屋は、作り直したあとも読み戻せる（席と段階が残る）', async () => {

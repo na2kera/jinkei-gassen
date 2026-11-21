@@ -54,4 +54,16 @@ describe('保存してある部屋の形の版', () => {
     expect(back).toEqual(s);
     expect(publicSignature(back)).toBe(publicSignature(s));
   });
+
+  it('読み戻した部屋でも、席の left・部屋の opponentLeft が変わると、外へ見える内容（publicSignature）が変わる', () => {
+    const s = newRoom('5678', 9, DEFAULT_TIMING);
+    s.seats = [newSeat('a', 'A', 3), newSeat('b', 'B', 3)];
+    const r = loadRoom(JSON.parse(JSON.stringify(s)));
+    const sig = publicSignature(r);
+    r.seats[0].left = true;
+    expect(publicSignature(r)).not.toBe(sig);
+    const sig2 = publicSignature(r);
+    r.opponentLeft = true;
+    expect(publicSignature(r)).not.toBe(sig2);
+  });
 });
