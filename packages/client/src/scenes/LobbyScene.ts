@@ -12,7 +12,7 @@ import { debug } from '../debug.ts';
 import { getLayout, LAYOUT_EVENT, lobbyLayout } from '../layout.ts';
 import { normalizeName } from '../net/name.ts';
 import { client, lobbyInput, notice, notify, pvp, resumableCode } from '../net/pvp.ts';
-import { lobbyStatusLine } from '../net/pvpText.ts';
+import { foldAtPeriod, lobbyStatusLine } from '../net/pvpText.ts';
 import { markPvpRulesSeen, playerId, pvpRulesSeen, savedName, saveName } from '../save.ts';
 import { Button } from '../ui/Button.ts';
 import { HtmlInput } from '../ui/htmlInput.ts';
@@ -46,7 +46,7 @@ export class LobbyScene extends Phaser.Scene {
     this.shownInRoom = null;
     this.rulesDialog = null;
     const l = lobbyLayout(layout);
-    this.statusText = addText(this, Math.round(l.centerX), l.status, '', 16, COLOR.red).setOrigin(0.5, 0);
+    this.statusText = addText(this, Math.round(l.centerX), l.status, '', 16, COLOR.red).setOrigin(0.5, 0).setAlign('center');
     this.build();
     // 部屋の様子が変わったら、表示物だけを組み直す（入った・失敗した など）。画面を移すのは pvp.ts
     this.unsubscribe = client.subscribe(() => this.build());
@@ -230,6 +230,8 @@ export class LobbyScene extends Phaser.Scene {
     for (const i of this.inputs) i.place();
     // いちばん下の行：生きている知らせ、なければ待機中に相手が自分で出たこと（design §11.5-8）。色は、その文の種類で決める
     const line = lobbyStatusLine(notice, Date.now(), client.room, pvp.active);
-    if (this.statusText.text !== line.text) this.statusText.setText(line.text).setColor(css(line.error ? COLOR.red : COLOR.muted));
+    // 縦持ちで幅に収まらない文（「新しい版があります。…」）は、句点の所で 2 行に折る（decisions §22）
+    const text = foldAtPeriod(line.text, getLayout().width - 16);
+    if (this.statusText.text !== text) this.statusText.setText(text).setColor(css(line.error ? COLOR.red : COLOR.muted));
   }
 }
