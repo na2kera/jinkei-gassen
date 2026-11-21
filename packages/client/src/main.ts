@@ -14,6 +14,7 @@ import { NetOverlayScene } from './scenes/NetOverlayScene.ts';
 import { PvpResultScene } from './scenes/PvpResultScene.ts';
 import { RevealScene } from './scenes/RevealScene.ts';
 import { pvp } from './net/pvp.ts';
+import { isTyping, relayoutGate } from './relayoutGate.ts';
 import { ResultScene } from './scenes/ResultScene.ts';
 import { StageSelectScene } from './scenes/StageSelectScene.ts';
 import { TitleScene } from './scenes/TitleScene.ts';
@@ -60,20 +61,28 @@ async function start(): Promise<void> {
   // 向きが変わったら内部の大きさを変え、シーンに組み直させる。
   // setGameSize は window の resize を起こさないので、ここが二重に走ることはない。
   // スマホのアドレスバーの出入りで何度も起きるので、少し待ってからまとめて1回だけ処理する。
+  // 入力欄にフォーカスがある間は組み直さず、外れたときに1回だけ組み直す（design §12.4。
+  // キーボードで画面の高さが縮む機種で、横持ちと判定されて欄が作り直され、キーボードが閉じるのを防ぐ）。
   let timer = 0;
   const relayout = (): void => {
     window.clearTimeout(timer);
-    timer = window.setTimeout(() => {
+    timer = window.setTimeout(() => gate.attempt(), 150);
+  };
+  const gate = relayoutGate(
+    () => isTyping(document.activeElement),
+    () => {
       const s = parentSize();
       const next = computeLayout(s.w, s.h);
       if (sameSize(next, getLayout())) return;
       setLayout(next);
       game.scale.setGameSize(next.width, next.height);
       game.events.emit(LAYOUT_EVENT);
-    }, 150);
-  };
+    },
+    relayout,
+  );
   window.addEventListener('resize', relayout);
   window.addEventListener('orientationchange', relayout);
+  document.addEventListener('focusout', () => gate.focusOut());
 
   if (import.meta.env.DEV) installDebug(game);
 }
