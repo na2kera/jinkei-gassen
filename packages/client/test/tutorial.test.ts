@@ -431,8 +431,8 @@ test('保存の済みの印：古い保存・真偽値でない値・範囲の�
   }
   // 掃除で捨てる星（範囲の外の数や文字列）は数えない
   assert.equal(sanitizeSave({ ...base, stars: { '1-1': 4, '1-2': '2', '1-3': 1.5, '1-4': -1 } }).tutorialDone, false);
-  // v が違う保存は空の保存になる
-  assert.equal(sanitizeSave({ ...base, v: 2, stars: { '1-1': 3 }, tutorialDone: true }).tutorialDone, false);
+  // 知らない版の保存は空の保存になる
+  assert.equal(sanitizeSave({ ...base, v: 3, stars: { '1-1': 3 }, tutorialDone: true }).tutorialDone, false);
   // 空の保存（clearSave のあとと同じ）は済みでない
   assert.equal(emptySave().tutorialDone, false);
   // 書いたものを読み直すと同じ（markTutorialDone のあとに読み直すと済み）

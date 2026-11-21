@@ -65,7 +65,7 @@ test('U7 チュートリアルの前・あいだ・あとで、面の一覧を�
   const before1_1: Placement[] = [{ kind: 'hq', col: 5, row: 14, stance: 'hold' }];
   mem.map.set(
     KEY,
-    JSON.stringify({ v: 1, stars: { '1-1': 2, '1-2': 1 }, placements: { '1-1': before1_1 }, muted: true, view: 'general', tutorialDone: false }),
+    JSON.stringify({ v: 2, stars: { '1-1': 2, '1-2': 1 }, placements: { '1-1': before1_1 }, muted: true, view: 'side', tutorialDone: false }),
   );
   // session.ts と tutorial/run.ts が使うのと同じ save.ts（ここで初めて読み込む）
   const save = await import('../src/save.ts');
@@ -135,7 +135,7 @@ test('U7 チュートリアルの前・あいだ・あとで、面の一覧を�
   const prev = JSON.parse(stored!);
   assert.deepEqual(after.stars, prev.stars);
   assert.deepEqual(after.placements, prev.placements);
-  assert.equal(after.view, 'general');
+  assert.equal(after.view, 'side');
   assert.equal(after.placements.tutorial, undefined);
   assert.deepEqual(answers(), want);
 

@@ -18,9 +18,9 @@ import { RESERVE_FROM_LABEL, RESERVE_LABEL } from '../src/ui/labels.ts';
 
 // ---- 保存 ----
 
-test('遊軍の前の保存（reserves・pvpReserve・陣形の reserve がない）は、そのまま読めて、遊軍は空', () => {
+test('遊軍の項目（reserves・pvpReserve・陣形の reserve）がない保存は、そのまま読めて、遊軍は空', () => {
   const old = {
-    v: 1,
+    v: 2,
     stars: { '1-1': 2 },
     placements: { '1-1': [{ kind: 'hq', col: 5, row: 14, stance: 'hold' }] },
     muted: true,
@@ -55,7 +55,7 @@ test('遊軍を保存して読み戻せる（面ごと・対戦・陣形）。JS
 
 test('壊れた遊軍の値は、その遊軍だけを捨てる（本陣・知らない方針・余計な項目・形が違う）', () => {
   const d = sanitizeSave({
-    v: 1,
+    v: 2,
     reserves: { a: { kind: 'hq', stance: 'hold' }, b: { kind: 'infantry', stance: 'zzz' }, c: 'x', d: { kind: 'archer', stance: 'hold', extra: 1 } },
     pvpReserve: { kind: 'hq', stance: 'hold' },
     formations: [{ name: 'y', width: 12, units: [{ kind: 'hq', col: 1, row: 1, stance: 'hold' }], reserve: { kind: 'nope', stance: 'hold' } }],
