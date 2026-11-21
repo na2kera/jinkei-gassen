@@ -55,6 +55,8 @@ test('I3：欄は親の中に absolute で置かれ、押し始めの伝わり�
   assert.match(code, /addEventListener\('mousedown',\s*stop\b/);
   assert.match(code, /stopPropagation\(\)/);
   assert.doesNotMatch(code, /preventDefault/);
+  // 消す前にフォーカスを外す（focusout を確実に出して、止めていた組み直しを走らせる）
+  assert.match(code, /this\.el\.blur\(\);\s*this\.el\.remove\(\)/);
   for (const t of ['touchend', 'mouseup', 'pointerup', 'pointerdown', 'touchcancel']) {
     assert.doesNotMatch(code, new RegExp(`'${t}'`), `${t} を受けてはいけない`);
   }

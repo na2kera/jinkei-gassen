@@ -112,6 +112,9 @@ export class HtmlInput {
   destroy(): void {
     window.removeEventListener('resize', this.onResize);
     this.removeHit();
+    // フォーカスを持ったまま消すと、ブラウザによっては focusout が出ない。入力中に止めていた組み直し（design §12.4）が
+    // 残らないよう、先にフォーカスを外す
+    if (document.activeElement === this.el) this.el.blur();
     this.el.remove();
   }
 }
