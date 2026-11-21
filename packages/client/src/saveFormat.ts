@@ -5,7 +5,7 @@ import { KINDS, MAX_UNITS, reserveErrors, STANCES, STANDARD_WIDTH, type Placemen
 import { parseView, type ViewMode } from './battle/viewMode.ts';
 
 /**
- * 保存の形の版（design §5.4、§13.9）。2 は盤を 8×11 にした（design §13）あとの形。鍵（jinkei-gassen/v1）は変えない。
+ * 保存の形の版（design §5.4、§13.9）。2 は盤を変えた（design §13）あとの形。鍵（jinkei-gassen/v1）は変えない。
  * 1 の保存からは、座標を持たない項目だけを引き継ぐ（sanitizeSave）
  */
 export const SAVE_VERSION = 2;
@@ -38,7 +38,7 @@ export interface SaveData {
   pvpReserve: ReserveSetup | null;
   /** 保存した陣形（design §5.6。8つまで） */
   formations: SavedFormation[];
-  /** 戦闘の画面の視点（design §5.7、§5.8）。4つの値を受け付ける（使えない視点は戦闘の画面で真上として扱う） */
+  /** 戦闘の画面の視点（design §5.7、§5.8）。真上・斜め・横からの3つ（なくした将軍の視点など、知らない値は真上として読む） */
   view: ViewMode;
   /**
    * チュートリアルを済ませたか（design §8.7）。最後まで遊ぶか、飛ばすと付く。

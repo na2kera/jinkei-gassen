@@ -71,7 +71,7 @@ export interface Deadlines {
 
 export interface RoomState {
   /**
-   * 形の版。4 は盤を 8×11 にした（design §13）あとの形。3 以下（盤が変わる前）の部屋は、配置と戦闘の記録が古い座標なので、
+   * 形の版。4 は盤を変えた（design §13）あとの形。3 以下（盤が変わる前）の部屋は、配置と戦闘の記録が古い座標なので、
    * 読み込みで片付ける（loadRoom）
    */
   v: typeof ROOM_VERSION;

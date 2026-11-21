@@ -6,7 +6,7 @@ import type { DraftMessage, ReadyMessage, ReserveMessage, RoomMessage } from '@j
 
 /**
  * つなぐときの URL に付ける client の版。2 は遊軍を知っている版（server の room.rules.reserve の条件）、
- * 3 は盤を 8×11 にした版（design §13.6）。server は MIN_CLIENT_VERSION（3）より小さい版を outdated で断る
+ * 3 は盤を変えた版（design §13.6）。server は MIN_CLIENT_VERSION（3）より小さい版を outdated で断る
  */
 export const CLIENT_VERSION = 3;
 
