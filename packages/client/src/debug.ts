@@ -202,10 +202,14 @@ export function installDebug(game: Phaser.Game): void {
     get scenes(): string[] {
       return game.scene.getScenes(true).map((s) => s.scene.key);
     },
-    /** 前の部屋（または指定したコードの部屋）に、保存した名前で入る（確かめるときに画面の操作を省くため） */
-    pvpJoin(code?: string): boolean {
+    /**
+     * 前の部屋（または指定したコードの部屋）に、保存した名前で入る（確かめるときに画面の操作を省くため）。
+     * cv を渡すと、その版でつなぐ（古い画面として outdated で断られる様子を確かめるため。design §13.6）
+     */
+    pvpJoin(code?: string, cv?: number): boolean {
       const c = code ?? savedRoomCode();
       if (!c) return false;
+      client.versionForDebug = cv ?? null;
       pvp.begin();
       client.join(c, playerId(), savedName() || '試し');
       return true;

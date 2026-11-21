@@ -128,6 +128,9 @@ export async function testRoute(base, code, name) {
   return r.json();
 }
 
+/** いまの client の版（client の CLIENT_VERSION と同じ。server の MIN_CLIENT_VERSION 以上） */
+export const CURRENT_CV = 3;
+
 /** テスト用のクライアント。届いたメッセージをすべて記録する */
 export class Client {
   constructor(base, code, opts = {}) {
@@ -141,8 +144,11 @@ export class Client {
     this.closed = null;
     this.waiters = [];
     this.room = null;
-    /** client の版（接続の URL の cv）。undefined なら付けない（遊軍を知らない古い画面） */
-    this.cv = opts.cv;
+    /**
+     * client の版（接続の URL の cv）。渡さなければ、いまの版（3）。{ cv: undefined } と明示したときだけ付けない
+     * （版のない古い画面。server は 1 として扱い、outdated で断る。design §13.6）
+     */
+    this.cv = 'cv' in opts ? opts.cv : CURRENT_CV;
   }
 
   get url() {
@@ -257,7 +263,7 @@ export class Client {
 }
 
 /** 部屋を作り、2人を入れて setup まで進める */
-export async function setupPair(base, timing, { names = ['A', 'B'], map = 'plain', cv = [undefined, undefined], seed = undefined } = {}) {
+export async function setupPair(base, timing, { names = ['A', 'B'], map = 'plain', cv = [CURRENT_CV, CURRENT_CV], seed = undefined } = {}) {
   const A = new Client(base, '', { name: names[0], cv: cv[0] });
   const code = await createRoom(base, A.pid, timing, undefined, map, seed);
   A.code = code;

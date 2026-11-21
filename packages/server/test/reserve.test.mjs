@@ -1,5 +1,5 @@
 // 遊軍（design §7.7、§7.9 の R14）：隠す情報、現れたあとの場面、もう一戦、配置の検査、組で扱うこと、
-// 現れた直後の作り直し、cv（古い画面の混じる部屋）、遊軍のエラーの op と、渡す前の入力は陣営ごとに1つまで、同じ刻みの遊軍と号令。
+// 現れた直後の作り直し、古い画面の入り直し、遊軍のエラーの op と、渡す前の入力は陣営ごとに1つまで、同じ刻みの遊軍と号令。
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, army, holdArmy, loneArcherArmy, setupPair, startServer, stepTicks, testRoute, unpack } from './helpers.mjs';
@@ -12,13 +12,9 @@ afterAll(async () => {
   await server?.stop();
 });
 
-/**
- * 同じ pid でつなぎ直す（前の接続は server が 4001 で閉じる）。最初の room が届くまで待つ。
- * opts.cv を渡すとその版で（undefined なら cv を付けない古い画面として）、渡さなければ前と同じ版でつなぐ
- */
-async function rejoin(c, opts = {}) {
-  const cv = 'cv' in opts ? opts.cv : c.cv;
-  const again = new Client(server.base, c.code, { pid: c.pid, name: c.name, cv });
+/** 同じ pid・同じ版でつなぎ直す（前の接続は server が 4001 で閉じる）。最初の room が届くまで待つ */
+async function rejoin(c) {
+  const again = new Client(server.base, c.code, { pid: c.pid, name: c.name, cv: c.cv });
   await again.connect();
   await again.waitMsg((m) => m.type === 'room', { label: 'room after rejoin' });
   return again;
@@ -65,7 +61,7 @@ describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令。刻
     // A（陣営0）は本陣と弓兵1（どちらも中央の翼。左翼と右翼はだれもいない）、遊軍は騎兵・守備。
     // B（陣営1）は盾兵11の壁（守備）、遊軍は歩兵・守備。弓兵が撃ち続けるので膠着にならず、時間切れまで続く
     const timing = { tickMs: 100, revealMs: 300, maxTicks: 400, setupMs: 30_000, watchdogMs: 1000, testManualTicks: 1 };
-    let { A, B, code } = await setupPair(server.base, timing, { cv: [2, 2] });
+    let { A, B, code } = await setupPair(server.base, timing, { cv: [3, 3] });
     const wall = army([['hq', 5, 15, 'hold'], ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((c) => ['shield', c, 10, 'hold'])]);
     const aReserve = { kind: 'cavalry', stance: 'hold' };
     const bReserve = { kind: 'infantry', stance: 'hold' };
@@ -205,7 +201,7 @@ describe('隠す情報：届く列そのもの（R14 a。刻みを手で進め�
       ['archer', 5, 12, 'advance'],
     ]);
     const run = async (variant) => {
-      const { A, B, code } = await setupPair(server.base, timing, { cv: [2, 2], seed: 20261119 });
+      const { A, B, code } = await setupPair(server.base, timing, { cv: [3, 3], seed: 20261119 });
       // A の接続を入り直すたびに足していく（列は、全部の接続に届いたものを順につないだもの）
       const As = [A];
       const a = () => As.at(-1);
@@ -294,7 +290,7 @@ describe('隠す情報：届く列そのもの（R14 a。刻みを手で進め�
 describe('配置の検査・組で扱う・もう一戦（R14 c・d・e）', () => {
   it('遊軍を含めて予算と部隊数を数え、最後に検査を通った組が使われ、もう一戦で組が消える', async () => {
     const timing = { tickMs: 10, revealMs: 300, maxTicks: 200, setupMs: 4000 };
-    let { A, B } = await setupPair(server.base, timing, { cv: [2, 2] });
+    let { A, B } = await setupPair(server.base, timing, { cv: [3, 3] });
     const errOf = async (c, msg) => {
       const from = c.messages.length;
       c.send(msg);
@@ -385,86 +381,62 @@ describe('配置の検査・組で扱う・もう一戦（R14 c・d・e）', () 
   });
 });
 
-describe('古い画面の混じる部屋（R14 g）', () => {
-  it('片方が cv なしなら rules.reserve は false で、遊軍つきの draft・ready と reserve は reserve_disabled で断られる', async () => {
-    const timing = { tickMs: 20, revealMs: 300, maxTicks: 200, setupMs: 30_000 };
-    const { A, B } = await setupPair(server.base, timing, { cv: [2, undefined] });
-    expect(A.room.rules.reserve).toBe(false);
-    expect(B.room.rules.reserve).toBe(false);
-    A.send({ type: 'draft', army: holdArmy(), reserve: CAV });
-    expect(await A.waitMsg((m) => m.type === 'error')).toMatchObject({ reason: 'reserve_disabled' });
-    const from = A.messages.length;
-    A.send({ type: 'ready', army: holdArmy(), reserve: CAV });
-    const err2 = await A.waitMsg((m) => m.type === 'error', { from });
-    expect(err2).toMatchObject({ reason: 'reserve_disabled' });
-    // 断られた ready では確定していない：確定していれば、同じ処理の room（ready）がエラーより先に自分の接続に届く
-    expect(A.messages.slice(0, A.messages.indexOf(err2)).filter((m) => m.type === 'room').every((m) => m.seats[0].ready === false)).toBe(true);
-    // 遊軍なし（null）なら通る
-    A.send({ type: 'ready', army: holdArmy(), reserve: null });
-    await B.waitRoom((r) => r.seats[0].ready === true, 5000, 'A ready');
-    B.send({ type: 'ready', army: holdArmy() });
-    const rev = await A.waitMsg((m) => m.type === 'reveal');
-    expect(rev.myReserve).toBeNull();
-    const snap = await A.waitMsg((m) => m.type === 'snap' && m.tick >= 55, { ms: 10_000 });
-    expect(snap.reserve).toBeNull();
-    const fromE = A.messages.length;
-    A.send({ type: 'reserve', battleNo: A.room.battleNo, from: 'left' });
-    expect(await A.waitMsg((m) => m.type === 'error', { from: fromE })).toMatchObject({ reason: 'reserve_disabled', op: 'reserve' });
-    // 古い画面（B）に届いたものにも、遊軍の値は入っていない
-    expect(B.of('room').every((m) => m.rules.reserve === false && m.myReserve === null)).toBe(true);
-    A.close();
-    B.close();
-  });
-
-
-  it('両者 cv=2 で始めたあと、同じ人が cv なしで入り直しても席の cv は下がらない（setup 中・戦闘中）。相手の確定と遊軍は残り、呼べる', async () => {
+describe('古い画面の入り直し（R14 g。design §13.6 で古い版は入れなくなった）', () => {
+  // 版 3 より前の画面は、席を探す前に outdated で断られる。そのため「片方が古い画面で rules.reserve が false になる部屋」は
+  // もう作れない（reserve_disabled の仕組みは server に残るが、通しのテストでは届かない）。
+  // ここでは、席にいる人が古い画面（cv なし・版 2）を装って入り直そうとしても、いまの接続・相手の確定・遊軍が崩れないことを確かめる
+  it('両者 cv=3 で始めたあと、同じ人が cv なし・cv=2 で入り直そうとしても断られ、いまの接続と席の cv は残る（setup 中・戦闘中）。相手の確定と遊軍は残り、呼べる', async () => {
     const timing = { tickMs: 100, revealMs: 300, maxTicks: 300, setupMs: 30_000, testManualTicks: 1 };
-    let { A, B, code } = await setupPair(server.base, timing, { cv: [2, 2] });
-    // B：下書き（遊軍つき）→ 確定 → 取り消し。どれも自分の接続に返る room で、処理済みを確かめる
+    const { A, B, code } = await setupPair(server.base, timing, { cv: [3, 3] });
+    /** 古い画面を装って入り直す。outdated が届いて閉じられ、room は届かない */
+    const tryOld = async (cv) => {
+      const old = new Client(server.base, code, { pid: B.pid, name: B.name, cv });
+      await old.connect();
+      expect(await old.waitMsg((m) => m.type === 'error')).toMatchObject({ reason: 'outdated' });
+      const closed = await old.waitClosed();
+      if (closed.code !== null) expect(closed.code).toBe(1008);
+      expect(old.of('room')).toEqual([]);
+      old.close();
+    };
+    // B：下書き（遊軍つき）→ 確定 → 取り消し。どれも自分の接続に返る room で、処理済みを確かめる（下書きだけでは room が来ない）
     B.send({ type: 'draft', army: holdArmy(), reserve: ARCH });
     B.send({ type: 'ready' });
     await B.waitRoom((r) => r.seats[1].ready === true, 5000, 'B ready');
     B.send({ type: 'unready' });
     await B.waitRoom((r) => r.seats[1].ready === false, 5000, 'B unready');
-    // A：遊軍つきで確定。自分の接続に返る room で確かめる
+    expect(B.room.myReserve).toEqual(ARCH);
     A.send({ type: 'ready', army: holdArmy(), reserve: CAV });
     await A.waitRoom((r) => r.seats[0].ready === true, 5000, 'A ready');
-    expect(A.room.myReserve).toEqual(CAV);
     const fromA0 = A.messages.length;
-    // --- setup 中に、B が古い画面（cv なし）を装って入り直す
-    B = await rejoin(B, { cv: undefined });
-    expect(B.room.rules.reserve).toBe(true);
-    // B の下書きの組（遊軍を含む）も残っている（検査を通っているので lastValid になっている）
-    expect(B.room.myReserve).toEqual(ARCH);
-    // army を付けない ready は、reserve の値を（形が違っても）見ず、いまの下書きの組で確定する。これで公開に移る
-    B.send({ type: 'ready', reserve: 'not a reserve' });
+    const fromB0 = B.messages.length;
+    // --- setup 中に、B が古い画面を装って入り直そうとする
+    await tryOld(undefined);
+    await tryOld(2);
+    // いまの B の接続は 4001 で閉じられず、そのまま使える。入り直しの試みで、A にも B にも何も届いていない
+    expect(B.closed).toBeNull();
+    B.send({ type: 'ready' });
     const [revA, revB] = await Promise.all([A.waitMsg((m) => m.type === 'reveal'), B.waitMsg((m) => m.type === 'reveal')]);
-    // 番兵：公開に移ったときの room。入り直しで A に何か送られていれば、この room より先に A の接続に届いている。
-    // A に届いたのは、公開の room と reveal だけで、遊軍は使えるまま、A の遊軍も残っている
-    const sinceRejoin = A.messages.slice(fromA0, A.messages.indexOf(revA) + 1);
-    expect(sinceRejoin.map((m) => m.type)).toEqual(['room', 'reveal']);
-    expect(sinceRejoin[0]).toMatchObject({ phase: 'reveal', rules: { reserve: true }, myReserve: CAV });
+    const sinceA = A.messages.slice(fromA0, A.messages.indexOf(revA) + 1);
+    expect(sinceA.map((m) => m.type)).toEqual(['room', 'reveal']);
+    expect(sinceA[0]).toMatchObject({ phase: 'reveal', rules: { reserve: true }, myReserve: CAV });
+    expect(B.messages.slice(fromB0, B.messages.indexOf(revB) + 1).every((m) => m.type === 'room' || m.type === 'reveal')).toBe(true);
     expect(revA.myReserve).toEqual(CAV);
     expect(revB.myReserve).toEqual(ARCH);
     await A.waitRoom((r) => r.phase === 'battle', 5000, 'battle');
     const battleNo = A.room.battleNo;
     expect(await stepTo(code, 60)).toBe(60);
     await A.waitMsg((m) => m.type === 'snap' && m.tick === 60);
-    // --- 戦闘中に、B がもう一度 cv なしで入り直す（入り直しが終わってから A が送るので、A への知らせがあれば A の返事より先に届く）
+    // --- 戦闘中にも、古い画面を装って入り直そうとする
     const fromA = A.messages.length;
-    B = await rejoin(B, { cv: undefined });
+    await tryOld(undefined);
+    expect(B.closed).toBeNull();
     expect(B.room.rules.reserve).toBe(true);
     A.send({ type: 'reserve', battleNo, from: 'right' });
-    A.send({ type: 'reserve', battleNo, from: 'right' });
-    // 番兵：2つ目の遊軍の入力への断り。それまでに A に届いたのは、この断りだけ（room は送り直されていない）
-    const pendingErr = await A.waitMsg((m) => m.type === 'error', { from: fromA });
-    expect(pendingErr).toMatchObject({ reason: 'invalid_reserve', code: 'no_reserve' });
-    expect(A.messages.slice(fromA, A.messages.indexOf(pendingErr))).toEqual([]);
     expect(await stepTicks(server.base, code, 2)).toBe(62);
     const s = await A.waitMsg((m) => m.type === 'snap' && m.tick === 62, { from: fromA });
+    expect(A.messages.slice(fromA, A.messages.indexOf(s)).every((m) => m.type === 'snap')).toBe(true);
     expect(s.events.find((e) => e.type === 'reserve')).toMatchObject({ side: 0, from: 'right' });
     expect(s.reserve).toEqual({ ...CAV, state: 'used' });
-    // B（cv なしで入り直した接続）にも、現れた遊軍が届く
     const sb = await B.waitMsg((m) => m.type === 'snap' && m.tick === 62);
     expect(sb.units.map(unpack).some((u) => u.side === 0 && u.kind === 'cavalry')).toBe(true);
     A.close();

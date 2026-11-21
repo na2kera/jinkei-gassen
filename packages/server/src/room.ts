@@ -56,7 +56,8 @@ import {
   newRoom,
   newSeat,
   nextDeadline,
-  normalizeRoom,
+  loadRoom,
+  MIN_CLIENT_VERSION,
   publicSignature,
   reserveAllowed,
   type BattleRecord,
@@ -203,13 +204,21 @@ export class Room extends DurableObject<Env> {
     super(ctx, env);
     // "ping" には Durable Object を起こさずに "pong" を返す
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
-    const saved = this.ctx.storage.kv.get<RoomState>(ROOM_KEY) ?? null;
-    // 遊軍の前の形で保存された部屋（下書きが配置の配列、席に cv がない）も読めるようにそろえる
-    this.room = saved === null ? null : normalizeRoom(saved);
+    const saved = this.ctx.storage.kv.get<unknown>(ROOM_KEY) ?? null;
+    // 盤が変わる前の形（v が 3 以下）の部屋は、配置と戦闘の記録が古い座標なので使わない（design §13.6）。
+    // ないものとして扱い（room は null）、下の点検で保存領域とアラームを消す
+    this.room = saved === null ? null : loadRoom(saved);
+    const stale = saved !== null && this.room === null;
     // 起動時の点検：接続の突き合わせ（再起動で消えた接続）、期限、戦闘の再開。
     // ここで戦闘を再開しておけば、起こしたのが見張りのアラームでも、入り直した人の接続でも同じに続く
     void this.ctx.blockConcurrencyWhile(async () => {
       try {
+        // 古い部屋は、部屋を片付けるときと同じ処理で消す。blockConcurrencyWhile の中で待つので、消し終わる前に
+        // 入室や部屋の作成が割り込んで、作った新しい部屋を遅れた削除が消すことはない
+        if (stale) {
+          await this.wipe();
+          return;
+        }
         const s = this.room;
         if (s === null) return;
         const tx = new Tx(s, Date.now());
@@ -339,6 +348,17 @@ export class Room extends DurableObject<Env> {
     };
   }
 
+  /**
+   * テスト用：保存してある部屋の形の版（v）だけを書き換える（盤が変わる前の部屋を作るため。design §13.6）。
+   * メモリの部屋はそのままなので、続けて abortNow で作り直させ、読み込みの処理を通す。保存した部屋がなければ false
+   */
+  async setSavedVersionNow(v: number): Promise<boolean> {
+    const saved = this.ctx.storage.kv.get<RoomState>(ROOM_KEY);
+    if (saved === undefined) return false;
+    this.ctx.storage.kv.put(ROOM_KEY, { ...saved, v });
+    return true;
+  }
+
   /** テスト用：Durable Object を作り直させる（メモリの中身と setInterval が消える。保存領域とアラームは残る） */
   async abortNow(): Promise<void> {
     this.ctx.abort('test: reset the Durable Object');
@@ -358,6 +378,12 @@ export class Room extends DurableObject<Env> {
       const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
       // 断るときも、いったん受けてから error を送って閉じる（ブラウザは upgrade の失敗の理由を読めないため）
       this.ctx.acceptWebSocket(server);
+      // 古い版の画面は、部屋や席を見る前に断る（design §13.6）。保存領域にも、席のいまの接続にも触れない
+      const cv = parseClientVersion(url.searchParams.get('cv'));
+      if (cv < MIN_CLIENT_VERSION) {
+        this.reject(server, 'outdated', 1008);
+        return new Response(null, { status: 101, webSocket: client });
+      }
       const s = this.room;
       if (s === null) {
         // 部屋がない。保存領域には何も書かない（存在しないコードを叩かれるたびに書き込みが増えないように）
@@ -371,7 +397,7 @@ export class Room extends DurableObject<Env> {
         this.reject(server, side, side === 'full' ? 4002 : 4003);
         return new Response(null, { status: 101, webSocket: client });
       }
-      this.join(tx, server, side, pid, name, parseClientVersion(url.searchParams.get('cv')));
+      this.join(tx, server, side, pid, name, cv);
       this.settle(tx);
       this.commit(tx);
       return new Response(null, { status: 101, webSocket: client });
@@ -381,8 +407,9 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  private reject(ws: WebSocket, reason: 'not_found' | 'full', code: CloseCode): void {
-    const msg: ErrorMessage = { type: 'error', reason, message: reason === 'full' ? 'the room is full' : 'no such room' };
+  private reject(ws: WebSocket, reason: 'not_found' | 'full' | 'outdated', code: CloseCode): void {
+    const message = reason === 'full' ? 'the room is full' : reason === 'outdated' ? 'please reload the page' : 'no such room';
+    const msg: ErrorMessage = { type: 'error', reason, message };
     this.safeSend(ws, JSON.stringify(msg));
     this.safeClose(ws, code, reason);
   }

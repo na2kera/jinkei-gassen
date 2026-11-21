@@ -5,7 +5,7 @@
 // 使われていないコードの Durable Object には何も残らない。
 
 import type { BattleState, BattleSummary, Placement, ReserveSetup } from '@jinkei/engine';
-import { DEFAULT_TIMING, type Timing } from './timing.ts';
+import type { Timing } from './timing.ts';
 
 export type Phase = 'reserved' | 'waiting' | 'setup' | 'reveal' | 'battle' | 'result';
 
@@ -20,6 +20,15 @@ export interface Deploy {
 
 /** 遊軍を知っている client の版（接続の URL の cv）。両方の席がこれ以上のときだけ遊軍を使える */
 export const RESERVE_CLIENT_VERSION = 2;
+
+/**
+ * 入れる client の最小の版（接続の URL の cv。design §13.6）。これより小さい版（cv なしは 1）は、席を探す前に
+ * error（outdated）を送って 1008 で閉じる。盤の大きさが変わり、古い画面の配置は座標が合わないため
+ */
+export const MIN_CLIENT_VERSION = 3;
+
+/** いまの部屋の状態の形の版。これより前の形（盤が変わる前の部屋）は、読み込みで片付ける（loadRoom） */
+export const ROOM_VERSION = 4;
 
 export interface Seat {
   pid: string;
@@ -61,8 +70,11 @@ export interface Deadlines {
 }
 
 export interface RoomState {
-  /** 形の版。3 は遊軍（design §7.7）を足した形。読み戻すときに normalizeRoom でそろえる */
-  v: 2 | 3;
+  /**
+   * 形の版。4 は盤を 8×11 にした（design §13）あとの形。3 以下（盤が変わる前）の部屋は、配置と戦闘の記録が古い座標なので、
+   * 読み込みで片付ける（loadRoom）
+   */
+  v: typeof ROOM_VERSION;
   /** 部屋のコード（Durable Object の名前と同じ） */
   code: string;
   /**
@@ -117,7 +129,7 @@ export interface BattleRecord {
 
 export function newRoom(code: string, gen: number, timing: Timing): RoomState {
   return {
-    v: 3,
+    v: ROOM_VERSION,
     code,
     gen,
     phase: 'reserved',
@@ -193,27 +205,11 @@ export function reserveAllowed(s: RoomState): boolean {
 }
 
 /**
- * 保存領域から読んだ部屋の状態を、いまの形にそろえる（その場で書き換える）。
- * 遊軍の前の形（v 2）では、下書きが配置の配列そのままで、席に cv がない。配置は遊軍なしの組に、cv は 1（古い画面）にする。
- * 自分で出たことを知らせる前（design §11.5-3）の形では、席の left・部屋の opponentLeft・timing.leftMs がない。
- * left と opponentLeft は false、leftMs は既定の値にする（ほかの timing の値は保つ。入れないと期限の計算が NaN になる）
+ * 保存領域から読んだ部屋の状態を、使える部屋として読む。いまの形（v が ROOM_VERSION）でなければ null
+ * （盤が変わる前の部屋。呼ぶ側が保存領域とアラームを消して、ないものとして扱う。design §13.6）。
+ * 3 より前の形をそろえる処理（遊軍の前の形・自分で出たことを知らせる前の形）は、3 以下をすべて片付けるので持たない
  */
-export function normalizeRoom(s: RoomState): RoomState {
-  const toDeploy = (v: unknown): Deploy | null => {
-    if (v === null || v === undefined) return null;
-    if (Array.isArray(v)) return { army: v as Placement[], reserve: null };
-    const d = v as Partial<Deploy>;
-    return Array.isArray(d.army) ? { army: d.army, reserve: d.reserve ?? null } : null;
-  };
-  for (const seat of s.seats) {
-    if (seat === null) continue;
-    seat.draft = toDeploy(seat.draft);
-    seat.lastValid = toDeploy(seat.lastValid);
-    if (typeof seat.cv !== 'number') seat.cv = 1;
-    if (typeof seat.left !== 'boolean') seat.left = false;
-  }
-  if (typeof s.opponentLeft !== 'boolean') s.opponentLeft = false;
-  if (typeof s.timing.leftMs !== 'number') s.timing.leftMs = DEFAULT_TIMING.leftMs;
-  s.v = 3;
-  return s;
+export function loadRoom(saved: unknown): RoomState | null {
+  if (typeof saved !== 'object' || saved === null) return null;
+  return (saved as { v?: unknown }).v === ROOM_VERSION ? (saved as RoomState) : null;
 }
