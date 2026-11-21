@@ -60,6 +60,12 @@ const ARMIES = [
 ];
 const FIELD_COLS = 12;
 const FIELD_ROWS = 16;
+/**
+ * 道具の中の1マスの大きさ（px）。ゲームのタイル（TILE）の大きさが変わっても、ポスターの寸法が変わらないよう、道具が自分で持つ
+ * （design §13.11）。ゲームのタイルは、この大きさに縮めて（または伸ばして）描く。兵の並び（slotsOf の px）も同じ倍率にする
+ */
+const CELL_PX = 24;
+const TILE_SCALE = CELL_PX / TILE;
 
 async function report(message) {
   try { await fetch('/error', { method: 'POST', body: String(message) }); } catch { /* サーバーが止まっていれば何もしない */ }
@@ -194,7 +200,7 @@ const SCREEN_COLS = FIELD_ROWS;
 const SCREEN_ROWS = FIELD_COLS;
 function unitsOnScreen() {
   return ARMIES.flatMap((army, team) => army.map(([kind, col, row]) => ({
-    team, kind, cx: (15 - row) * TILE + TILE / 2, cy: col * TILE + TILE / 2,
+    team, kind, cx: (15 - row) * CELL_PX + CELL_PX / 2, cy: col * CELL_PX + CELL_PX / 2,
     // 部隊の向き（画面の上で）。藍は右、朱は左
     f: team === 0 ? { x: 1, y: 0 } : { x: -1, y: 0 },
     dir: team === 0 ? 1 : 3,
@@ -207,21 +213,25 @@ function unitsOnScreen() {
  * standing なら、立った兵の絵（standKey）を足もとに置き、旗もその寸法にする
  */
 function fieldArt(standing) {
-  const c = makeCanvas(SCREEN_COLS * TILE, SCREEN_ROWS * TILE);
+  const c = makeCanvas(SCREEN_COLS * CELL_PX, SCREEN_ROWS * CELL_PX);
   const ctx = c.getContext('2d');
   for (let sy = 0; sy < SCREEN_ROWS; sy++) for (let sx = 0; sx < SCREEN_COLS; sx++) {
     const col = sy; const row = 15 - sx;
     // 平地の模様は、art/field.ts と同じ決まりでマスの位置から選ぶ
     const variant = (col * 7 + row * 13 + ((col * row) % 5)) % PLAIN_VARIANTS;
-    ctx.drawImage(textures.get(tileKey('plain', variant)), sx * TILE, sy * TILE);
+    const tile = textures.get(tileKey('plain', variant));
+    ctx.drawImage(tile, 0, 0, tile.width, tile.height, sx * CELL_PX, sy * CELL_PX, CELL_PX, CELL_PX);
   }
   const units = unitsOnScreen();
   const sprites = [];
   for (const [u, unit] of units.entries()) {
     const right = { x: -unit.f.y, y: unit.f.x };
     for (const slot of slotsOf(unit.kind)) {
-      const wx = unit.cx + slot.lx * right.x - slot.ly * unit.f.x;
-      const wy = unit.cy + slot.lx * right.y - slot.ly * unit.f.y;
+      // 並びの px は、ゲームのタイルに合わせた値なので、道具のマスの大きさに直す
+      const lx = slot.lx * TILE_SCALE;
+      const ly = slot.ly * TILE_SCALE;
+      const wx = unit.cx + lx * right.x - ly * unit.f.x;
+      const wy = unit.cy + lx * right.y - ly * unit.f.y;
       if (standing) {
         const size = standSize(slot.shape);
         sprites.push({ u, key: standKey(unit.team, slot.shape, unit.dir, 0), x: Math.round(wx - size.w / 2), y: Math.round(wy - size.h + 1), w: size.w, h: size.h, foot: wy });
