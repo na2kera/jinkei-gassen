@@ -24,7 +24,7 @@ import { Effects } from '../art/effects.ts';
 import { GateSprite } from '../art/GateSprite.ts';
 import { FOG_KEY } from '../art/textures.ts';
 import { unitLift } from '../art/formation.ts';
-import { placeTallCell, tallArt } from '../art/tallArt.ts';
+import { placeTallCell, tallArt, tallScaleCell } from '../art/tallArt.ts';
 import { addCellImage, addFieldImage, drawFieldFrame } from '../art/field.ts';
 import { drawDrum, drawSurviveIcon } from '../art/icons.ts';
 import { COLOR, css } from '../art/palette.ts';
@@ -137,7 +137,7 @@ export class BattleScene extends Phaser.Scene {
   private markLayer!: Phaser.GameObjects.Container;
   /** 現れた遊軍の「遊軍」の知らせ（部隊の id と、消す時刻。0 はまだ出していない）。作り直しても続けて出すよう、表示物とは別に持つ */
   private reserveNotices: { unit: number; until: number }[] = [];
-  /** 戦場の描き場所（12列×16行ぶん。斜めや横からのときは戦場より縦に広い） */
+  /** 戦場の描き場所（標準の戦場 10 列 × 12 行ぶん。斜めや横からのときは戦場より縦に広い） */
   private area: Rect = { x: 0, y: 0, w: 0, h: 0 };
   /** 立てる視点のときの、高さのある城壁の絵（門が破れたら、両隣を消すため。列ごと） */
   private wallImages = new Map<number, Phaser.GameObjects.Image>();
@@ -1041,7 +1041,9 @@ export class BattleScene extends Phaser.Scene {
         if (!a) continue;
         const img = this.add.image(0, 0, a.key).setOrigin(a.originX, a.originY);
         const at = placeTallCell(a, this.fv, col, row);
-        img.setPosition(at.x, at.y).setDepth(at.depth);
+        // 柵・城壁・門はマスの幅に合わせて伸ばす（最近傍。design §13.8）
+        const sc = tallScaleCell(a, this.fv, col, row);
+        img.setPosition(at.x, at.y).setDepth(at.depth).setScale(sc.sx, sc.sy);
         this.soldierLayer.add(img);
         if (kind === 'wall') this.wallImages.set(col, img);
       }

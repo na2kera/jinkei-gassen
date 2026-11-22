@@ -7,7 +7,7 @@ import type { Field } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import type { FieldView } from '../battle/FieldView.ts';
 import { addCellImage } from './field.ts';
-import { placeTallCell, tallArt } from './tallArt.ts';
+import { placeTallCell, tallArt, tallScaleCell } from './tallArt.ts';
 import { RUBBLE_KEY } from './textures.ts';
 
 export class GateSprite {
@@ -29,7 +29,9 @@ export class GateSprite {
     const a = tallArt(fv.art, 'gate')!;
     this.img = scene.add.image(0, 0, a.key).setOrigin(a.originX, a.originY);
     const at = placeTallCell(a, fv, col, row);
-    this.img.setPosition(at.x, at.y);
+    // 立てる視点では、マスの幅に合わせて伸ばす（真上の門は 32px で描いてあるので 1 倍。design §13.8）
+    const sc = tallScaleCell(a, fv, col, row);
+    this.img.setPosition(at.x, at.y).setScale(sc.sx, sc.sy);
     if (fv.depthSorted) this.img.setDepth(at.depth);
     layer.add(this.img);
   }

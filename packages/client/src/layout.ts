@@ -2,6 +2,7 @@
 // シーンはここで決めた矩形を読むだけにし、座標の数字を直書きしない。
 // 向きが変わったときに、ここを計算し直すだけで全画面が組み直せるようにするため。
 
+import { STANDARD_HEIGHT, STANDARD_WIDTH } from '@jinkei/engine';
 import { PVP_RULES_LINES } from './pvpRules.ts';
 
 export type Mode = 'landscape' | 'portrait';
@@ -18,7 +19,7 @@ export interface Layout {
   /** 内部の大きさ（Phaser の gameSize） */
   width: number;
   height: number;
-  /** 戦場を描く矩形（どちらの向きでも 288 × 384） */
+  /** 戦場を描く矩形（どちらの向きでも 320 × 384。標準の戦場 10 列 × 12 行ぶん） */
   field: Rect;
   /** 操作の欄 */
   panel: Rect;
@@ -29,15 +30,17 @@ export interface Layout {
   strip: Rect | null;
 }
 
-/** 1マスの大きさ（px） */
-export const CELL = 24;
-export const FIELD_COLS = 12;
-export const FIELD_ROWS = 16;
+/** 1マスの大きさ（px）。地面のタイル（art/textures.ts の TILE）と同じ大きさ */
+export const CELL = 32;
+/** 描き場所の列と行（標準の戦場 STANDARD_WIDTH × STANDARD_HEIGHT。通り道の列も含めて全体を見せる。design §13.7） */
+export const FIELD_COLS = STANDARD_WIDTH;
+export const FIELD_ROWS = STANDARD_HEIGHT;
 const FIELD_W = CELL * FIELD_COLS;
 const FIELD_H = CELL * FIELD_ROWS;
 
-const LANDSCAPE_W = 640;
-const LANDSCAPE_H = 400;
+/** 横長の内部の大きさ。盤（320）＋操作の欄（328）＋すき間 8 × 3（design §13.7） */
+export const LANDSCAPE_W = 672;
+export const LANDSCAPE_H = 400;
 const PORTRAIT_W = 320;
 // S13 の下限は 568 だが、面の名前・戻る・ひな形2列と、戦場の下の1行の帯が入るよう 620 にする（これより細長い端末では左右が少し空く）
 const PORTRAIT_MIN_H = 620;
