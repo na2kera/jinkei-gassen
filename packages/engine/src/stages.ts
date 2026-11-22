@@ -188,8 +188,9 @@ export const STAGES: Stage[] = [
     roster: { hq: 1, infantry: 4, shield: 2, archer: 2 },
     enemy: [hq(4, 0), ...at('infantry', 'advance', span(1, 8), 2), ...at('shield', 'advance', [4, 5], 1)],
     win: { type: 'defeat' },
-    // 岸（行 8）で守備して、川の中にいる敵と戦う。前進させると、自分が川の中で戦うことになる
-    solution: [hq(4, 11), ...at('infantry', 'hold', [2, 3, 6, 7], 8), ...at('shield', 'hold', [4, 5], 8), ...at('archer', 'hold', [3, 4], 9)],
+    // 岸（行 8）に横一列で守備して、川の中にいる敵と戦う（盾兵は両端、歩兵4は中央）。前進させると、自分が川の中で戦うことになる。
+    // 盾兵を中央に置く形（置き直したまま）は、20 勝するが星 1（残り 0.41）だった（2026-11-22）
+    solution: [hq(4, 10), ...at('infantry', 'hold', [3, 4, 5, 6], 8), ...at('shield', 'hold', [1, 8], 8), ...at('archer', 'hold', [3, 6], 9)],
   },
   {
     id: '2-4',
