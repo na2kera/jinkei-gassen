@@ -13,7 +13,7 @@ const LINE_LATER = new Set(['2-1', '2-2', '2-4', '3-2', '3-3', '3-4', '3-5']);
 /** そのまま置いて11勝以上するひな形が3つ以上 */
 const TEMPLATES_LATER = new Set(['3-2', '3-3']);
 /** 見本を並べ替えると18勝に届かない（全15面） */
-const PERMS_LATER = new Set(['1-4', '3-3', '3-5']);
+const PERMS_LATER = new Set(['3-3', '3-5']);
 
 const LATER = STAGES.filter((s) => s.chapter !== 1);
 const byId = (id: string): Stage => STAGES.find((s) => s.id === id)!;

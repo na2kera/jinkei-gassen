@@ -93,7 +93,10 @@ export const STAGES: Stage[] = [
     hint: '固い正面の、横と後ろは？',
     field: plainField(),
     roster: { hq: 1, infantry: 3, shield: 2, cavalry: 3, archer: 2 },
-    enemy: [hq(4, 0), ...at('shield', 'advance', [2, 3, 4, 5, 6, 7], 3), ...at('infantry', 'advance', [3, 4, 5, 6], 2)],
+    // 盾兵5（列 1〜5、行 2）が固い正面になって前進し、その後ろから歩兵5（列 2〜6、行 1）が来る（2026-11-22 に合わせ直した）。
+    // 盾兵6（列 2〜7）・歩兵4 のままでは、横陣（騎兵を両端で迂回させる形）がそのまま勝ち、見本は負けた。
+    // 騎兵の方針を迂回から前進・守備・本陣狙いに替えると、見本の配置でも勝てない
+    enemy: [hq(4, 0), ...at('shield', 'advance', [1, 2, 3, 4, 5], 2), ...at('infantry', 'advance', [2, 3, 4, 5, 6], 1)],
     win: { type: 'defeat' },
     allow: { orders: false },
     // 正面は守備で受け止め（盾兵を中央、歩兵を両脇）、弓兵は前進して撃ち、騎兵3つを右の端からまとめて回り込ませる（通り道を走る）
