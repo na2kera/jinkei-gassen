@@ -82,7 +82,8 @@ export const STAGES: Stage[] = [
     enemy: [hq(4, 0), ...at('infantry', 'advance', [1, 2, 3, 4, 5, 6, 7, 8], 2)],
     win: { type: 'defeat' },
     allow: BASIC,
-    solution: [hq(4, 10), ...at('shield', 'hold', [3, 4, 5], 8), ...at('archer', 'advance', [3, 4, 5, 6], 9), ...at('infantry', 'advance', [5, 3], 10)],
+    // 盾兵3の後ろに弓兵4。歩兵2は左の端の後ろ（列 1、行 10・11）。盾兵の真後ろに歩兵を置くと、盾兵にふさがれて回り込みを始め、残りが減る（2026-11-22）
+    solution: [hq(4, 10), ...at('shield', 'hold', [3, 4, 5], 8), ...at('archer', 'advance', [3, 4, 5, 6], 9), ...at('infantry', 'advance', [1], 10), ...at('infantry', 'advance', [1], 11)],
   },
   {
     id: '1-4',

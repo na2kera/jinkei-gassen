@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createBattle, KIND_STATS, MAX_UNITS, STAGES, stageEnemyVisible, stageLineArmy, stageSetup, starsFor, summarize, validateStageArmy, type Placement, type Stage } from '../src/index.ts';
 import { STAR3_FOUND } from './fixtures/star3.ts';
 import { lineStats, ORDER_PERMS, runStage, solutionStats, STAGE_SEEDS, stageStats, templateWins } from '../sim/stagelib.ts';
-import { DIFFICULTY_LATER, STAR3_LATER } from './helpers.ts';
+import { DIFFICULTY_LATER, STAR3_LATER, STAR3_PENDING_CH23 } from './helpers.ts';
 
 // 置き直した面（decisions §25）で、いまは通らない面。難しさを合わせたら外す
 /** 見本が18勝・星の平均2に届かない */
@@ -166,7 +166,7 @@ describe('置く順だけを変えても、勝ち負けが変わらない（全1
 describe('星3つは取れる（第2章・第3章）', () => {
   for (const [id, f] of Object.entries(STAR3_FOUND)) {
     it(`${id}：見つけた配置で、種20個のうち10個以上で星3つ`, (ctx) => {
-      ctx.skip(STAR3_LATER);
+      ctx.skip(STAR3_PENDING_CH23.has(id), STAR3_LATER);
       const s = byId(id);
       const ps: Placement[] = f.ps.map(([kind, col, row, stance]) => ({ kind, col, row, stance }));
       expect(validateStageArmy(s, ps)).toEqual([]);
