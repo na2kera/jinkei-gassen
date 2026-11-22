@@ -4,8 +4,11 @@
 import type { Placement, ReserveFrom, ReserveSetup } from '@jinkei/engine';
 import type { DraftMessage, ReadyMessage, ReserveMessage, RoomMessage } from '@jinkei/server/protocol';
 
-/** つなぐときの URL に付ける client の版（遊軍を知っている版。server の room.rules.reserve の条件） */
-export const CLIENT_VERSION = 2;
+/**
+ * つなぐときの URL に付ける client の版。2 は遊軍を知っている版（server の room.rules.reserve の条件）、
+ * 3 は盤を変えた版（design §13.6）。server は MIN_CLIENT_VERSION（3）より小さい版を outdated で断る
+ */
+export const CLIENT_VERSION = 3;
 
 /** この部屋で遊軍を使えるか。項目がない（古い server）ときは false として読む */
 export function reserveAllowed(room: Pick<RoomMessage, 'rules'> | null | undefined): boolean {

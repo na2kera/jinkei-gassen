@@ -128,17 +128,18 @@ describe('値の検査', () => {
   });
   it('createBattle：戦場の部隊 + 遊軍が上限を超えたら invalid_army（too_many_units）。ちょうどなら作れる', () => {
     const f = openField();
-    const sixteen: Placement[] = [p('hq', 0, 0, 'hold'), ...Array.from({ length: 15 }, (_, i) => p('infantry', i % 12, 1 + Math.floor(i / 12)))];
-    const fifteen = sixteen.slice(0, 15);
-    const enemy = [p('hq', 0, 15, 'hold'), p('infantry', 1, 15)];
-    const r = createBattle({ field: f, armies: [sixteen, enemy], seed: 1, maxTicks: 100, timeout: 'compare', reserves: [cav, null] });
+    // 戦場の部隊が MAX_UNITS（本陣を含む）で遊軍1つなら上限を超え、MAX_UNITS − 1 ならちょうど
+    const tooMany: Placement[] = [p('hq', 0, 0, 'hold'), ...Array.from({ length: MAX_UNITS - 1 }, (_, i) => p('infantry', i % f.width, 1 + Math.floor(i / f.width)))];
+    const fits = tooMany.slice(0, MAX_UNITS - 1);
+    const enemy = [p('hq', 0, f.height - 1, 'hold'), p('infantry', 1, f.height - 1)];
+    const r = createBattle({ field: f, armies: [tooMany, enemy], seed: 1, maxTicks: 100, timeout: 'compare', reserves: [cav, null] });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('invalid_army');
       expect(r.error.armyErrors?.map((e) => e.code)).toEqual(['too_many_units']);
     }
-    expect(createBattle({ field: f, armies: [fifteen, enemy], seed: 1, maxTicks: 100, timeout: 'compare', reserves: [cav, null] }).ok).toBe(true);
-    expect(fifteen.length + 1).toBe(MAX_UNITS);
+    expect(createBattle({ field: f, armies: [fits, enemy], seed: 1, maxTicks: 100, timeout: 'compare', reserves: [cav, null] }).ok).toBe(true);
+    expect(fits.length + 1).toBe(MAX_UNITS);
   });
   it('作った状態は JSON にして戻しても同じ。予定の tick が 50 より小さければ 50 にする', () => {
     const s = make(quietSetup([cav, { kind: 'archer', stance: 'hold' }], 16, { scriptedReserves: [{ tick: 10, side: 1, from: 'right' }] }));
@@ -161,10 +162,10 @@ describe('値の検査', () => {
     expect(validateArmy(rest, f.zones[0], { ...lim, reserve: { kind: 'cavalry', stance: 'flank' } })).toEqual([]);
     expect(validateArmy(rest, f.zones[0], { ...lim, reserve: { kind: 'hq', stance: 'hold' } }).map((e) => e.code)).toEqual(['invalid_kind']);
     expect(validateArmy(rest, f.zones[0], { ...lim, reserve: { kind: 'cavalry', stance: 'x' as Stance } }).map((e) => e.code)).toEqual(['invalid_stance']);
-    // 部隊数：戦場 16 + 遊軍は上限を超える。戦場が本陣だけなら、遊軍がいても too_few_units
-    const big = applyTemplate('line', { hq: 1, infantry: 15 }, f.zones[0], 0);
+    // 部隊数：戦場 MAX_UNITS + 遊軍は上限を超える。戦場が本陣だけなら、遊軍がいても too_few_units
+    const big = applyTemplate('line', { hq: 1, infantry: MAX_UNITS - 1 }, f.zones[0], 0);
     expect(validateArmy(big, f.zones[0], { maxUnits: MAX_UNITS, reserve: cav }).map((e) => e.code)).toEqual(['too_many_units']);
-    expect(validateArmy([p('hq', 5, 15, 'hold')], f.zones[0], { maxUnits: MAX_UNITS, reserve: cav }).map((e) => e.code)).toEqual(['too_few_units']);
+    expect(validateArmy([p('hq', 5, f.zones[0].row + f.zones[0].height - 1, 'hold')], f.zones[0], { maxUnits: MAX_UNITS, reserve: cav }).map((e) => e.code)).toEqual(['too_few_units']);
   });
   it('validateStageArmy：手持ちと上限を遊軍込みで数え、本陣と面で選べない方針を落とす', () => {
     const st = STAGES.find((s) => s.id === '2-1') as Stage;
@@ -369,8 +370,16 @@ describe('R4 マスがふさがっているとき', () => {
     expect(ev).toEqual([]);
     expect(a).toEqual(b);
   });
-  it('城壁の面（3-2 の戦場）：守る側（陣営1）の遊軍は城壁の内側の行に現れ、城壁の行とその向こうには現れない', () => {
+  /**
+   * 3-2 の面から、両軍の最後の部隊を1つずつ抜いたもの。面は両軍とも 11 部隊（上限いっぱい）なので、
+   * 遊軍を足す枠を空ける（抜くのは、城壁の外の迂回の騎兵と、本陣のそばの騎兵）
+   */
+  const castleStage = (): Stage => {
     const st = STAGES.find((x) => x.id === '3-2') as Stage;
+    return { ...st, enemy: st.enemy.slice(0, -1), solution: st.solution.slice(0, -1) };
+  };
+  it('城壁の面（3-2 の戦場）：守る側（陣営1）の遊軍は城壁の内側の行に現れ、城壁の行とその向こうには現れない', () => {
+    const st = castleStage();
     const wallRow = st.gate!.row;
     let n = 0;
     for (const from of ['left', 'right'] as const) {
@@ -394,7 +403,7 @@ describe('R4 マスがふさがっているとき', () => {
     expect(s0.units[s0.units.length - 1]!.home.y).toBeGreaterThan(wallRow + 1);
   });
   it('門が破れたあとも、城壁の行とその向こうには現れない', () => {
-    const st = STAGES.find((x) => x.id === '3-2') as Stage;
+    const st = castleStage();
     const s = make({ ...stageSetup(st, st.solution, 5000), reserves: [null, cav] });
     stepTo(s, 50);
     // 門を壊したことにして、両隣の城壁を平地にする（step の中の崩れ方と同じ）
@@ -406,7 +415,7 @@ describe('R4 マスがふさがっているとき', () => {
       const u = clone(s.units[0]!);
       u.id = s.units.length;
       u.side = 1;
-      u.x = 11.5;
+      u.x = s.field.width - 0.5; // 陣営1から見た左の端の列
       u.y = r + 0.5;
       u.status = 'active';
       s.units.push(u);
@@ -650,7 +659,9 @@ describe('R10 隠す情報', () => {
     it(`陣営${hider}の遊軍だけを変えた3つの戦いで、呼ぶ前の相手の場面が全刻みで一致する`, () => {
       const viewer: Side = hider === 0 ? 1 : 0;
       const runs = variants.map((r) => {
-        const base = matchupSetup('line', 'scale', 9);
+        // 遊軍なしで 300 刻みまで決着しない組と種（横陣 対 魚鱗・種 9 は、8×4 の配置エリアのひな形では 300 刻みより前に決着する。
+        // 実験の記録 §39 で 42 組 × 種 30 を流し、両陣営で 300 刻みを超える 横陣 対 鶴翼・種 9 にした）
+        const base = matchupSetup('line', 'crane', 9);
         const armies = base.armies.map((a, i) => (i === hider ? a.slice(0, -1) : a)) as BattleSetup['armies'];
         const s = make({
           ...base,
@@ -734,8 +745,8 @@ describe('R12 両軍が同じ刻みに呼ぶ', () => {
     // 両軍の現れた位置は、戦場を 180° 回すと重なる
     const u0 = x.units[x.reserves[0]!.unit!]!;
     const u1 = x.units[x.reserves[1]!.unit!]!;
-    expect(u0.home.x + u1.home.x).toBe(12);
-    expect(u0.home.y + u1.home.y).toBe(16);
+    expect(u0.home.x + u1.home.x).toBe(x.field.width);
+    expect(u0.home.y + u1.home.y).toBe(x.field.height);
   });
   it('予定された遊軍どうしでも、陣営0・陣営1の順に1つずつ現れ、先に現れた部隊があとの部隊のマスの判定に入る', () => {
     const s = make(quietSetup([cav, cav], 16, { scriptedReserves: [{ tick: 50, side: 1, from: 'left' }, { tick: 50, side: 0, from: 'left' }] }));

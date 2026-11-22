@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createBattle,
   STAGES,
+  STANDARD_HEIGHT,
+  STANDARD_WIDTH,
   step,
   summarize,
   TUTORIAL_ARMY,
@@ -60,8 +62,8 @@ describe('チュートリアルの面（U2）', () => {
     expect(TUTORIAL_STAGE.enemyOrders).toBeUndefined();
     expect(TUTORIAL_STAGE.enemyReserve).toBeUndefined();
     expect(TUTORIAL_STAGE.solution).toEqual(TUTORIAL_ARMY);
-    expect(TUTORIAL_STAGE.field.width).toBe(12);
-    expect(TUTORIAL_STAGE.field.height).toBe(16);
+    expect(TUTORIAL_STAGE.field.width).toBe(STANDARD_WIDTH);
+    expect(TUTORIAL_STAGE.field.height).toBe(STANDARD_HEIGHT);
     expect(TUTORIAL_STAGE.field.terrain.every((t) => t === 'plain')).toBe(true);
   });
 
@@ -71,8 +73,23 @@ describe('チュートリアルの面（U2）', () => {
     for (const p of TUTORIAL_ARMY) {
       expect(p.col >= z.col && p.col < z.col + z.width && p.row >= z.row && p.row < z.row + z.height).toBe(true);
     }
-    // 方針を変える部隊は、真ん中の歩兵・本陣狙い
-    expect(TUTORIAL_ARMY[TUTORIAL_STANCE.index]).toEqual({ kind: 'infantry', stance: TUTORIAL_STANCE.stance, col: 5, row: 10 });
+  });
+
+  it('方針を変える部隊は、真ん中の歩兵・本陣狙い。敵の歩兵2つは、その列の左右1列ずつにいる（あいだを抜けて本陣へ行ける並び）', () => {
+    const u = TUTORIAL_ARMY[TUTORIAL_STANCE.index]!;
+    expect(u.kind).toBe('infantry');
+    expect(u.stance).toBe(TUTORIAL_STANCE.stance);
+    expect(TUTORIAL_STANCE.stance).toBe('hunt');
+    // ほかの歩兵2つと同じ行にいて、列がその2つのあいだ
+    const others = TUTORIAL_ARMY.filter((p, i) => p.kind === 'infantry' && i !== TUTORIAL_STANCE.index);
+    expect(others).toHaveLength(2);
+    for (const o of others) expect(o.row).toBe(u.row);
+    const [lo, hi] = others.map((o) => o.col).sort((a, b) => a - b) as [number, number];
+    expect(lo).toBeLessThan(u.col);
+    expect(hi).toBeGreaterThan(u.col);
+    // 敵の歩兵2つは、その列の左右1列ずつ
+    const enemyInf = TUTORIAL_STAGE.enemy.filter((p) => p.kind === 'infantry').map((p) => p.col).sort((a, b) => a - b);
+    expect(enemyInf).toEqual([u.col - 1, u.col + 1]);
   });
 
   it('戦いの設定：長さ 1800 刻み、時間切れは負け、予定された号令と遊軍がない、種は固定', () => {

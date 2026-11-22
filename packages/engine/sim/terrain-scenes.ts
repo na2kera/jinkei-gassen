@@ -3,7 +3,15 @@
 
 import { plainField, type BattleSetup, type Field, type Placement, type Stance, type Terrain } from '../src/index.ts';
 
-export function withTerrain(cells: [number, number, Terrain][], base: Field = plainField()): Field {
+/**
+ * 地形の場面の戦場：標準の盤を通り道つきの 10×12 に変えたあとも、main の 12 × 16（配置エリア 6 行、通り道なし）で作る。
+ * 地形の倍率と決まりを確かめる場面で、座標と期待値をこの大きさで決めてあるため。新しい盤で測り直すかは design §13.5 で決める。
+ */
+export function sceneField(width = 12): Field {
+  return plainField(width, 16, 6, 0);
+}
+
+export function withTerrain(cells: [number, number, Terrain][], base: Field = sceneField()): Field {
   const f: Field = { ...base, terrain: base.terrain.slice(), zones: [{ ...base.zones[0] }, { ...base.zones[1] }] };
   for (const [col, row, t] of cells) f.terrain[row * f.width + col] = t;
   return f;
@@ -21,8 +29,8 @@ export function openTerrainField(cells: [number, number, Terrain][]): Field {
 
 export const at = (kind: Placement['kind'], stance: Stance, cols: number[], row: number): Placement[] => cols.map((col) => ({ kind, stance, col, row }));
 
-// ------------------------------------------------------------ T5・T8：城壁と門
-// 12 × 16 の戦場。城壁は行 5（端から端まで）、切れ目は列 5 で、そこに陣営1の門。
+// ------------------------------------------------------------ 古い盤の城壁と門（T7・T9、terrain.test.ts の門の決まり、K3a）
+// 標準の盤ではなく、この場面のための 12 × 16 の戦場（通り道なし）。城壁は行 5（端から端まで）、切れ目は列 5 で、そこに陣営1の門。
 // 陣営1（守る側）は城壁の内側（上）：本陣 (5,1)、歩兵2（守備）(4,3)・(6,3)。陣営1の配置エリアは行 0〜5（城壁の行を含む。城壁のマスには置けない）。
 // 陣営0（攻める側）は標準の配置エリア（行 10〜15）：本陣 (5,14) 守備、歩兵4 (3..6, 10)、盾兵2 (4,11)・(6,11)。方針は場面ごとに変える。
 
@@ -49,8 +57,38 @@ export function castleSetup(stance: Stance, seed: number, win = false): BattleSe
   };
 }
 
+// ------------------------------------------------------------ 標準の盤の城壁と門（design §13.5「地形の場面」）
+// 上の castleField・castleSetup は古い盤（12 × 16、通り道なし）のまま残し、門と城壁の決まりを値で確かめるテスト（T7・T9・terrain.test.ts・K3a）が使う。
+// こちらは標準の盤（10 × 12、通り道つき）。城壁は行 3（陣営1の配置エリアのいちばん前の行。列 0〜9 の端から端まで、通り道にも）、切れ目は列 4 で、そこに陣営1の門。
+// 3-2 の面と同じ置き方。陣営1（守る側）は城壁の内側（上）：本陣 (4,0)、歩兵2（守備）(3,1)・(5,1)。
+// 陣営0（攻める側）は標準の配置エリア（行 8〜11）：本陣 (4,11) 守備、歩兵4 (2..5, 8)、盾兵2 (3,9)・(5,9)。方針は場面ごとに変える。
+// 攻める側のいちばん前から城壁まで 5 行、守る側の歩兵が城壁の 2 行内側、は古い盤の場面と同じ。
+
+export const STD_CASTLE_WALL_ROW = 3;
+export const STD_CASTLE_GAP_COL = 4;
+
+export function stdCastleField(): Field {
+  const f = plainField();
+  for (let c = 0; c < f.width; c++) if (c !== STD_CASTLE_GAP_COL) f.terrain[STD_CASTLE_WALL_ROW * f.width + c] = 'wall';
+  return f;
+}
+
+export function stdCastleSetup(stance: Stance, seed: number, win = false): BattleSetup {
+  return {
+    field: stdCastleField(),
+    armies: [
+      [{ kind: 'hq', stance: 'hold', col: 4, row: 11 }, ...at('infantry', stance, [2, 3, 4, 5], 8), ...at('shield', stance, [3, 5], 9)],
+      [{ kind: 'hq', stance: 'hold', col: 4, row: 0 }, ...at('infantry', 'hold', [3, 5], 1)],
+    ],
+    seed,
+    maxTicks: 1800,
+    timeout: 'compare',
+    gate: { side: 1, col: STD_CASTLE_GAP_COL, row: STD_CASTLE_WALL_ROW, win },
+  };
+}
+
 // ------------------------------------------------------------ T1〜T4
-// 共通：標準の 12 × 16 の戦場（配置エリアは標準）。requireHq: false。比べる2つの場面は、地形のほかを同じにする。
+// 共通：標準の盤ではなく、この場面のための 12 × 16 の戦場（sceneField。配置エリア 6 行、通り道なし）。requireHq: false。比べる2つの場面は、地形のほかを同じにする。
 import { runSetup, scoreFor, SEEDS_40 } from './lib.ts';
 import { createBattle, step, summarize, type BattleState } from '../src/index.ts';
 const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
@@ -66,7 +104,7 @@ function small(field: Field, a: Placement[], b: Placement[], seed: number): Batt
 /** T1：陣営1の歩兵3（守備）を行 5 の 4〜6 列に、陣営0の歩兵3（前進）を行 10 の 4〜6 列に置く。丘は守る側の3マスだけ（行 5）。
  *  攻める側は行 6（丘の外）で近接の距離に入るので、近接は攻める側が丘に上がる前に始まる。値は守る側（陣営1）の得点率 */
 export function t1(hill: boolean, seeds = SEEDS_40): number {
-  const field = hill ? withTerrain([[4, 5, 'hill'], [5, 5, 'hill'], [6, 5, 'hill']]) : plainField();
+  const field = hill ? withTerrain([[4, 5, 'hill'], [5, 5, 'hill'], [6, 5, 'hill']]) : sceneField();
   return mean(seeds.map((s) => scoreFor(runSetup(small(field, at('infantry', 'advance', [4, 5, 6], 10), at('infantry', 'hold', [4, 5, 6], 5), s)).state, 1)));
 }
 
@@ -103,7 +141,7 @@ export function t3(river: boolean, seeds = SEEDS_40): number {
 export function t4(fence: boolean, cav: 'none' | 'front' | 'rear', seeds = SEEDS_40): number {
   if (cav !== 'none') return t4Cav(cav, seeds).score;
   const W = 3;
-  const field = plainField(W);
+  const field = sceneField(W);
   field.zones = [
     { col: 0, row: 0, width: W, height: 16 },
     { col: 0, row: 0, width: W, height: 16 },
@@ -126,7 +164,7 @@ export const T4_CAV_WIDTH = 8;
  */
 export function t4Cav(cav: 'front' | 'rear', seeds = SEEDS_40): { score: number; impacts: number; pinnedImpacts: number; sideRearShare: number } {
   const W = T4_CAV_WIDTH;
-  const field = plainField(W);
+  const field = sceneField(W);
   field.zones = [
     { col: 0, row: 0, width: W, height: 16 },
     { col: 0, row: 0, width: W, height: 16 },

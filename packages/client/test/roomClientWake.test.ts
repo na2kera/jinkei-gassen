@@ -1,5 +1,5 @@
 // 戻ったらすぐつなぎ直す（RoomClient.wake()。design §9.6、§9.9-8〜10。M10・M15）と、
-// 部屋を出るときの「出た」の知らせ（RoomClient.leave()。design §11.2、§11.5-9。C1）を、
+// 部屋を出るときの「出た」の知らせ（RoomClient.leave()。design §11.2、§11.5-9。C1）と、古い版で断られたとき（design §13.6）を、
 // WebSocket・タイマー・時計を差し替えて、実物の RoomClient で確かめる。
 // node --experimental-strip-types --test で動かす（クライアントにはテストの道具を入れていないため）。
 
@@ -270,4 +270,59 @@ test('C1 つなぎ直し・別の画面に置き換えられた・別の部屋�
   c.join('5678', 'pid', '名前');
   assert.equal(leavesSent(ws), 0, '入り直しでは送らない');
   assert.equal(ws.readyState, FakeSocket.CLOSED);
+});
+
+// ---- 古い版で断られた（design §13.6） ----
+
+const { failureText } = await import('../src/net/RoomClient.ts');
+const { CLIENT_VERSION } = await import('../src/net/reserveMessages.ts');
+
+/** server が error（outdated）を送り、続けて 1008 で閉じる */
+function rejectOutdated(ws: FakeSocket): void {
+  ws.readyState = FakeSocket.OPEN;
+  ws.onmessage?.({ data: JSON.stringify({ type: 'error', reason: 'outdated', message: 'please reload the page' }) });
+  ws.serverClose(1008);
+}
+
+test('O1 つなぐ URL に版 3 を付ける', () => {
+  assert.equal(CLIENT_VERSION, 3);
+  timers = [];
+  FakeSocket.all = [];
+  const c = new RoomClient();
+  c.join('1234', 'pid', '名前');
+  assert.match(last().url, /[?&]cv=3(&|$)/);
+});
+
+test('O2 初めての入室で outdated を受けたら、入室の失敗として止まり、つなぎ直さない', () => {
+  timers = [];
+  FakeSocket.all = [];
+  const c = new RoomClient();
+  c.join('1234', 'pid', '名前');
+  rejectOutdated(last());
+  assert.equal(c.failure, 'outdated', 'あとの 1008 で lost に上書きされない');
+  assert.equal(c.status, 'idle');
+  assert.equal(c.code, null);
+  assert.equal(timers.length, 0, 'つなぎ直しのタイマーが残っていない');
+  advance(60_000);
+  assert.equal(FakeSocket.all.length, 1);
+  assert.equal(failureText('outdated'), '新しい版があります。ページを読み込み直してください');
+});
+
+test('O3 つなぎ直しの途中で outdated を受けても、止まってつなぎ直さない（close が届かない環境でも）', () => {
+  const c = joined();
+  last().serverClose();
+  assert.equal(c.status, 'reconnecting');
+  advance(600);
+  const ws = last();
+  ws.readyState = FakeSocket.OPEN;
+  // close が届かない場合：error だけで止まる
+  ws.onmessage?.({ data: JSON.stringify({ type: 'error', reason: 'outdated', message: 'please reload the page' }) });
+  assert.equal(c.failure, 'outdated');
+  assert.equal(c.status, 'idle');
+  assert.equal(c.room, null);
+  assert.equal(timers.length, 0, 'つなぎ直しのタイマーも ping のタイマーも残っていない');
+  const n = FakeSocket.all.length;
+  c.wake();
+  advance(60_000);
+  assert.equal(FakeSocket.all.length, n, 'wake でもつながない');
 });

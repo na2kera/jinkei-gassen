@@ -10,11 +10,12 @@
 //
 // 接続の流れ:
 //   1. POST /api/rooms（本文 { pid }）→ 201 { code }。作った人は60秒以内につなぐ。
-//   2. GET /api/rooms/:code/ws?pid=…&name=…&cv=2（WebSocket）。
-//      cv は client の版。遊軍（design §7）を知っている画面は cv=2 を付ける。付けない（古い画面）は 1 として扱う。
-//      両方の席が cv>=2 のときだけ、room.rules.reserve が true になり、遊軍を使える。
+//   2. GET /api/rooms/:code/ws?pid=…&name=…&cv=3（WebSocket）。
+//      cv は client の版。付けない（古い画面）は 1 として扱う。いまの盤（design §13）を知っている cv=3 より小さい版は、
+//      席を探す前に error（reason: 'outdated'）を送って 1008 で閉じる（design §13.6）。
+//      両方の席が cv>=2 のときだけ、room.rules.reserve が true になり、遊軍を使える（版 3 以上しか入れないので、いつも使える）。
 //      つながると、まず `room` が届く。続けて段階に応じて、reveal なら `reveal`、battle なら `snap`、result なら `result` が届く。
-//      入れないとき（部屋がない・満員）は `error` が届き、server が接続を閉じる（4003 / 4002）。
+//      入れないとき（部屋がない・満員・古い版）は `error` が届き、server が接続を閉じる（4003 / 4002 / 1008）。
 //   3. 部屋の様子（段階・席・成績・期限など）が変わるたびに `room` が届く。
 //      決まりを破った接続は閉じる：バイナリ 1003、大きすぎる 1009、多すぎる 1008。同じ pid で入り直せる。
 //   4. 文字列 "ping" を送ると "pong" が返る（JSON ではない。任意）。
@@ -258,6 +259,7 @@ export type ResultMessage = {
 export type ErrorReason =
   | 'not_found' // 部屋がない（入室時。この後、接続が閉じられる）
   | 'full' // 満員（入室時。この後、接続が閉じられる）
+  | 'outdated' // client の版が古い（入室時。この後、1008 で接続が閉じられる。design §13.6）
   | 'invalid_army' // 配置が不正（ready のとき）
   | 'invalid_order' // 号令が受け付けられない（残りがない・対象の部隊がいない・決着した）
   | 'invalid_reserve' // 遊軍を呼べない（op: 'reserve'。code に engine の理由）
@@ -288,7 +290,7 @@ export type ServerMessage = RoomMessage | RevealMessage | SnapMessage | ResultMe
 /** WebSocket を server が閉じるときのコード */
 export type CloseCode =
   | 1003 // バイナリのメッセージを送った
-  | 1008 // メッセージが多すぎる（頻度の上限を超え続けた）
+  | 1008 // メッセージが多すぎる（頻度の上限を超え続けた）・client の版が古い（入室時。直前に error の outdated が届く）
   | 1009 // メッセージが大きすぎる
   | 4001 // 同じ pid で新しい接続が来た
   | 4002 // 満員

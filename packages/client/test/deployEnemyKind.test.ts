@@ -11,22 +11,32 @@ import { unitBoxAt } from '../src/ui/unitBox.ts';
 const stage22 = STAGES.find((s) => s.id === '2-2');
 if (!stage22) throw new Error('面 2-2 がない');
 
+// 座標は面のデータから読む（面を置き直しても、確かめる中身が変わらないように）
+const fogged = (p: { col: number; row: number }): boolean => (stage22.fog ?? []).some((c) => c.col === p.col && c.row === p.row);
+
 test('見えている敵のいるマスでは、その部隊の兵種が引ける', () => {
   const visible = stageEnemyVisible(stage22);
-  assert.equal(enemyAt(visible, { col: 5, row: 0 })?.kind, 'hq');
-  assert.equal(enemyAt(visible, { col: 3, row: 4 })?.kind, 'infantry');
+  const hq = visible.find((p) => p.kind === 'hq');
+  const infantry = visible.find((p) => p.kind === 'infantry');
+  assert.ok(hq && infantry, '2-2 には、霧の外に本陣と歩兵がいる');
+  assert.equal(enemyAt(visible, { col: hq.col, row: hq.row })?.kind, 'hq');
+  assert.equal(enemyAt(visible, { col: infantry.col, row: infantry.row })?.kind, 'infantry');
   assert.equal(KIND_LABEL.infantry, '歩兵');
 });
 
 test('敵のいないマスでは、何も引けない', () => {
-  assert.equal(enemyAt(stageEnemyVisible(stage22), { col: 5, row: 6 }), null);
+  // あいだの行（敵の配置エリアの外）で、敵も霧もないマス
+  const row = stage22.field.height / 2;
+  const col = Math.floor(stage22.field.width / 2);
+  assert.ok(!stage22.enemy.some((p) => p.col === col && p.row === row), '確かめるマスに敵がいない');
+  assert.equal(enemyAt(stageEnemyVisible(stage22), { col, row }), null);
 });
 
 test('霧のマスの部隊は、いても引けない', () => {
-  // 2-2 は (0,2) に迂回の騎兵がいて、そのマスは霧
-  assert.ok(stage22.enemy.some((p) => p.col === 0 && p.row === 2 && p.kind === 'cavalry'));
-  assert.ok((stage22.fog ?? []).some((c) => c.col === 0 && c.row === 2));
-  assert.equal(enemyAt(stageEnemyVisible(stage22), { col: 0, row: 2 }), null);
+  // 2-2 は、霧のマスに迂回の騎兵がいる
+  const hidden = stage22.enemy.find((p) => p.kind === 'cavalry' && fogged(p));
+  assert.ok(hidden, '2-2 には、霧の中に騎兵がいる');
+  assert.equal(enemyAt(stageEnemyVisible(stage22), { col: hidden.col, row: hidden.row }), null);
 });
 
 test('対戦の配置（見えている敵がない）では、何も引けない', () => {

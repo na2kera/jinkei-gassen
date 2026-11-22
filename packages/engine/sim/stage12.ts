@@ -38,11 +38,13 @@ function picker(seed: number): <T>(a: T[]) => T {
 /**
  * 標本の配置を作る（design §3.10 の「標本の作り方」）。手持ちの9部隊（本陣1・盾兵3・歩兵5）をすべて置き、方針は兵種の初期設定。
  * 種は 1 から順に使い、受けていない配置は、決まりを満たさなければ捨てて次の種で作り直す。配列の順は、本陣、盾兵（列の小さい順）、歩兵（引いた順）。
- * マスは、行の小さい順、同じ行では列の小さい順に並べてから選ぶ。
+ * マスは、行の小さい順、同じ行では列の小さい順に並べてから選ぶ。行は配置エリアから計算する（盾兵は前の2行、本陣は後ろの2行）
  */
 export function stage12Samples(stage: Stage, kind: 'guarded' | 'unguarded', n = 40): Placement[][] {
   const z = stage.field.zones[0];
   const cols = cavalryCols(stage);
+  const front = z.row;
+  const hqRows = [z.row + z.height - 2, z.row + z.height - 1];
   const cells: { col: number; row: number }[] = [];
   for (let row = z.row; row < z.row + z.height; row++) for (let col = z.col; col < z.col + z.width; col++) cells.push({ col, row });
   const out: Placement[][] = [];
@@ -59,17 +61,17 @@ export function stage12Samples(stage: Stage, kind: 'guarded' | 'unguarded', n = 
     let hq: { col: number; row: number };
     const inf: { col: number; row: number }[] = [];
     if (kind === 'guarded') {
-      // 盾兵3を騎兵の3列に1つずつ。行は 10 か 11。行 11 に置いた列の行 10 は空ける（盾兵の前には置かない）
-      const front = new Set<string>();
+      // 盾兵3を騎兵の3列に1つずつ。行は前の2行のどちらか。2行目に置いた列の前の行は空ける（盾兵の前には置かない）
+      const ahead = new Set<string>();
       shields = cols.map((col) => {
-        const row = pick([10, 11]);
-        if (row === 11) front.add(`${col},10`);
+        const row = pick([front, front + 1]);
+        if (row === front + 1) ahead.add(`${col},${front}`);
         return take({ col, row });
       });
-      hq = take(pick(free((c) => c.row >= 13 && c.row <= 15)));
-      for (let i = 0; i < 5; i++) inf.push(take(pick(free((c) => !front.has(key(c))))));
+      hq = take(pick(free((c) => hqRows.includes(c.row))));
+      for (let i = 0; i < 5; i++) inf.push(take(pick(free((c) => !ahead.has(key(c))))));
     } else {
-      hq = take(pick(free((c) => c.row >= 13 && c.row <= 15)));
+      hq = take(pick(free((c) => hqRows.includes(c.row))));
       shields = [];
       for (let i = 0; i < 3; i++) shields.push(take(pick(free())));
       for (let i = 0; i < 5; i++) inf.push(take(pick(free())));

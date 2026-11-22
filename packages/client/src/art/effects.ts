@@ -1,9 +1,39 @@
-// 戦闘の演出（火花・土煙・矢・倒れた兵）。1枚の Graphics に毎フレーム描き直す。
+// 戦闘の演出（火花・土煙・矢・倒れた兵）。毎フレーム描き直す。描く先は 2 つ：兵より手前の層（火花・土煙・矢・倒れた兵）と、
+// 地面と兵のあいだの影の層（矢の影。design §14.10）。矢は山なりに飛ぶ：道すじは戦場の上（座標と高さ）で持ち、毎コマ投影で写す。
 // どれも数百ミリ秒で消える小さな点だけにして、画面が揺れ続けたり光り続けたりしないようにする。
 // 半透明は使わず、時間が来たら消す。
 
 import type Phaser from 'phaser';
-import { ART, COLOR, SIDE_COLOR } from './palette.ts';
+import { ART, COLOR, SIDE_COLOR, TERRAIN } from './palette.ts';
+
+/** 矢を写す投影（BoardView の project と ground だけを使う） */
+export interface ArrowProjection {
+  project(x: number, y: number, h?: number): { x: number; y: number };
+  ground(x: number, y: number): number;
+}
+
+/** 山の高さ ＝ 飛ぶ距離（盤の px）× この値（decisions §24） */
+export const ARROW_PEAK = 0.22;
+
+/** 戦場の上の点（座標はマス、高さは盤の px） */
+export interface FieldPoint {
+  x: number;
+  y: number;
+  h: number;
+}
+
+/** 飛ぶ時間（ミリ秒）：220 + 距離（盤の px）× 3.2 を 380〜900 に収める（倍速なら割る） */
+export function arrowLife(distPx: number, speed = 1): number {
+  return Math.max(380, Math.min(900, 220 + distPx * 3.2)) / speed;
+}
+
+/** 飛んでいる途中（t は 0〜1）の点。高さは、まっすぐの高さに 4 × 山 × t(1 − t) を足す */
+export function arrowAt(a: { from: FieldPoint; to: FieldPoint; peak: number }, t: number): FieldPoint {
+  const x = a.from.x + (a.to.x - a.from.x) * t;
+  const y = a.from.y + (a.to.y - a.from.y) * t;
+  const h = a.from.h + (a.to.h - a.from.h) * t + 4 * a.peak * t * (1 - t);
+  return { x, y, h };
+}
 
 interface Particle {
   x: number;
@@ -17,10 +47,9 @@ interface Particle {
 }
 
 interface Arrow {
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
+  from: FieldPoint;
+  to: FieldPoint;
+  peak: number;
   born: number;
   life: number;
 }
@@ -45,13 +74,16 @@ export const effectCounts = { spark: 0, dust: 0, impact: 0, arrow: 0, fallen: 0 
 
 export class Effects {
   private readonly g: Phaser.GameObjects.Graphics;
+  private readonly shadow: Phaser.GameObjects.Graphics;
   private particles: Particle[] = [];
   private arrows: Arrow[] = [];
   private fallen: Fallen[] = [];
 
-  constructor(scene: Phaser.Scene, layer: Phaser.GameObjects.Container) {
+  constructor(scene: Phaser.Scene, layer: Phaser.GameObjects.Container, shadowLayer: Phaser.GameObjects.Container) {
     this.g = scene.add.graphics();
     layer.add(this.g);
+    this.shadow = scene.add.graphics();
+    shadowLayer.add(this.shadow);
   }
 
   private push(p: Particle): void {
@@ -89,10 +121,12 @@ export class Effects {
     this.spark(x, y, now);
   }
 
-  arrow(x0: number, y0: number, x1: number, y1: number, now: number, life: number): void {
+  /** 矢を 1 本。from・to は戦場の上の点（放つ所は射手の地面 + 10、落ちる所は相手の地面 + 2）。山 = 飛ぶ距離 × 0.22 */
+  arrow(from: FieldPoint, to: FieldPoint, now: number, life: number): void {
     if (this.arrows.length >= MAX_ARROWS) return;
     effectCounts.arrow++;
-    this.arrows.push({ x0, y0, x1, y1, born: now, life });
+    const d = Math.hypot(to.x - from.x, to.y - from.y) * 32;
+    this.arrows.push({ from, to, peak: d * ARROW_PEAK, born: now, life });
   }
 
   /** 全滅した部隊の兵が、その場に倒れて少しのあいだ残る */
@@ -101,9 +135,10 @@ export class Effects {
     centers.forEach((c, i) => this.fallen.push({ x: c.x, y: c.y, wide: i % 2 === 0, team, born: now, life: 900 + i * 60 }));
   }
 
-  update(now: number): void {
+  update(now: number, pj: ArrowProjection): void {
     const g = this.g;
     g.clear();
+    this.shadow.clear();
     // 倒れた兵：服の色の横長の点と、肌の点
     this.fallen = this.fallen.filter((f) => now - f.born < f.life);
     for (const f of this.fallen) {
@@ -115,22 +150,28 @@ export class Effects {
       g.fillStyle(ART.skin, 1);
       g.fillRect(f.wide ? x + 2 : x - 1, f.wide ? y - 1 : y + 2, 1, 1);
     }
-    // 矢：3px の柄と穂先。山なりにはせず、まっすぐ飛ばす（真上からの見下ろしなので）
+    // 矢：全体 7px（穂先 2px は明るい色、柄 5px）。向きは道すじの少し前と少し後ろを画面に写した差。影は地面の上に 1px
     this.arrows = this.arrows.filter((a) => now - a.born < a.life);
     for (const a of this.arrows) {
       // 少し遅れて放つ矢は、時刻が来るまで描かない
       if (now < a.born) continue;
       const t = (now - a.born) / a.life;
-      const len = Math.hypot(a.x1 - a.x0, a.y1 - a.y0) || 1;
-      const ux = (a.x1 - a.x0) / len;
-      const uy = (a.y1 - a.y0) / len;
-      const x = a.x0 + (a.x1 - a.x0) * t;
-      const y = a.y0 + (a.y1 - a.y0) * t;
-      g.fillStyle(ART.wood, 1);
-      g.fillRect(Math.round(x - ux * 2), Math.round(y - uy * 2), 1, 1);
-      g.fillRect(Math.round(x - ux), Math.round(y - uy), 1, 1);
-      g.fillStyle(ART.metal, 1);
-      g.fillRect(Math.round(x), Math.round(y), 1, 1);
+      const q = arrowAt(a, t);
+      const p = pj.project(q.x, q.y, q.h);
+      const qa = arrowAt(a, Math.max(0, t - 0.02));
+      const qb = arrowAt(a, Math.min(1, t + 0.02));
+      const pa = pj.project(qa.x, qa.y, qa.h);
+      const pb = pj.project(qb.x, qb.y, qb.h);
+      const len = Math.hypot(pb.x - pa.x, pb.y - pa.y) || 1;
+      const ux = (pb.x - pa.x) / len;
+      const uy = (pb.y - pa.y) / len;
+      const sp = pj.project(q.x, q.y, pj.ground(q.x, q.y));
+      this.shadow.fillStyle(TERRAIN.leafLo, 1);
+      this.shadow.fillRect(Math.round(sp.x), Math.round(sp.y), 1, 1);
+      g.fillStyle(ART.hat, 1);
+      for (let i = 2; i <= 6; i++) g.fillRect(Math.round(p.x - ux * i), Math.round(p.y - uy * i), 1, 1);
+      g.fillStyle(COLOR.cream, 1);
+      for (let i = 0; i <= 1; i++) g.fillRect(Math.round(p.x - ux * i), Math.round(p.y - uy * i), 1, 1);
     }
     this.particles = this.particles.filter((p) => now - p.born < p.life);
     for (const p of this.particles) {
@@ -145,9 +186,11 @@ export class Effects {
     this.arrows = [];
     this.fallen = [];
     this.g.clear();
+    this.shadow.clear();
   }
 
   destroy(): void {
     this.g.destroy();
+    this.shadow.destroy();
   }
 }

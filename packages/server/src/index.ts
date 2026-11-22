@@ -2,7 +2,8 @@
 // （開発時は client の vite.config.ts の run_worker_first、本番は wrangler deploy の assets）。
 //
 //   POST /api/rooms              部屋を作る。本文 { pid } → 201 { code }。コードが取れなければ 503 { error: 'busy' }
-//   GET  /api/rooms/:code/ws     WebSocket（?pid=…&name=…）。部屋がない・満員は、つないだあと error を送って閉じる
+//   GET  /api/rooms/:code/ws     WebSocket（?pid=…&name=…&cv=…）。部屋がない・満員・古い版（cv が 3 より小さい）は、
+//                                つないだあと error を送って閉じる（古い版は部屋が断る。入室の回数の数え方は変わらない）
 //
 // 送信元（IP）ごとに、部屋の作成は1分に60回、席にいない人の入室の試みは1分に120回、ws の頼みは全部で1分に600回まで
 // （wrangler.jsonc の ratelimits）。超えたら 429。
@@ -18,6 +19,7 @@
 //   POST /api/rooms/:code/test/state     保存した段階・成績・刻みと、インスタンスの識別子を返す
 //   POST /api/rooms/:code/test/step?n=…  刻みを n 回進める（timing.testManualTicks が 1 の部屋だけ）。{ tick } を返す
 //   POST /api/rooms/:code/test/seated?pid=…  部屋の isSeated(pid) の答えを { seated } で返す（何も書き換えないことの確認）
+//   POST /api/rooms/:code/test/version?v=…  保存した部屋の形の版を v に書き換える（盤が変わる前の部屋の片付けの確認。{ ok }）
 //   回数の上限の鍵を、見出し X-Test-Rl-Key か、入室の ?rlkey= で差し替える（テストごとに別の送信元として数えるため）
 
 import { DEFAULT_TIMING, parseTimingOverride, type Timing } from './timing.ts';
@@ -203,7 +205,7 @@ export default {
         if (!(await withinLimit(env.CREATE_LIMITER, limitKey(request, url, env)))) return json({ error: 'rate_limited' }, 429);
         return await createRoom(request, env);
       }
-      const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state|test\/step|test\/seated)$/.exec(path);
+      const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state|test\/step|test\/seated|test\/version)$/.exec(path);
       if (m !== null) {
         const code = m[1] ?? '';
         if (m[2] === 'ws') return await joinRoom(request, url, env, code);
@@ -227,6 +229,11 @@ export default {
           const pid = url.searchParams.get('pid');
           if (!isPid(pid)) return json({ error: 'bad pid' }, 400);
           return json({ seated: await stub.isSeated(pid) });
+        }
+        if (m[2] === 'test/version') {
+          const v = Number(url.searchParams.get('v'));
+          if (!Number.isInteger(v) || v < 0 || v > 99) return json({ error: 'invalid v' }, 400);
+          return json({ ok: await stub.setSavedVersionNow(v) });
         }
         if (m[2] === 'test/step') {
           const n = Number(url.searchParams.get('n') ?? '1');

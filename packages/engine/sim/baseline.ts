@@ -1,5 +1,9 @@
-// T10 の記録を書き出す道具。最初は地形を入れる前のコミット（4b3a90b）で動かし、2026-11-17 に本陣狙いの直しのために作り直した
-// （3つめの引数に、作り直した理由を書く）。平地の戦いを変える直しをしない限り、動かさない。
+// T10 の記録を書き出す道具。最初は地形を入れる前のコミット（4b3a90b）で動かし、2026-11-17 に本陣狙いの直しのために作り直した。
+// 2026-11-22 に、通り道つきの 10×12 の盤（部隊数の上限 11）で作り直した（design §13.5）。
+// 3つめの引数に、作り直した理由を書く。次の場合のほかは、動かさない：
+// - 平地の戦いを変える直しをしたとき（決まった戦いだけが変わるなら、下の --redo を使う）
+// - 盤・ひな形・総当たりの手持ち（STANDARD_ROSTER）・A8／A11／A14 の場面を、意図して変えたとき
+// - 第1章の5面の見本を変えたとき（記録に「面 1-x の見本」が入っている。面の難しさを合わせ直すと、ここが変わる）
 //   node --experimental-strip-types --no-warnings sim/baseline.ts <コミット> <日付> [作り直した理由]
 // 平地の決まりを直して、決まった戦いだけが変わるときは、次の道を使う（design §3.6.6「記録の作り直し方」）。
 // いまの記録の setup・orders・stateKeys・unitKeys をそのまま使い、名前を挙げた戦いの checkpoints・ticks・final だけを流し直して書き換える。
@@ -7,7 +11,7 @@
 //   node --experimental-strip-types --no-warnings sim/baseline.ts --redo <新しい note> <戦いの名前> [<戦いの名前> ...]
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createBattle, STAGES, stageSetupWith } from '../src/index.ts';
-import { matchupSetup, SEEDS_10, TEMPLATE_IDS } from './lib.ts';
+import { matchupSetup, SEEDS_10, TEMPLATE_IDS, templateArmy } from './lib.ts';
 import { a8Order, a8Setup, A8_ORDER_TICK, A11_DEFENSE, A11_OFFENSE, allHold } from './scenes.ts';
 import { applyTemplate, plainField } from '../src/index.ts';
 import { playT10, type T10Battle, type T10File } from './t10.ts';
@@ -46,7 +50,7 @@ for (const st of STAGES.filter((s) => s.chapter === 1)) {
 for (const k of ['charge', 'brace', 'retreat'] as const) {
   battles.push({ name: `A8 ${k}`, setup: a8Setup(k, 1000), orders: { [String(A8_ORDER_TICK[k])]: [a8Order(k)] } });
 }
-// A11 と A14 から1戦ずつ
+// A11 と A14 から1戦ずつ（A14 は sim/scenes.ts の a14 と同じ、総当たりの手持ち STANDARD_ROSTER の鋒矢 対 横陣（全部守備））
 const f = plainField();
 battles.push({
   name: 'A11 守る側が陣営0',
@@ -55,18 +59,24 @@ battles.push({
 });
 battles.push({
   name: 'A14 鋒矢 対 横陣（全部守備）',
-  setup: { field: plainField(), armies: [applyTemplate('arrow', { hq: 1, infantry: 5, shield: 3, cavalry: 3, archer: 3 }, f.zones[0], 0), allHold(applyTemplate('line', { hq: 1, infantry: 5, shield: 3, cavalry: 3, archer: 3 }, f.zones[1], 1))], seed: 1000, maxTicks: 1800, timeout: 'compare' },
+  setup: { field: plainField(), armies: [templateArmy('arrow', 0), allHold(templateArmy('line', 1))], seed: 1000, maxTicks: 1800, timeout: 'compare' },
   orders: {},
 });
 
+// 書き出す前に、作る戦いが全部 createBattle を通ることを確かめる（1つでも通らなければ、書き出さずに止まる）
+const broken = battles.flatMap((b) => {
+  const r = createBattle(b.setup);
+  return r.ok ? [] : [`${b.name}: ${r.error.message} ${JSON.stringify(r.error.armyErrors ?? [])}`];
+});
+if (broken.length > 0) throw new Error(`createBattle を通らない戦いがある（記録は書き出さない）\n${broken.join('\n')}`);
 const probe = createBattle(battles[0]!.setup);
 if (!probe.ok) throw new Error();
 const stateKeys = Object.keys(probe.value).sort();
 const unitKeys = Object.keys(probe.value.units[0]!).sort();
 const out: T10File = {
   note: process.argv[4]
-    ? `T10 の記録。${process.argv[3] ?? ""} コミット ${commit} の engine に段階4の変更を足したもので、sim/baseline.ts が作り直した。${process.argv[4]}`
-    : `T10 の記録。${process.argv[3] ?? ""} コミット ${commit} の engine で、sim/baseline.ts が作った。地形を入れる前の値で、段階4の作業の間は作り直さない。`,
+    ? `T10 の記録。${process.argv[3] ?? ""} コミット ${commit} の engine で、sim/baseline.ts が作り直した。${process.argv[4]}`
+    : `T10 の記録。${process.argv[3] ?? ""} コミット ${commit} の engine で、sim/baseline.ts が作った。`,
   stateKeys,
   unitKeys,
   battles: battles.map((b) => ({ name: b.name, setup: JSON.parse(JSON.stringify(b.setup)), orders: b.orders, ...playT10(b, stateKeys, unitKeys) })),

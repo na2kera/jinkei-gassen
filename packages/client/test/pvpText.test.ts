@@ -4,7 +4,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { remainingShown } from '../src/battle/reserveUi.ts';
-import { lobbyStatusLine, opponentMark, pvpRemainingText } from '../src/net/pvpText.ts';
+import { LANDSCAPE_W } from '../src/layout.ts';
+import { failureText } from '../src/net/RoomClient.ts';
+import { foldAtPeriod, lobbyStatusLine, opponentMark, pvpRemainingText } from '../src/net/pvpText.ts';
 
 test('C3 対戦の結果の「残った兵」は、自軍・敵軍とも remaining（勝ち負けの数え方）で出す', () => {
   // 陣営 0 に呼ばなかった遊軍がいて、星の数え方（remainingForStars）では 13% に見える場面
@@ -55,4 +57,18 @@ test('ロビーのいちばん下の行：生きている知らせ → 待機中
   assert.equal(lobbyStatusLine(none, 1000, null, true).text, '');
   assert.equal(lobbyStatusLine(none, 1000, waitingLeft, false).text, '');
   assert.equal(lobbyStatusLine(none, 1000, { phase: 'setup', opponentLeft: true }, true).text, '');
+});
+
+test('幅に収まらない知らせは、句点の所で 2 行に折る（decisions §22）', () => {
+  const outdated = failureText('outdated');
+  // 縦持ち（内部の幅 320、左右 8 ずつの余白）では 2 行。各行は幅に収まる
+  const folded = foldAtPeriod(outdated, 304);
+  assert.equal(folded, '新しい版があります。\nページを読み込み直してください');
+  for (const row of folded.split('\n')) assert.ok(row.length * 16 <= 304, row);
+  // 横持ち（幅が足りる）では折らない
+  assert.equal(foldAtPeriod(outdated, LANDSCAPE_W - 16), outdated);
+  // 収まる文、句点のない文、句点が最後だけの文は、そのまま
+  assert.equal(foldAtPeriod('部屋が満員です', 304), '部屋が満員です');
+  assert.equal(foldAtPeriod('あ'.repeat(30), 304), 'あ'.repeat(30));
+  assert.equal(foldAtPeriod('あ'.repeat(30) + '。', 304), 'あ'.repeat(30) + '。');
 });

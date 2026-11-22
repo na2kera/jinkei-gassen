@@ -1,13 +1,14 @@
-// 保存してある部屋の状態の読み方（design §11.5-3、§11.5-11 の S23）。server を立てずに、normalizeRoom をじかに試す。
+// 保存してある部屋の状態の読み方（design §13.6）。server を立てずに、loadRoom をじかに試す。
+// 盤が変わる前の形（v が 3 以下）は読まない（呼ぶ側が保存領域とアラームを消す。通しの確かめは version.test.mjs）。
+// v 3 より前の形をそろえる処理（自分で出たことを知らせる前の形の S23 など）は、3 以下をすべて片付けるのでなくした。
 
 import { describe, expect, it } from 'vitest';
-import { normalizeRoom, publicSignature } from '../src/state.ts';
+import { loadRoom, newRoom, newSeat, publicSignature, ROOM_VERSION } from '../src/state.ts';
 import { DEFAULT_TIMING } from '../src/timing.ts';
 
-/** 自分で出たことを知らせる前の形（席の left・部屋の opponentLeft・timing.leftMs がない）で保存された部屋 */
-function oldRoom() {
-  const { leftMs: _drop, ...oldTiming } = { ...DEFAULT_TIMING, awayMs: 1234 };
-  const seat = (pid) => ({ pid, name: pid, conn: null, goneSince: 5, ready: false, draft: null, lastValid: null, cv: 2 });
+/** 盤が変わる前（v 3）の形で保存された部屋 */
+function v3Room() {
+  const seat = (pid) => ({ pid, name: pid, conn: null, goneSince: 5, ready: false, draft: null, lastValid: null, cv: 2, left: false });
   return {
     v: 3,
     code: '1234',
@@ -20,40 +21,49 @@ function oldRoom() {
     deadlines: { away: 100 },
     rematch: [false, false],
     lastResult: null,
-    timing: oldTiming,
+    timing: { ...DEFAULT_TIMING },
     testMap: null,
+    opponentLeft: false,
   };
 }
 
-describe('古い形の部屋の状態', () => {
-  it('S23 left・opponentLeft・leftMs がなくても読め、false・false・既定の 15 秒になる。ほかの timing の値は保つ', () => {
-    const s = normalizeRoom(oldRoom());
-    expect(s.seats[0].left).toBe(false);
-    expect(s.seats[1].left).toBe(false);
-    expect(s.opponentLeft).toBe(false);
-    expect(s.timing.leftMs).toBe(15_000);
-    expect(s.timing.awayMs).toBe(1234);
-    expect(s.deadlines).toEqual({ away: 100 });
-    // 期限の計算に使っても NaN にならない
-    expect(Number.isFinite(1000 + s.timing.leftMs)).toBe(true);
-    // 外へ見える内容の比べ方にも入る（left と opponentLeft が変われば、room を送り直す）
-    const sig = publicSignature(s);
-    s.seats[0].left = true;
-    expect(publicSignature(s)).not.toBe(sig);
-    const sig2 = publicSignature(s);
-    s.opponentLeft = true;
-    expect(publicSignature(s)).not.toBe(sig2);
+describe('保存してある部屋の形の版', () => {
+  it('新しい部屋は v 4', () => {
+    expect(ROOM_VERSION).toBe(4);
+    expect(newRoom('1234', 1, DEFAULT_TIMING).v).toBe(4);
   });
 
-  it('いまの形の値は変えない', () => {
-    const r = oldRoom();
-    r.opponentLeft = true;
+  it('v 3 以下（と版のない値・壊れた値）は読まない（null）', () => {
+    for (const v of [3, 2, 1, 0, undefined, '4', null]) {
+      const r = v3Room();
+      if (v === undefined) delete r.v;
+      else r.v = v;
+      expect(loadRoom(r), JSON.stringify(v)).toBeNull();
+    }
+    expect(loadRoom(null)).toBeNull();
+    expect(loadRoom('room')).toBeNull();
+  });
+
+  it('v 4 は、そのまま読み戻す（値を変えない）', () => {
+    const s = newRoom('5678', 9, { ...DEFAULT_TIMING, awayMs: 1234 });
+    s.seats = [newSeat('a', 'A', 3), newSeat('b', 'B', 3)];
+    s.seats[0].left = true;
+    s.opponentLeft = true;
+    const saved = JSON.parse(JSON.stringify(s));
+    const back = loadRoom(saved);
+    expect(back).toEqual(s);
+    expect(publicSignature(back)).toBe(publicSignature(s));
+  });
+
+  it('読み戻した部屋でも、席の left・部屋の opponentLeft が変わると、外へ見える内容（publicSignature）が変わる', () => {
+    const s = newRoom('5678', 9, DEFAULT_TIMING);
+    s.seats = [newSeat('a', 'A', 3), newSeat('b', 'B', 3)];
+    const r = loadRoom(JSON.parse(JSON.stringify(s)));
+    const sig = publicSignature(r);
     r.seats[0].left = true;
-    r.timing.leftMs = 3000;
-    const s = normalizeRoom(r);
-    expect(s.opponentLeft).toBe(true);
-    expect(s.seats[0].left).toBe(true);
-    expect(s.seats[1].left).toBe(false);
-    expect(s.timing.leftMs).toBe(3000);
+    expect(publicSignature(r)).not.toBe(sig);
+    const sig2 = publicSignature(r);
+    r.opponentLeft = true;
+    expect(publicSignature(r)).not.toBe(sig2);
   });
 });

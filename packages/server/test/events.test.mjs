@@ -3,7 +3,7 @@
 import { PVP_MAPS, pvpField } from '@jinkei/engine';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fieldFor } from '../src/flip.ts';
-import { Client, army, collectEvents, holdArmy, loneArcherArmy, postRoom, shieldWallArmy, randomPid, setupPair, sleep, startServer, testRoute } from './helpers.mjs';
+import { Client, attackArmy, collectEvents, holdArmy, loneArcherArmy, postRoom, shieldWallArmy, randomPid, setupPair, sleep, startServer, testRoute } from './helpers.mjs';
 
 let server;
 beforeAll(async () => {
@@ -14,16 +14,7 @@ afterAll(async () => {
 });
 
 /** 勝ち負けが付く、動きのある配置（前進と本陣狙い） */
-const attack = army([
-  ['hq', 5, 15, 'hold'],
-  ['infantry', 2, 10, 'advance'],
-  ['infantry', 4, 10, 'advance'],
-  ['infantry', 6, 10, 'advance'],
-  ['infantry', 8, 10, 'advance'],
-  ['cavalry', 0, 11, 'hunt'],
-  ['cavalry', 11, 11, 'hunt'],
-  ['archer', 5, 12, 'advance'],
-]);
+const attack = attackArmy();
 
 async function ensureConnected(c) {
   if (c.ws.readyState === WebSocket.OPEN) return c;

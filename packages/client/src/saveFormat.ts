@@ -1,11 +1,17 @@
 // 端末に残す記録の形と、読んだ値の掃除（design §5.4）。読み書きそのものは save.ts。
 // Phaser・window・import.meta を使わない計算だけにして、画面なしで確かめられるようにする（test/reserve.test.ts）。
 
-import { KINDS, reserveErrors, STANCES, type Placement, type ReserveSetup } from '@jinkei/engine';
+import { KINDS, MAX_UNITS, reserveErrors, STANCES, STANDARD_ZONE_WIDTH, type Placement, type ReserveSetup } from '@jinkei/engine';
 import { parseView, type ViewMode } from './battle/viewMode.ts';
 
+/**
+ * 保存の形の版（design §5.4、§13.9）。2 は盤を変えた（design §13）あとの形。鍵（jinkei-gassen/v1）は変えない。
+ * 1 の保存からは、座標を持たない項目だけを引き継ぐ（sanitizeSave）
+ */
+export const SAVE_VERSION = 2;
+
 export interface SaveData {
-  v: 1;
+  v: typeof SAVE_VERSION;
   /** 面ごとの最高の星（0〜3） */
   stars: Record<string, number>;
   /** 面ごとの最後の配置（同じ面をやり直すときに戻すため） */
@@ -32,7 +38,7 @@ export interface SaveData {
   pvpReserve: ReserveSetup | null;
   /** 保存した陣形（design §5.6。8つまで） */
   formations: SavedFormation[];
-  /** 戦闘の画面の視点（design §5.7、§5.8）。4つの値を受け付ける（使えない視点は戦闘の画面で真上として扱う） */
+  /** 戦闘の画面の視点（design §5.7、§5.8）。真上・斜め・横からの3つ（なくした将軍の視点など、知らない値は真上として読む） */
   view: ViewMode;
   /**
    * チュートリアルを済ませたか（design §8.7）。最後まで遊ぶか、飛ばすと付く。
@@ -62,7 +68,7 @@ export interface SavedFormation {
 export const MAX_FORMATIONS = 8;
 
 export function emptySave(): SaveData {
-  return { v: 1, stars: {}, placements: {}, reserves: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], pvpReserve: null, formations: [], view: 'top', tutorialDone: false, pvpRulesSeen: false };
+  return { v: SAVE_VERSION, stars: {}, placements: {}, reserves: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], pvpReserve: null, formations: [], view: 'right', tutorialDone: false, pvpRulesSeen: false };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -94,18 +100,37 @@ export function copyFormation(f: Omit<SavedFormation, 'reserve'> & { reserve?: u
   return out;
 }
 
-/** 読んだ値を、正しい形の項目だけ残して SaveData に直す */
+/**
+ * 読んだ値を、正しい形の項目だけ残して SaveData に直す（design §13.9）。
+ * - v 2：すべての項目を読む。
+ * - v 1（盤が 12×16 だったころ）：星・音の設定・合言葉（pid）・名前・部屋のコード・視点・チュートリアルを済ませた印・
+ *   対戦のルールを見た印だけを引き継ぐ。面ごとの配置と遊軍・保存した陣形・対戦の配置と遊軍は、座標が合わないので捨てる
+ *   （行 10 は古いエリアにも新しいエリアにもあるので、座標の検査では見分けられない）。読むだけでは書き戻さず、次に書くときに v 2 になる。
+ * - それ以外：空の保存。
+ * 数の上限（配置・陣形の部隊・対戦の配置）は engine の MAX_UNITS、陣形の幅の上限は配置エリアの幅 STANDARD_ZONE_WIDTH を読む（戦場の幅 STANDARD_WIDTH は通り道を含むため。design §13.9）
+ */
 export function sanitizeSave(raw: unknown): SaveData {
   const data = emptySave();
-  if (!isRecord(raw) || raw.v !== 1) return data;
+  if (!isRecord(raw) || (raw.v !== 1 && raw.v !== SAVE_VERSION)) return data;
   if (isRecord(raw.stars)) {
     for (const [id, n] of Object.entries(raw.stars)) {
       if (typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 3) data.stars[id] = n;
     }
   }
+  if (typeof raw.muted === 'boolean') data.muted = raw.muted;
+  if (typeof raw.pid === 'string' && /^[0-9a-f]{32}$/.test(raw.pid)) data.pid = raw.pid;
+  if (typeof raw.name === 'string' && [...raw.name].length <= 12) data.name = raw.name;
+  if (typeof raw.roomCode === 'string' && /^\d{4}$/.test(raw.roomCode)) data.roomCode = raw.roomCode;
+  // 知らない値は真上
+  data.view = parseView(raw.view);
+  // 済みの印は、星を掃除したあとで決める（design §8.10-6）。真偽値ならその値、そうでなければ、掃除したあとの星に 1 以上があれば済み
+  data.tutorialDone = typeof raw.tutorialDone === 'boolean' ? raw.tutorialDone : Object.values(data.stars).some((n) => n >= 1);
+  data.pvpRulesSeen = raw.pvpRulesSeen === true;
+  // ここから下は座標を持つ項目。v 1 の保存からは引き継がない
+  if (raw.v !== SAVE_VERSION) return data;
   if (isRecord(raw.placements)) {
     for (const [id, list] of Object.entries(raw.placements)) {
-      if (Array.isArray(list) && list.length <= 16 && list.every(isPlacement)) {
+      if (Array.isArray(list) && list.length <= MAX_UNITS && list.every(isPlacement)) {
         data.placements[id] = list.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
       }
     }
@@ -116,29 +141,20 @@ export function sanitizeSave(raw: unknown): SaveData {
       if (clean) data.reserves[id] = clean;
     }
   }
-  if (typeof raw.muted === 'boolean') data.muted = raw.muted;
-  if (typeof raw.pid === 'string' && /^[0-9a-f]{32}$/.test(raw.pid)) data.pid = raw.pid;
-  if (typeof raw.name === 'string' && [...raw.name].length <= 12) data.name = raw.name;
-  if (typeof raw.roomCode === 'string' && /^\d{4}$/.test(raw.roomCode)) data.roomCode = raw.roomCode;
   if (Array.isArray(raw.formations)) {
     for (const f of raw.formations) {
       if (!isRecord(f) || typeof f.name !== 'string' || !Number.isInteger(f.width) || !Array.isArray(f.units)) continue;
       const len = [...f.name].length;
-      if (len < 1 || len > 8 || (f.width as number) < 1 || (f.width as number) > 12) continue;
-      if (f.units.length > 16 || !f.units.every(isPlacement)) continue;
+      if (len < 1 || len > 8 || (f.width as number) < 1 || (f.width as number) > STANDARD_ZONE_WIDTH) continue;
+      if (f.units.length > MAX_UNITS || !f.units.every(isPlacement)) continue;
       if (data.formations.length >= MAX_FORMATIONS) break;
       // 遊軍の値が壊れていれば、遊軍だけを捨てる（陣形そのものは残す）
       data.formations.push(copyFormation({ name: f.name, width: f.width as number, units: f.units as Placement[], reserve: f.reserve }));
     }
   }
-  // 知らない値は真上
-  data.view = parseView(raw.view);
-  if (Array.isArray(raw.pvpArmy) && raw.pvpArmy.length <= 16 && raw.pvpArmy.every(isPlacement)) {
+  if (Array.isArray(raw.pvpArmy) && raw.pvpArmy.length <= MAX_UNITS && raw.pvpArmy.every(isPlacement)) {
     data.pvpArmy = raw.pvpArmy.map((p) => ({ kind: p.kind, col: p.col, row: p.row, stance: p.stance }));
   }
   data.pvpReserve = cleanReserve(raw.pvpReserve);
-  // 済みの印は、星を掃除したあとで決める（design §8.10-6）。真偽値ならその値、そうでなければ、掃除したあとの星に 1 以上があれば済み
-  data.tutorialDone = typeof raw.tutorialDone === 'boolean' ? raw.tutorialDone : Object.values(data.stars).some((n) => n >= 1);
-  data.pvpRulesSeen = raw.pvpRulesSeen === true;
   return data;
 }

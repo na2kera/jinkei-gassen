@@ -1,4 +1,12 @@
 import { buildTextures, standKey, soldierKey, tileKey } from './textures.ts';
+// 道具の中の1マスの大きさ（px）。ゲームのタイル（TILE）の大きさが変わっても、OGP の寸法が変わらないよう、道具が自分で持つ
+// （design §13.11）。ゲームのタイルは、この大きさに縮めて（または伸ばして）描く
+const CELL_PX = 24;
+/** ゲームのタイルを、道具の1マス（CELL_PX 四方）に合わせて描く（ぼかさない） */
+function drawTile(ctx, source, x, y) {
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(source, 0, 0, source.width, source.height, x, y, CELL_PX, CELL_PX);
+}
 import { COLOR, SIDE_COLOR, ART, css } from './palette.ts';
 
 const font = new FontFace('DotGothic16', 'url(/font.ttf)');
@@ -89,7 +97,7 @@ function overlaps(a, b) {
 function validateLayout(name, layout, units) {
   const [x, y, w, h] = layout.titleBox;
   const obstacles = [{ x, y, w, h },
-    ...layout.terrain.map(([, x, y]) => ({ x, y, w: 24, h: 24 })),
+    ...layout.terrain.map(([, x, y]) => ({ x, y, w: CELL_PX, h: CELL_PX })),
     ...layout.flags.map(([x, y]) => ({ x, y, w: 16, h: 30 }))];
   for (const [i, unit] of units.entries()) {
     if (![unit.x, unit.y, unit.w, unit.h].every(Number.isInteger)
@@ -111,9 +119,9 @@ const terrainColors = new Map([
 ]);
 function terrainImage(terrain) {
   const source = textures.get(tileKey(terrain));
-  const canvas = document.createElement('canvas'); canvas.width = 24; canvas.height = 24;
-  const ctx = canvas.getContext('2d'); ctx.drawImage(source, 0, 0);
-  const pixels = ctx.getImageData(0, 0, 24, 24);
+  const canvas = document.createElement('canvas'); canvas.width = CELL_PX; canvas.height = CELL_PX;
+  const ctx = canvas.getContext('2d'); drawTile(ctx, source, 0, 0);
+  const pixels = ctx.getImageData(0, 0, CELL_PX, CELL_PX);
   for (let i = 0; i < pixels.data.length; i += 4) {
     const color = terrainColors.get((pixels.data[i] << 16) | (pixels.data[i + 1] << 8) | pixels.data[i + 2]);
     if (color === undefined) continue;
@@ -136,8 +144,8 @@ for (const [name, layout] of Object.entries(layouts)) {
   const ctx = base.getContext('2d'); ctx.imageSmoothingEnabled = false;
   rect(ctx, COLOR.bg, 0, 0, 400, 210);
   const { fieldTop, fieldBottom } = layout;
-  for (let y = fieldTop; y < fieldBottom; y += 24) for (let x = 16; x < 384; x += 24) {
-    ctx.drawImage(textures.get(tileKey('plain', (Math.floor(x / 24) + Math.floor(y / 24)) % 4)), x, y);
+  for (let y = fieldTop; y < fieldBottom; y += CELL_PX) for (let x = 16; x < 384; x += CELL_PX) {
+    drawTile(ctx, textures.get(tileKey('plain', (Math.floor(x / CELL_PX) + Math.floor(y / CELL_PX)) % 4)), x, y);
   }
   for (const [terrain, x, y] of layout.terrain) ctx.drawImage(terrainImage(terrain), x, y);
   // 周縁は余白。切り抜きで失われても題字と両軍は中央に残る。

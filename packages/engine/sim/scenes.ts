@@ -17,7 +17,14 @@ import {
   type TemplateId,
 } from '../src/index.ts';
 import { T } from '../src/tuning.ts';
+import { STANDARD_HEIGHT, STANDARD_WIDTH } from '../src/army.ts';
 import { median, runSetup, runState, scoreFor, SEEDS_100, SEEDS_40, templateArmy } from './lib.ts';
+
+/** 両軍の前列の行（標準の戦場の配置エリアから計算。10×12 なら 8 と 3） */
+const F0 = (): number => plainField().zones[0].row;
+const F1 = (): number => plainField().zones[1].row + plainField().zones[1].height - 1;
+/** 配置エリアの左端の列（通り道のある盤では 1） */
+const C0 = (): number => plainField().zones[0].col;
 
 export const mean = (xs: number[]): number => (xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : NaN);
 
@@ -27,11 +34,12 @@ function setupOf(armies: [Placement[], Placement[]], seed: number, extra: Partia
 
 /** 横一列。cols の各列に同じ兵種・方針で並べる */
 function row(kind: Placement['kind'], stance: Placement['stance'], cols: number[], r: number): Placement[] {
-  return cols.map((col) => ({ kind, stance, col, row: r }));
+  // 列は配置エリアの左端からの数（通り道のある盤では、配置エリアの中に収めるため）
+  return cols.map((col) => ({ kind, stance, col: col + C0(), row: r }));
 }
 
 /** 戦場全体を両陣営の配置エリアにした戦場（小さな場面で、近い位置から始めるため） */
-export function openField(width = 12, height = 16): Field {
+export function openField(width = STANDARD_WIDTH, height = STANDARD_HEIGHT): Field {
   const f = plainField(width, height);
   f.zones = [
     { col: 0, row: 0, width, height },
@@ -81,8 +89,8 @@ export interface A2Result {
 
 export function a2(mode: 'front' | 'flank', seeds = SEEDS_40): A2Result {
   const res = seeds.map((seed) => {
-    const side0 = [...row('infantry', 'advance', [4, 5, 6], 10), { kind: 'cavalry' as const, stance: mode === 'front' ? ('advance' as const) : ('flank' as const), col: 7, row: 10 }];
-    const side1 = row('infantry', 'advance', [4, 5, 6], 5);
+    const side0 = [...row('infantry', 'advance', [2, 3, 4], F0()), { kind: 'cavalry' as const, stance: mode === 'front' ? ('advance' as const) : ('flank' as const), col: 5 + C0(), row: F0() }];
+    const side1 = row('infantry', 'advance', [2, 3, 4], F1());
     const { state } = runSetup(setupOf([side0, side1], seed));
     const sum = summarize(state);
     return { score: scoreFor(state, 0), remaining: sum.remaining[0], seconds: sum.seconds };
@@ -105,13 +113,13 @@ export interface A3Result {
 }
 
 function a3Scene(mode: 'front' | 'rear', seed: number): BattleState {
-  const side0: Placement[] = [{ kind: 'shield', stance: 'hold', col: 5, row: 8 }];
+  const side0: Placement[] = [{ kind: 'shield', stance: 'hold', col: 3 + C0(), row: mode === 'front' ? 6 : 4 }];
   const side1: Placement[] =
     mode === 'front'
-      ? [{ kind: 'cavalry', stance: 'advance', col: 5, row: 2 }]
+      ? [{ kind: 'cavalry', stance: 'advance', col: 3 + C0(), row: 0 }]
       : [
-          { kind: 'infantry', stance: 'advance', col: 5, row: 7 },
-          { kind: 'cavalry', stance: 'advance', col: 5, row: 13 },
+          { kind: 'infantry', stance: 'advance', col: 3 + C0(), row: 3 },
+          { kind: 'cavalry', stance: 'advance', col: 3 + C0(), row: 9 },
         ];
   const state = mustCreate({ field: openField(), armies: [side0, side1], seed, maxTicks: 1800, timeout: 'compare', requireHq: false });
   runState(state, { stopWhen: (s) => s.tick >= 150 });
@@ -170,8 +178,8 @@ export function a4(seeds = SEEDS_40): A4Result {
   let archerTaken = 0;
   let infWins = 0;
   for (const seed of seeds) {
-    const side0 = [...row('shield', 'hold', [5, 6], 10), ...row('archer', 'hold', [5, 6], 11)];
-    const side1 = row('infantry', 'advance', [4, 5, 6], 2);
+    const side0 = [...row('shield', 'hold', [3, 4], F0()), ...row('archer', 'hold', [3, 4], F0() + 1)];
+    const side1 = row('infantry', 'advance', [2, 3, 4], 0);
     const state = mustCreate(setupOf([side0, side1], seed));
     runState(state, { stopWhen: anyMelee });
     const inf = state.units.filter((u) => u.side === 1);
@@ -180,7 +188,7 @@ export function a4(seeds = SEEDS_40): A4Result {
 
     const b = mustCreate({
       field: openField(),
-      armies: [[{ kind: 'archer', stance: 'advance', col: 5, row: 8 }], [{ kind: 'infantry', stance: 'advance', col: 5, row: 7 }]],
+      armies: [[{ kind: 'archer', stance: 'advance', col: 3 + C0(), row: 6 }], [{ kind: 'infantry', stance: 'advance', col: 3 + C0(), row: 5 }]],
       seed,
       maxTicks: 1800,
       timeout: 'compare',
@@ -205,8 +213,8 @@ export interface A5Result {
 }
 
 function a5Count(withCav: boolean, seed: number): { second: boolean; secondTick: number } {
-  const side0 = [...row('infantry', 'advance', [4, 5, 6, 7, 8], 10), ...(withCav ? row('cavalry', 'flank', [9, 10], 10) : [])];
-  const side1 = row('infantry', 'hold', [4, 5, 6, 7, 8], 5);
+  const side0 = [...row('infantry', 'advance', [1, 2, 3, 4, 5], F0()), ...(withCav ? row('cavalry', 'flank', [6, 7], F0()) : [])];
+  const side1 = row('infantry', 'hold', [1, 2, 3, 4, 5], F1());
   const state = mustCreate(setupOf([side0, side1], seed));
   let first: number | null = null;
   const side1RoutTicks: number[] = [];
@@ -243,9 +251,8 @@ export function a5(seeds = SEEDS_40): A5Result {
 //       盾兵は本陣に届かず、鋒矢は全滅する（40個すべて wipeout）。どちらの場合も、守備の味方にふさがれる部隊も時間切れもない。刻み 6〜15 秒で出しても 40 個すべて勝つ。
 //       前の場面（鶴翼 対 偃月）は、盾兵の後ろでふさがれていた弓兵を突撃が押し出していただけだったので、回り込みの決まりを足したときに替えた。
 //       T10 の記録の「A8 charge」は、前の場面の配置のまま残している（A8 のテストの場面とは別）。
-// 堅守：陣営0は鶴翼（R15）、陣営1は魚鱗（R15）。6秒に中央（4〜7列）へ堅守。
-//       中央の翼に入る、両翼の内側の歩兵が魚鱗の先と組み合っている。出さないと崩れて負ける（種1000：103秒で壊滅）。
-//       出すと、その場で踏みとどまって崩れず、勝ちに変わる（種1000：58秒で壊滅させて勝ち）。
+// 堅守：陣営0は鋒矢、陣営1は横陣（どちらも標準の手持ち）。6秒に中央へ堅守（8×4 の配置エリアに合わせて作り直した。下の A8_TEMPLATES）。
+//       （main の 12×16 の盤では 鶴翼 対 魚鱗 だった。その場面の中身の説明は、新しい場面では確かめていない）
 // 突撃・堅守の場面は、ひな形の組・翼（全軍・中央）・刻み（4・8・15秒）を総当たりして、前後の刻みでも結果が変わらない組を選んだ。
 // 後退：陣営0は歩兵3（4〜6列、前の行、前進）と弓兵4（1・2・9・10列、いちばん奥の行、守備）。陣営1は歩兵4（3〜6列、前の行、前進）。
 //       歩兵どうしがぶつかった頃（5秒）に全軍後退し、弓兵の届くところまで敵を引き込む。
@@ -253,15 +260,21 @@ export function a5(seeds = SEEDS_40): A5Result {
 export type A8Kind = 'charge' | 'brace' | 'retreat';
 
 export const A8_ORDER_TICK: Record<A8Kind, number> = { charge: 80, brace: 60, retreat: 50 };
-export const A8_TEMPLATES: Record<'charge' | 'brace', [TemplateId, TemplateId]> = { charge: ['crescent', 'arrow'], brace: ['crane', 'scale'] };
+// 堅守：鶴翼を作り直したら 鶴翼 対 魚鱗 が、雁行を作り直したら 魚鱗 対 雁行 が、号令なしでも勝つ（1.0/1.0）ようになった。
+// 実験の枝で 42 組を流し直し、号令あり 1.0・なし 0.0 になる組（鋒矢 対 横陣・鋒矢 対 鶴翼・雁行 対 鶴翼・雁行 対 魚鱗）のうち、
+// 5回目にも通っていた 鋒矢 対 横陣 にした（実験の記録 §24・§38）
+export const A8_TEMPLATES: Record<'charge' | 'brace', [TemplateId, TemplateId]> = { charge: ['crescent', 'arrow'], brace: ['arrow', 'line'] };
 
 export function a8Setup(kind: A8Kind, seed: number): BattleSetup {
   if (kind === 'charge' || kind === 'brace') {
     const [a, b] = A8_TEMPLATES[kind];
     return { field: plainField(), armies: [templateArmy(a, 0), templateArmy(b, 1)], seed, maxTicks: 1800, timeout: 'compare' };
   }
-  const side0 = [...row('infantry', 'advance', [4, 5, 6], 10), ...row('archer', 'hold', [1, 2, 9, 10], 15)];
-  const side1 = row('infantry', 'advance', [3, 4, 5, 6], 5);
+  // 配置エリアの奥行きが 4 だと、いちばん後ろの弓兵からも前列の戦いに矢が届き、号令なしでも勝つ（main は 5 行離れていた）。
+  // 敵の歩兵を 5 にして、号令なしでは負ける場面にした（実験の枝の sim diag retreat --enemy 5 で確かめた）。弓兵は配置エリアの 1・2・幅-3・幅-2 列
+  const zw = plainField().zones[0].width;
+  const side0 = [...row('infantry', 'advance', [2, 3, 4], F0()), ...row('archer', 'hold', [1, 2, zw - 3, zw - 2], F0() + 3)];
+  const side1 = row('infantry', 'advance', [1, 2, 3, 4, 5], F1());
   return setupOf([side0, side1], seed);
 }
 
@@ -283,12 +296,15 @@ export function a8(kind: A8Kind, seeds = SEEDS_40): { withOrder: number; without
 }
 
 // ------------------------------------------------------------ A11
-// 同じ予算（36）の2軍。守る側：本陣・盾兵4・弓兵4・歩兵6 を横陣に並べ、全部隊を守備。
-// 攻める側：本陣・歩兵6・盾兵2・騎兵3・弓兵2 を横陣のひな形どおり。守る側を陣営0にした40戦と陣営1にした40戦。
+// 守る側を横陣に並べ、全部隊を守備。攻める側は横陣のひな形どおり（編成は下の A11_DEFENSE・A11_OFFENSES）。
+// 攻める側の編成ごとに、守る側を陣営0にした40戦と陣営1にした40戦。
 // 全部隊が守備の軍どうしは、守る側の編成を両軍に使う。
 
-export const A11_DEFENSE = { hq: 1, shield: 4, archer: 4, infantry: 6 } as const;
-export const A11_OFFENSE = { hq: 1, infantry: 6, shield: 2, cavalry: 3, archer: 2 } as const;
+// 予算 24 の版（実験の枝 exp/grid-tuning で置き直したもの）。守る側 盾3・弓3・歩3（main と同じ形を約 3分の2 に）、攻める側 歩2・盾2・騎2・弓2（値段 24）。
+// 5回目の「攻める側4編成の平均」はやめ、1対1 に戻した。横陣の前列を 幅−2 にして予算 24 の組を 80 通り流し直し、0.7 台になった組（実験の記録 §38）。
+export const A11_DEFENSE = { hq: 1, shield: 3, archer: 3, infantry: 3 } as const;
+export const A11_OFFENSE = { hq: 1, infantry: 2, shield: 2, cavalry: 2, archer: 2 } as const;
+export const A11_OFFENSES: readonly Readonly<Record<string, number>>[] = [A11_OFFENSE];
 
 export function allHold(p: Placement[]): Placement[] {
   return p.map((x) => ({ ...x, stance: 'hold' }));
@@ -303,12 +319,14 @@ export function a11(seeds = SEEDS_40): { defenderScore: number; holdVsHoldAllDra
   const pts: number[] = [];
   let allDraw = true;
   for (const seed of seeds) {
-    for (const side of [0, 1] as const) {
-      const def = allHold(lineOf(A11_DEFENSE, side));
-      const atk = lineOf(A11_OFFENSE, side === 0 ? 1 : 0);
-      const armies: [Placement[], Placement[]] = side === 0 ? [def, atk] : [atk, def];
-      const { state } = runSetup({ field: plainField(), armies, seed, maxTicks: 1800, timeout: 'compare' });
-      pts.push(scoreFor(state, side));
+    for (const off of A11_OFFENSES) {
+      for (const side of [0, 1] as const) {
+        const def = allHold(lineOf(A11_DEFENSE, side));
+        const atk = lineOf(off, side === 0 ? 1 : 0);
+        const armies: [Placement[], Placement[]] = side === 0 ? [def, atk] : [atk, def];
+        const { state } = runSetup({ field: plainField(), armies, seed, maxTicks: 1800, timeout: 'compare' });
+        pts.push(scoreFor(state, side));
+      }
     }
     const hh = runSetup({
       field: plainField(),
@@ -329,15 +347,15 @@ export function a11(seeds = SEEDS_40): { defenderScore: number; holdVsHoldAllDra
 
 export function a13(seeds = SEEDS_40): { sixVsFour: number; fourVsFour: number } {
   const ratio = (cols0: number[], seed: number): number => {
-    const { state } = runSetup(setupOf([row('infantry', 'advance', cols0, 10), row('infantry', 'advance', [4, 5, 6, 7], 5)], seed));
+    const { state } = runSetup(setupOf([row('infantry', 'advance', cols0, F0()), row('infantry', 'advance', [2, 3, 4, 5], F1())], seed));
     const mine = state.units.filter((u) => u.side === 0);
     const dealt = mine.reduce((s, u) => s + u.stats.dealt, 0);
     const flank = mine.reduce((s, u) => s + u.stats.flankDealt, 0);
     return dealt > 0 ? flank / dealt : 0;
   };
   return {
-    sixVsFour: mean(seeds.map((s) => ratio([3, 4, 5, 6, 7, 8], s))),
-    fourVsFour: mean(seeds.map((s) => ratio([4, 5, 6, 7], s))),
+    sixVsFour: mean(seeds.map((s) => ratio([1, 2, 3, 4, 5, 6], s))),
+    fourVsFour: mean(seeds.map((s) => ratio([2, 3, 4, 5], s))),
   };
 }
 

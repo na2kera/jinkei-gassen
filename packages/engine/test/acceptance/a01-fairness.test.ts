@@ -69,4 +69,58 @@ describe('A1 陣営と順番で有利不利がない', () => {
       mutable.randomMax = saved[1]!;
     }
   }, 300_000);
+
+  it('ばらつきをなくすと、違うひな形どうし（21組）でも、陣営を入れ替えた戦いと最後の刻みまで鏡写しになる（位置・向き・兵数・士気・状態・狙い・勝敗）', () => {
+    const saved = [T.randomMin, T.randomMax];
+    const mutable = T as { randomMin: number; randomMax: number };
+    mutable.randomMin = 1;
+    mutable.randomMax = 1;
+    try {
+      const ids = listTemplates().map((x) => x.id);
+      for (const A of ids) {
+        for (const B of ids) {
+          if (A >= B) continue;
+          const make = (x: typeof A, y: typeof A) => {
+            const r = createBattle({ field: plainField(), armies: [templateArmy(x, 0), templateArmy(y, 1)], seed: 7, maxTicks: 1800, timeout: 'compare' });
+            if (!r.ok) throw new Error(r.error.message);
+            return r.value;
+          };
+          // s1 は A が陣営0・B が陣営1、s2 は B が陣営0・A が陣営1。s1 の id → s2 の id
+          const s1 = make(A, B);
+          const s2 = make(B, A);
+          const nA = templateArmy(A, 0).length;
+          const nB = templateArmy(B, 0).length;
+          const map = (id: number): number => (id < nA ? nB + id : id - nA);
+          const W = s1.field.width;
+          const H = s1.field.height;
+          const check = (): void => {
+            for (let i = 0; i < nA + nB; i++) {
+              const u = s1.units[i]!;
+              const v = s2.units[map(i)]!;
+              const msg = `${A} 対 ${B} 刻み ${s1.tick} 部隊 ${i}`;
+              expect(Math.abs(u.x - (W - v.x)) + Math.abs(u.y - (H - v.y)), msg).toBeLessThan(1e-6);
+              expect(Math.abs(u.fx + v.fx) + Math.abs(u.fy + v.fy), msg).toBeLessThan(1e-6);
+              expect(Math.abs(u.men - v.men) + Math.abs(u.morale - v.morale), msg).toBeLessThan(1e-6);
+              expect(u.status, msg).toBe(v.status);
+              expect(u.target === null ? null : map(u.target), msg).toBe(v.target);
+            }
+          };
+          check();
+          while (!s1.outcome) {
+            step(s1, []);
+            step(s2, []);
+            check();
+          }
+          expect(s2.outcome, `${A} 対 ${B}`).not.toBeNull();
+          const w = s1.outcome.winner;
+          expect(s2.outcome!.winner, `${A} 対 ${B}`).toBe(w === 'draw' ? 'draw' : 1 - w);
+          expect(s2.outcome!.tick, `${A} 対 ${B}`).toBe(s1.outcome.tick);
+          expect(s2.outcome!.reason, `${A} 対 ${B}`).toBe(s1.outcome.reason);
+        }
+      }
+    } finally {
+      mutable.randomMin = saved[0]!;
+      mutable.randomMax = saved[1]!;
+    }
+  }, 300_000);
 });

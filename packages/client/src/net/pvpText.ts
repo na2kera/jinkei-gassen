@@ -43,6 +43,17 @@ export function lobbyStatusLine(
 }
 
 /**
+ * 部屋の画面のいちばん下の行が幅に収まらないとき、句点の所で 2 行に折る（decisions §22）。文と文字の大きさは変えない。
+ * 幅は、全部の文字を全角（size px）として多めに見積もる。句点が文の途中にない文は、そのまま返す
+ */
+export function foldAtPeriod(text: string, maxW: number, size = 16): string {
+  if (text.length * size <= maxW) return text;
+  const i = text.indexOf('。');
+  if (i < 0 || i === text.length - 1) return text;
+  return `${text.slice(0, i + 1)}\n${text.slice(i + 1)}`;
+}
+
+/**
  * 対戦の結果の「残った兵」の1行（design §11.3）。自軍・敵軍とも remaining（時間切れの勝ち負けを決める数え方。
  * 呼ばなかった遊軍を数に入れない）を出す。2人の画面で同じ数字になり、勝ち負けと必ず合う。
  * 1人用の結果の画面は星の条件と同じ数え方（remainingShown）のままで、ここは使わない

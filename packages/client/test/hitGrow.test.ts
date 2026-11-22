@@ -198,10 +198,10 @@ function screens(l: Layout): Screen[] {
 }
 
 const LAYOUTS: [string, Layout][] = [
-  ['縦長 320×620（iPhone SE）', computeLayout(375, 547)],
+  ['縦長 320×564（iPhone SE）', computeLayout(375, 547)],
   ['縦長 320×680', computeLayout(390, 829)],
   ['縦長 320×720（細長い端末）', computeLayout(402, 714 * 1.3)],
-  ['横長 640×400', computeLayout(667, 325)],
+  ['横長 672×400', computeLayout(667, 325)],
 ];
 
 test('M6 実物の配置：広げた範囲どうしが重ならない・戦場と重ならない・もとの矩形を含む・画面からはみ出さない', () => {
@@ -222,9 +222,9 @@ test('M6 実物の配置：広げた範囲どうしが重ならない・戦場�
   }
 });
 
-test('M6 iPhone SE の縦（320×620）で、主なボタンが広がっている', () => {
+test('M6 iPhone SE の縦（320×564。縦長の下限。design §14.6）で、主なボタンが広がっている', () => {
   const l = computeLayout(375, 547);
-  assert.equal(l.height, 620);
+  assert.equal(l.height, 564);
   const bounds = { x: 0, y: 0, w: l.width, h: l.height };
   const all = screens(l);
   const grownOf = (name: string, r: Rect): Rect => {

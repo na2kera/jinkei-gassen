@@ -19,13 +19,21 @@ export interface TerrainPos {
 }
 
 /**
- * 座標 v が入るマスの番号（幅 n）。ちょうどマスの境目（整数）のときは、戦場の中心に近いほうのマスにする。
+ * マスの境目（整数）とみなす遊び。180° 回した戦いでは、同じはずの座標が丸めで 8.000000000000002 と 4 のように分かれ、
+ * 「ちょうど整数か」で比べると片方だけが境目の扱いになる。大きさは、距離の判定の RANGE_EPS（battle.ts）と同じ 1e-9
+ */
+export const CELL_EPS = 1e-9;
+
+/**
+ * 座標 v が入るマスの番号（幅 n）。マスの境目（整数との差が CELL_EPS 以内）のときは、戦場の中心に近いほうのマスにする。
  * floor だけで決めると、陣営0の部隊が y = 9.0 で行 9、鏡写しの陣営1の部隊が y = 7.0 で行 7 になり、
  * 鏡写しの位置どうしで地形が食い違って、対称な戦場でも陣営の有利不利が生まれるため。
+ * 境目から CELL_EPS より離れた座標は、floor のまま（遊びを入れる前と同じ）。
  */
 function cellIndex(v: number, n: number): number {
-  const f = Math.floor(v);
-  return v === f && v > n / 2 ? f - 1 : f;
+  const r = Math.round(v);
+  if (Math.abs(v - r) <= CELL_EPS) return r > n / 2 ? r - 1 : r;
+  return Math.floor(v);
 }
 
 /** 位置 (x, y) のマスの地形（部隊の地形は、中心があるマスで決める）。戦場の外は平地として扱う。 */

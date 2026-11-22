@@ -1,6 +1,6 @@
 // 座標の返し（flip.ts）の単体テスト。往復で元に戻ること、陣営0には何もしないこと、場面の返し方。
 
-import { applyTemplate, createBattle, plainField, viewFor, PVP_RULES } from '@jinkei/engine';
+import { applyTemplate, createBattle, plainField, viewFor, PVP_RULES, STANDARD_LANE, STANDARD_ZONE_WIDTH } from '@jinkei/engine';
 import { describe, expect, it } from 'vitest';
 import { fieldFor, flipCell, flipPoint, flipZone, packUnit, placementsFor, revealFor } from '../src/flip.ts';
 
@@ -19,13 +19,20 @@ describe('座標の返し', () => {
     for (const z of field.zones) expect(flipZone(flipZone(z, field), field)).toEqual(z);
     // 陣営1のエリアを返すと、陣営0のエリア（下側）になる
     expect(flipZone(field.zones[1], field)).toEqual(field.zones[0]);
+    // 通り道は左右に同じ数なので、返しても配置エリアは列 1・幅 8 のまま（design §13.2 の 8）
+    for (const z of field.zones) {
+      expect(z.col).toBe(STANDARD_LANE);
+      expect(z.width).toBe(STANDARD_ZONE_WIDTH);
+      const f = flipZone(z, field);
+      expect([f.col, f.width]).toEqual([STANDARD_LANE, STANDARD_ZONE_WIDTH]);
+    }
   });
 
   it('配置は、陣営0ではそのまま、陣営1では往復で元に戻る', () => {
     const army = applyTemplate('crane', PVP_RULES.standardRoster, field.zones[0], 0);
     expect(placementsFor(0, army, field)).toEqual(army);
     const toField = placementsFor(1, army, field);
-    expect(toField.every((p) => p.row < 6)).toBe(true);
+    expect(toField.every((p) => p.row < field.zones[1].row + field.zones[1].height)).toBe(true);
     expect(placementsFor(1, toField, field)).toEqual(army);
     // 陣営1のひな形（戦場の座標）を返すと、陣営0のひな形と同じ形になる
     expect(placementsFor(1, applyTemplate('line', PVP_RULES.standardRoster, field.zones[1], 1), field)).toEqual(
@@ -61,15 +68,15 @@ describe('座標の返し', () => {
       expect(p[14]).toBe(u.side === 1 ? u.stance : null);
       // 陣営1の人にも、自軍は下側にいて前（上）を向いて見える
       if (u.side === 1) {
-        expect(p[5]).toBeGreaterThan(10);
+        expect(p[5]).toBeGreaterThan(field.zones[0].row);
         expect(p[7]).toBeLessThan(0);
       }
     }
     // 陣営1の人から見て左（x が小さい）にいる自軍は、左翼
     const own = v1.units.filter((u) => u.side === 1).map((u) => packUnit(1, u, field));
     for (const p of own) {
-      if (p[4] < 4) expect(p[3]).toBe('left');
-      if (p[4] > 8) expect(p[3]).toBe('right');
+      if (p[4] < field.width / 3) expect(p[3]).toBe('left');
+      if (p[4] > (field.width * 2) / 3) expect(p[3]).toBe('right');
     }
     // 陣営0にはそのまま
     const u0 = viewFor(state, 0).units[0];

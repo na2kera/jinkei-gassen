@@ -1,7 +1,13 @@
 // ひな形（design §3.7）。手持ちと配置エリアから、配置と方針を返す。
 // 形は「自軍から見た」座標（cx: 自分から見て左が 0、cy: 敵に近い前の行が 0）で組み立て、最後に戦場の座標へ写す。
-// 組み立てた先が埋まっている・エリアの外のときは、いちばん近い空きマスへずらすので、6〜16 部隊のどの手持ちでも
+// 組み立てた先が埋まっている・エリアの外のときは、いちばん近い空きマスへずらすので、6〜11 部隊（MAX_UNITS）のどの手持ちでも
 // エリアに収まり、重ならず、全部隊を使い切る。乱数は使わないので、同じ入力からはいつも同じ配置になる。
+//
+// 通り道つきの盤の配置エリア 8×4 に合わせて、実験の枝（exp/grid-tuning）の5回目・7回目の実験で決めた最終の形を、
+// 実験用の切り替え（TEMPLATE_EXP・JINKEI_TPL）を外して、その既定値で写したもの（実験の記録 §21・§35・§43）。
+// - 列は「中央から外への左右の組」（8列なら [3,4]・[2,5]・[1,6]・[0,7]）で選び、偶数の幅でも左へ寄らないようにする。
+// - 組の片方だけが余ったとき（奇数）は、本陣の隣（本陣と左右対称になるマス）へ回せる形では回す（mate）。
+// - 奥行きは 4 行を前提にした形だが、行がエリアの外に出るときは、いちばん近い空きマスへずらすだけで止まらない（幅 4〜7 でも同じ）。
 
 import type { Kind, Placement, Roster, Side, Stance, TemplateId, TemplateInfo, Zone } from './types.ts';
 import { isInt, isObject, MAX_FIELD_SIDE } from './input.ts';
@@ -36,6 +42,11 @@ interface Counts {
   hq: number;
 }
 
+interface Cell {
+  cx: number;
+  cy: number;
+}
+
 function counts(roster: Roster): Counts {
   const n = (k: Kind): number => {
     const v = roster[k] ?? 0;
@@ -43,16 +54,6 @@ function counts(roster: Roster): Counts {
     return typeof v === 'number' && Number.isFinite(v) ? Math.min(MAX_UNITS, Math.max(0, Math.floor(v))) : 0;
   };
   return { infantry: n('infantry'), shield: n('shield'), cavalry: n('cavalry'), archer: n('archer'), hq: n('hq') };
-}
-
-/** 列を中央から外へ並べた順（12列なら 5,6,4,7,3,8,...）。左を先にする */
-function centerOut(width: number): number[] {
-  const out: number[] = [];
-  const c = (width - 1) / 2;
-  const cols = Array.from({ length: width }, (_, i) => i);
-  cols.sort((a, b) => Math.abs(a - c) - Math.abs(b - c) || a - b);
-  for (const x of cols) out.push(x);
-  return out;
 }
 
 function centerCol(width: number): number {
@@ -63,242 +64,366 @@ function repeat(kind: Kind, n: number): Kind[] {
   return new Array<Kind>(n).fill(kind);
 }
 
-type Layout = (c: Counts, w: number, h: number) => Want[];
-
-/** n 部隊を、行 row から中央から外へ並べる。1行に収まらなければ、後ろの行へ続ける */
-function rowsFrom(n: number, row: number, w: number): { cx: number; cy: number }[] {
-  const order = centerOut(w);
-  return Array.from({ length: n }, (_, i) => ({ cx: order[i % w] as number, cy: row + Math.floor(i / w) }));
+/** 列の組を中央から外へ。偶数の幅は [w/2-1, w/2] から、奇数の幅は [中央] のあと [c-1, c+1] から。組の中は左を先にする */
+function colPairs(w: number): number[][] {
+  const out: number[][] = [];
+  if (w % 2 === 0) {
+    for (let k = 0; k < w / 2; k++) out.push([w / 2 - 1 - k, w / 2 + k]);
+  } else {
+    const c = (w - 1) / 2;
+    out.push([c]);
+    for (let k = 1; k <= c; k++) out.push([c - k, c + k]);
+  }
+  return out;
 }
 
-/** 横陣：前列に歩兵（中央）と盾兵（外側）、後列に弓兵、両端に騎兵。あふれた前列の部隊は、後列の両端の後ろへ */
+/** 行 row の、組 from から組 to（含まない）までのマス（中央から外へ） */
+function rowCells(row: number, w: number, from = 0, to = Infinity): Cell[] {
+  const out: Cell[] = [];
+  colPairs(w).forEach((p, i) => {
+    if (i < from || i >= to) return;
+    for (const x of p) out.push({ cx: x, cy: row });
+  });
+  return out;
+}
+
+/** 本陣の隣の、本陣と左右対称になるマス（偶数の幅だけ）。奇数で組の片方が余った部隊の置き場所 */
+type Mate = Cell | null;
+
+/**
+ * cells（左右の組が順に並んだもの）の先頭から n 個を選ぶ。最後の組の片方だけが余るときは、その1個を mate へ回す（mate が使えれば）。
+ * used は、すでに使ったマス（mate を2回使わないため）。
+ */
+function takeSym(cells: Cell[], n: number, mate: Mate, used: Set<string>): Cell[] {
+  const out = cells.slice(0, n);
+  // 足りない分は最後のマスを繰り返す（applyTemplate がいちばん近い空きマスへずらす）
+  while (out.length < n) out.push((cells[cells.length - 1] ?? { cx: 0, cy: 0 }) as Cell);
+  if (n % 2 === 1 && mate && n <= cells.length) {
+    const last = out[out.length - 1] as Cell;
+    const partner = cells[n];
+    // 最後の1個が組の左側で、組の右側（次のマス）が同じ行にあるとき＝組が割れたとき
+    if (partner && partner.cy === last.cy && !used.has(`${mate.cx},${mate.cy}`)) {
+      out[out.length - 1] = mate;
+      used.add(`${mate.cx},${mate.cy}`);
+    }
+  }
+  return out;
+}
+
+type Layout = (c: Counts, w: number, h: number, mate: Mate) => Want[];
+
+/** 中央の組 p の、行 y のマス（無いときは空） */
+function pairAt(w: number, p: number, y: number): Cell[] {
+  const pr = colPairs(w)[p];
+  return pr ? pr.map((x) => ({ cx: x, cy: y })) : [];
+}
+
+/**
+ * 横陣で、騎兵のいない軍の前列を「幅 − この数」にする（幅 8 以上のとき）。2 なら 8 列で 6。
+ * 4（main と同じ）と 2 を比べ、2 に決めた（実験の記録 §23・§25・§35）。
+ */
+export const LINE_FRONT_GAP_NO_CAVALRY = 2;
+/** 横陣の本陣の行（後ろから数えて何行目か。4 行のエリアなら 1 行目）。実験の記録 §23 で決めた（A14 のため） */
+export const LINE_HQ_FROM_BACK = 3;
+
+/**
+ * 横陣：前列に歩兵（中央）と盾兵（外側）、後列に弓兵、両端に騎兵。あふれた前列の部隊は、後列の、前列の両端のすぐ後ろから外へ。
+ * 本陣は後ろから LINE_HQ_FROM_BACK 行目（4 行なら弓兵と同じ 1 行目）。そのときは、弓兵は本陣の組（中央）を空けてその外の組から置き、
+ * あふれた前列の部隊は弓兵の外へ（左右対称に保つ）。
+ */
 const line: Layout = (c, w, h) => {
   const wants: Want[] = [];
-  const order = centerOut(w);
+  const used = new Set<string>();
   const front = [...repeat('infantry', c.infantry), ...repeat('shield', c.shield)];
-  // 前列は、騎兵がいれば幅 - 5（12列なら7。両端に騎兵が並ぶ分を空ける）、いなければ幅 - 4（8）。
-  // あふれた分は後列の両端の後ろに置き、列の端の後ろを守らせる
-  const cap = Math.max(1, c.cavalry > 0 ? w - 5 : w - 4);
-  const frontRow = front.slice(0, cap);
-  const overflow = front.slice(cap);
-  const frontXs = order.slice(0, frontRow.length);
-  frontRow.forEach((k, i) => wants.push({ kind: k, stance: 'advance', cx: frontXs[i] as number, cy: 0 }));
-  let minX = frontXs.length ? Math.min(...frontXs) : centerCol(w);
-  let maxX = frontXs.length ? Math.max(...frontXs) : centerCol(w);
+  // 前列は、騎兵がいれば幅 - 4（8列なら4。両端に騎兵が並ぶ分と、1列ずつの余白を空ける）、いなければ幅 - LINE_FRONT_GAP_NO_CAVALRY
+  // 幅 7 以下（狭い面）は、騎兵がいれば幅 - 2、いなければ幅いっぱい
+  const cap = Math.min(w, Math.max(2, w >= 8 ? (c.cavalry > 0 ? w - 4 : w - LINE_FRONT_GAP_NO_CAVALRY) : c.cavalry > 0 ? w - 2 : w));
+  const nFront = Math.min(cap, front.length);
+  const frontCells = takeSym(rowCells(0, w), nFront, null, used);
+  // 中央から外へ並んだマスに、歩兵を内側、盾兵を外側
+  frontCells.forEach((q, i) => wants.push({ kind: front[i] as Kind, stance: 'advance', ...q }));
+  const xs = frontCells.map((q) => q.cx);
+  let minX = xs.length ? Math.min(...xs) : centerCol(w);
+  let maxX = xs.length ? Math.max(...xs) : centerCol(w);
   for (let i = 0; i < c.cavalry; i++) {
     // 左右交互に、列の外側へ
     if (i % 2 === 0) wants.push({ kind: 'cavalry', stance: 'flank', cx: --minX, cy: 0 });
     else wants.push({ kind: 'cavalry', stance: 'flank', cx: ++maxX, cy: 0 });
   }
-  rowsFrom(c.archer, 1, w).forEach((q) => wants.push({ kind: 'archer', stance: 'advance', ...q }));
-  // あふれた前列の部隊は、前列の両端のすぐ後ろから内へ（左右交互）。回り込んでくる敵を受ける
-  const fMin = frontXs.length ? Math.min(...frontXs) : centerCol(w);
-  const fMax = frontXs.length ? Math.max(...frontXs) : centerCol(w);
-  overflow.forEach((k, i) => {
-    const step = Math.floor(i / 2);
-    wants.push({ kind: k, stance: 'advance', cx: i % 2 === 0 ? fMin + step : fMax - step, cy: 1 });
+  // 弓兵：1・2 行目。本陣が 1 行目にいるときは、1 行目の本陣の組（中央）を空けて、その外の組から
+  const hqOnRow1 = h - LINE_HQ_FROM_BACK === 1;
+  takeSym(hqOnRow1 ? [...rowCells(1, w, 1), ...rowCells(2, w)] : [...rowCells(1, w), ...rowCells(2, w)], c.archer, null, used).forEach((q) => {
+    used.add(`${q.cx},${q.cy}`);
+    wants.push({ kind: 'archer', stance: 'advance', ...q });
   });
-  void h;
+  // あふれた前列の部隊：前列の端の組の後ろから外へ（回り込んでくる敵を受ける）。弓兵のいるマスは飛ばす
+  const edge = Math.max(0, Math.ceil(nFront / (w % 2 === 0 ? 2 : 1)) - 1);
+  const over = [...rowCells(1, w, edge), ...rowCells(1, w, 0, edge)].filter((q) => !used.has(`${q.cx},${q.cy}`));
+  front.slice(nFront).forEach((k, i) => wants.push({ kind: k, stance: 'advance', ...(over[i] ?? { cx: centerCol(w), cy: 2 }) }));
   return wants;
 };
 
 /**
- * 鶴翼：中央に盾兵（守備）と弓兵（守備。盾の陰から撃つ）、両翼に歩兵（前進）が前へ張り出し、翼の先に騎兵（迂回）。
- * 弓兵は 2026-11-17 に前進から守備に替えた（design §3.6.6）。前進のままだと、守備の味方の並びを回り込む決まりで弓兵が戦いに加わり、
- * 鶴翼の得点率が 0.47 → 0.76 に上がって、方円がほかの6つすべてに負け（A7）、総当たりで時間切れが出なくなる（A9）。
- * 守備にすると鶴翼は 0.48 で、数字を変えずに A6・A7・A9・A11 と対戦用の戦場の釣り合いが通る
+ * 鶴翼：V 字。中央（盾兵。前進）が下がり、両翼（歩兵。前進）が前に張り出す。左右の翼は同じ数にする。
+ * 中央は中央の行（2 行目）。翼は中央の外の列から外へ、外ほど前（いちばん外の翼の先が 0 行目）。
+ * 騎兵（迂回）は2騎ずつ、翼の後ろ（1 行目のいちばん外から内へ）。弓兵（守備）は中央の後ろ。
+ * 組にならない歩兵1つ・騎兵1騎は、中央の後ろ（本陣と左右対称のマス）、それも埋まれば中央の脇。
+ * 歩兵と騎兵がどちらも奇数のときは、その2つを左右の翼の組（左に歩兵・右に騎兵）にする。
  */
-const crane: Layout = (c, w) => {
+const crane: Layout = (c, w, h, mate) => {
   const wants: Want[] = [];
-  const order = centerOut(w);
-  const sx = order.slice(0, Math.min(c.shield, w));
-  rowsFrom(c.shield, 2, w).forEach((q) => wants.push({ kind: 'shield', stance: 'hold', ...q }));
-  rowsFrom(c.archer, 3, w).forEach((q) => wants.push({ kind: 'archer', stance: 'hold', ...q }));
-  const cc = centerCol(w);
-  const sMin = sx.length ? Math.min(...sx) : cc + 1;
-  const sMax = sx.length ? Math.max(...sx) : cc;
-  const leftInf = Math.ceil(c.infantry / 2);
-  const rightInf = c.infantry - leftInf;
-  const rightCav = Math.ceil(c.cavalry / 2);
-  const leftCav = c.cavalry - rightCav;
-  // 翼は、盾兵の外側から外へ1列ずつ、前（cy が小さいほう）へせり出す
-  const wing = (dir: -1 | 1, inf: number, cav: number, start: number): void => {
+  const used = new Set<string>();
+  const cRow = Math.min(h - 2, 2);
+  if (mate) used.add(`${w - 1 - mate.cx},${mate.cy}`);
+  const wSt: Stance = 'advance';
+  // 中央も前進（守備にすると総当たりで 0.3 に届かなかった。実験の記録 §28）
+  const cSt: Stance = 'advance';
+  const aSt: Stance = 'hold';
+  const cavSt: Stance = 'flank';
+  const pairs = colPairs(w);
+  // 中央：盾兵が2より少なければ歩兵で埋める
+  const nCenter = Math.max(c.shield, Math.min(2, c.shield + c.infantry));
+  const centerKinds: Kind[] = [...repeat('shield', c.shield), ...repeat('infantry', Math.max(0, nCenter - c.shield))];
+  const wingInf = c.infantry - (nCenter - c.shield);
+  // 中央のマス：cRow の中央の組から外へ、次に cRow+1 の中央の組
+  const centerCells = takeSym([...rowCells(cRow, w, 0, 2), ...rowCells(cRow + 1, w, 0, 1)], nCenter, mate, used);
+  centerCells.forEach((q, i) => wants.push({ kind: centerKinds[i] as Kind, stance: cSt, ...q }));
+  const cMin = Math.min(...centerCells.map((q) => q.cx), pairs[0]?.[0] ?? 0);
+  const cMax = Math.max(...centerCells.map((q) => q.cx), pairs[0]?.[pairs[0].length - 1] ?? 0);
+  // 翼の組：歩兵の組、奇数の歩兵と奇数の騎兵の組（左に歩兵・右に騎兵）
+  const wingPairs: [Want, Want][] = [];
+  const iw = (): Want => ({ kind: 'infantry', stance: wSt, cx: 0, cy: 0 });
+  const cw = (): Want => ({ kind: 'cavalry', stance: cavSt, cx: 0, cy: 0 });
+  for (let i = 0; i + 1 < wingInf; i += 2) wingPairs.push([iw(), iw()]);
+  const extra: Kind[] = [];
+  let cavLeft = c.cavalry;
+  const backCav: [Want, Want][] = [];
+  if (wingInf % 2 === 1) {
+    if (cavLeft % 2 === 1) {
+      wingPairs.push([iw(), cw()]);
+      cavLeft--;
+    } else extra.push('infantry');
+  }
+  for (; cavLeft >= 2; cavLeft -= 2) backCav.push([cw(), cw()]);
+  if (cavLeft === 1) extra.push('cavalry');
+  // 翼のマス（左。右は鏡）：中央の外の列から外へ、内へ1つごとに1行後ろ（cRow-1 から 0 へ）。そのあとは 1 行目
+  const wingCells = (dir: -1 | 1, start: number): Cell[] => {
+    const out: Cell[] = [];
     let k = 0;
-    for (let i = 0; i < inf; i++, k++) wants.push({ kind: 'infantry', stance: 'advance', cx: start + dir * (k + 1), cy: Math.max(0, 1 - k) });
-    for (let i = 0; i < cav; i++, k++) wants.push({ kind: 'cavalry', stance: 'flank', cx: start + dir * (k + 1), cy: Math.max(0, 1 - k) });
+    for (let x = start + dir; x >= 0 && x < w; x += dir, k++) out.push({ cx: x, cy: Math.max(0, cRow - 1 - k) });
+    for (let x = dir < 0 ? 0 : w - 1; dir < 0 ? x <= start : x >= start; x -= dir) out.push({ cx: x, cy: 1 });
+    return out;
   };
-  wing(-1, leftInf, leftCav, sMin);
-  wing(1, rightInf, rightCav, sMax);
+  const L = wingCells(-1, cMin);
+  const R = wingCells(1, cMax);
+  let li = 0;
+  let ri = 0;
+  for (const [l, r] of wingPairs) {
+    wants.push({ ...l, ...(L[li++] ?? { cx: 0, cy: 1 }) });
+    wants.push({ ...r, ...(R[ri++] ?? { cx: w - 1, cy: 1 }) });
+  }
+  // 翼の後ろの騎兵（1 行目のいちばん外から内へ）
+  backCav.forEach(([l, r], i) => {
+    wants.push({ ...l, cx: i, cy: 1 });
+    wants.push({ ...r, cx: w - 1 - i, cy: 1 });
+  });
+  // 弓兵：中央の後ろ（cRow+1 から）
+  const archCells = [...rowCells(cRow + 1, w), ...rowCells(cRow + 2, w)];
+  takeSym(archCells.filter((q) => !used.has(`${q.cx},${q.cy}`)), c.archer, mate, used).forEach((q) => wants.push({ kind: 'archer', stance: aSt, ...q }));
+  // 余り（奇数の歩兵・騎兵）は中央の後ろ・本陣の隣
+  const extraCells: Cell[] = [...(mate ? [mate] : []), ...rowCells(cRow + 1, w, 0, 2)].filter((q) => !used.has(`${q.cx},${q.cy}`));
+  extra.forEach((k, i) => wants.push({ kind: k, stance: k === 'cavalry' ? cavSt : wSt, ...(extraCells[i] ?? { cx: centerCol(w), cy: h - 1 }) }));
   return wants;
 };
 
-/** 魚鱗：先に歩兵、中に盾兵、後ろに弓兵の三角形。騎兵は後ろの両脇（前進） */
+/**
+ * 魚鱗：先がとがった三角形（幅 2・4・6・8 の行）。三角形の輪郭（各行の外の組）から先に埋め、そのあと内側を埋める（少ない数でも裾が広い）。
+ * 埋めたマスのうち、前の中央から歩兵・盾兵・弓兵（前進）。騎兵は、いちばん後ろの外のマス（後ろの両脇。前進）。
+ */
 const scale: Layout = (c, w, h) => {
   const wants: Want[] = [];
-  const order = centerOut(w);
+  const pairs = colPairs(w).length;
+  const tri: Cell[] = [];
+  for (let r = 0; r < h; r++) {
+    const n = Math.min(pairs, r + 1);
+    for (let p = n - 1; p >= 0; p--) tri.push(...pairAt(w, p, r));
+  }
+  const total = c.infantry + c.shield + c.archer + c.cavalry;
+  const cells = tri.slice(0, total);
+  while (cells.length < total) cells.push({ cx: 0, cy: h - 1 });
+  const mid = (w - 1) / 2;
+  const back = cells.slice().sort((a, b) => b.cy - a.cy || Math.abs(b.cx - mid) - Math.abs(a.cx - mid) || a.cx - b.cx);
+  const cavCells = back.slice(0, c.cavalry);
+  const rest = cells.filter((q) => !cavCells.includes(q)).sort((a, b) => a.cy - b.cy || Math.abs(a.cx - mid) - Math.abs(b.cx - mid) || a.cx - b.cx);
+  for (const q of cavCells) wants.push({ kind: 'cavalry', stance: 'advance', ...q });
   const body = [...repeat('infantry', c.infantry), ...repeat('shield', c.shield), ...repeat('archer', c.archer)];
-  let i = 0;
-  let row = 0;
-  let lastRow = 0;
-  let rowMin = centerCol(w);
-  let rowMax = centerCol(w);
-  while (i < body.length && row < h) {
-    const width = Math.min(w, 2 * row + 2);
-    const xs = order.slice(0, width);
-    for (const x of xs) {
-      if (i >= body.length) break;
-      wants.push({ kind: body[i] as Kind, stance: 'advance', cx: x, cy: row });
-      i++;
-    }
-    lastRow = row;
-    rowMin = Math.min(...xs);
-    rowMax = Math.max(...xs);
-    row++;
-  }
-  for (let k = 0; k < c.cavalry; k++) {
-    const r = Math.min(h - 1, lastRow + Math.floor(k / 2));
-    const off = Math.floor(k / 2);
-    wants.push({ kind: 'cavalry', stance: 'advance', cx: k % 2 === 0 ? rowMin - 1 - off : rowMax + 1 + off, cy: r });
-  }
+  body.forEach((k, i) => wants.push({ kind: k, stance: 'advance', ...(rest[i] as Cell) }));
   return wants;
 };
 
-/** 鋒矢：矢じりに歩兵（前進）、そのすぐ後ろに騎兵（1騎は本陣狙い、残りは迂回）、軸に盾兵（前進）、弓兵は後ろ */
-const arrow: Layout = (c, w, h) => {
+/**
+ * 鋒矢：矢じり（先頭の中央の組に歩兵、そのすぐ後ろの行の外の組＝返し）、軸（中央の組を後ろへ）に歩兵・盾兵（前進）、弓兵は軸の後ろ。
+ * 返しは騎兵（1騎目が本陣狙い、ほかは迂回）。騎兵が2騎に満たなければ、歩兵・盾兵・弓兵の順で返しを埋める（どの数でも矢じりの形にする）。
+ * 軸に入りきらない分は、いちばん後ろの行の外の組（矢羽根）。部隊が奇数で組が割れるときは、本陣の隣へ。
+ */
+const arrow: Layout = (c, w, h, mate) => {
   const wants: Want[] = [];
-  const order = centerOut(w);
-  // 矢じり：先頭の2マスに歩兵、その次の行に残りの歩兵。騎兵（本陣狙い）は、矢じりのすぐ後ろ（4行目）の、中央の2列の両脇。
-  // 騎兵を矢じりの横に並べると、先頭の歩兵と敵の列のあいだに挟まって滑れず、詰まって戦うことになるため、後ろに控えさせる
+  const used = new Set<string>();
   const tipInf = Math.min(2, c.infantry);
-  const cav: { cx: number; cy: number }[] = order.slice(2, 6).map((x) => ({ cx: x, cy: 3 }));
-  const tip = order.slice(0, 2).map((x) => ({ cx: x, cy: 0 }));
-  const rest: Kind[] = [];
-  for (let i = 0; i < tipInf; i++) wants.push({ kind: 'infantry', stance: 'advance', ...(tip[i] as { cx: number; cy: number }) });
-  for (let i = 0; i < c.cavalry; i++) {
-    const q = i < cav.length ? (cav[i] as { cx: number; cy: number }) : i - cav.length < 2 - tipInf ? (tip[tipInf + i - cav.length] as { cx: number; cy: number }) : { cx: order[i % w] as number, cy: 2 };
-    // 1騎目は本陣狙い、ほかは迂回（全部が本陣狙いだと、矢じりの後ろで列に詰まって戦い、溶けるため）
-    wants.push({ kind: 'cavalry', stance: i === 0 ? 'hunt' : 'flank', ...q });
-  }
-  const innerRow = order.slice(0, 2).map((x) => ({ cx: x, cy: 1 }));
-  for (let i = 0; i < c.infantry - tipInf; i++) {
-    if (i < innerRow.length) wants.push({ kind: 'infantry', stance: 'advance', ...(innerRow[i] as { cx: number; cy: number }) });
-    else rest.push('infantry');
-  }
-  // 軸：中央の2列を後ろへ。足りなければその外の列
-  const shaft: { cx: number; cy: number }[] = [];
-  const cc = centerCol(w);
-  for (let y = 2; y < h; y++) for (const x of order.slice(0, 2)) if (!(y === h - 1 && x === cc)) shaft.push({ cx: x, cy: y });
-  for (let y = 2; y < h; y++) for (const x of order.slice(2, 4)) shaft.push({ cx: x, cy: y });
-  const shaftKinds: Kind[] = [...rest, ...repeat('shield', c.shield), ...repeat('archer', c.archer)];
-  shaftKinds.forEach((k, i) => {
-    const p = shaft[i] ?? { cx: cc, cy: h - 1 };
-    wants.push({ kind: k, stance: k === 'cavalry' ? 'hunt' : 'advance', cx: p.cx, cy: p.cy });
+  const pool: Kind[] = [...repeat('infantry', c.infantry - tipInf), ...repeat('shield', c.shield), ...repeat('archer', c.archer)];
+  const nbCav = Math.min(2, c.cavalry);
+  const barbKinds: Kind[] = repeat('cavalry', nbCav);
+  // 返しを埋める（軸の兵種の前から）。全部で 4 部隊に満たないときは返しを作らない
+  while (barbKinds.length < 2 && pool.length > 0 && tipInf + barbKinds.length + pool.length >= 3) barbKinds.push(pool.shift() as Kind);
+  const seq: Kind[] = [...repeat('infantry', tipInf), ...barbKinds, ...repeat('cavalry', c.cavalry - nbCav), ...pool];
+  // マス：矢じり（中央の組の 0 行）→ 返し（外の組の 1 行）→ 軸（中央の組の 1 行から後ろへ。最後の行は本陣の隣だけ）→ 矢羽根 → さらに外
+  // 軸は 2 行目を 1 行目より先に埋める（少ない数でも、矢じりの後ろに柄が見える。魚鱗の2段と区別する）
+  const cells: Cell[] = [...pairAt(w, 0, 0), ...pairAt(w, 1, 1)];
+  for (const r of [2, 1]) if (r < h - 1) cells.push(...pairAt(w, 0, r));
+  for (let r = 3; r < h - 1; r++) cells.push(...pairAt(w, 0, r));
+  cells.push(...pairAt(w, 1, h - 1), ...pairAt(w, 1, h - 2));
+  for (let r = 1; r < h; r++) cells.push(...rowCells(r, w, 2));
+  const raw = takeSym(cells, seq.length, mate, used);
+  // 矢じりと返しのあとは、前の行から兵種を置く（歩兵・盾兵が前、弓兵が後ろ）
+  const head = tipInf + barbKinds.length;
+  const mid = (w - 1) / 2;
+  const picked = [...raw.slice(0, head), ...raw.slice(head).sort((p, q) => p.cy - q.cy || Math.abs(p.cx - mid) - Math.abs(q.cx - mid) || p.cx - q.cx)];
+  let firstCav = true;
+  seq.forEach((k, i) => {
+    let stance: Stance = 'advance';
+    if (k === 'cavalry') { stance = firstCav ? 'hunt' : 'flank'; firstCav = false; }
+    wants.push({ kind: k, stance, ...(picked[i] ?? { cx: 0, cy: h - 1 }) });
   });
   return wants;
 };
 
-/** 輪のマス（中心から、チェビシェフ距離 r）を、前の中央から時計回りに並べる */
-function ringCells(cx: number, cy: number, r: number): { cx: number; cy: number }[] {
-  const cells: { cx: number; cy: number; a: number }[] = [];
-  for (let y = cy - r; y <= cy + r; y++) {
-    for (let x = cx - r; x <= cx + r; x++) {
-      if (Math.max(Math.abs(x - cx), Math.abs(y - cy)) !== r) continue;
-      // 前（cy が小さいほう）を 0 として時計回りの角度
-      let a = Math.atan2(x - cx, -(y - cy));
-      if (a < 0) a += 2 * Math.PI;
-      cells.push({ cx: x, cy: y, a });
-    }
-  }
-  cells.sort((p, q) => p.a - q.a || p.cx - q.cx);
-  return cells.map(({ cx: x, cy: y }) => ({ cx: x, cy: y }));
-}
-
-/** 輪の上に n 個を、なるべく等しい間隔で選ぶ（前の中央から） */
-function spreadOnRing(cells: { cx: number; cy: number }[], n: number): { cx: number; cy: number }[] {
-  if (n >= cells.length) return cells.slice();
-  const out: { cx: number; cy: number }[] = [];
-  for (let k = 0; k < n; k++) out.push(cells[Math.floor((k * cells.length) / n)] as { cx: number; cy: number });
-  return out;
-}
-
-/** 方円：本陣を囲む輪。外側に盾兵と歩兵、内側に弓兵、騎兵は輪の中。すべて守備 */
+/**
+ * 方円：本陣を囲む輪。幅 6・奥行き 4 の輪（8列なら 1〜6 列）の上に、前の組・横・後ろの組…と左右の組ずつ散らして、盾兵（前から）と歩兵を置く。
+ * 本陣のまわりの 2×2 に弓兵と騎兵。輪の上が6つに満たなければ、弓兵・騎兵も輪へ出す。すべて守備。
+ */
 const ring: Layout = (c, w, h) => {
   const wants: Want[] = [];
-  const hx = centerCol(w);
-  const hy = Math.min(h - 1, 2);
-  const inner = ringCells(hx, hy, 1);
-  const outer = ringCells(hx, hy, 2);
-  const innerKinds: Kind[] = [...repeat('archer', c.archer), ...repeat('cavalry', c.cavalry)];
-  const innerUse = innerKinds.slice(0, inner.length);
-  const outerKinds: Kind[] = [...repeat('shield', c.shield), ...repeat('infantry', c.infantry), ...innerKinds.slice(inner.length)];
-  const ic = spreadOnRing(inner, innerUse.length);
-  innerUse.forEach((k, i) => wants.push({ kind: k, stance: 'hold', ...(ic[i] as { cx: number; cy: number }) }));
-  // 外側の輪：選んだマスのうち前に近いものから盾兵を置く
-  const oc = spreadOnRing(outer, Math.min(outerKinds.length, outer.length));
-  const ocSorted = oc.slice().sort((p, q) => p.cy - q.cy || Math.abs(p.cx - hx) - Math.abs(q.cx - hx) || p.cx - q.cx);
-  outerKinds.forEach((k, i) => {
-    const p = ocSorted[i] ?? { cx: hx, cy: h - 1 };
-    wants.push({ kind: k, stance: 'hold', cx: p.cx, cy: p.cy });
+  const hc = ringHq(w, h);
+  const x0 = hc.cx; // 中央の 2 列：x0, x0 + 1
+  const y0 = hc.cy - 1; // 中央の 2 行：y0, y0 + 1
+  const L = x0 - 2;
+  const R = x0 + 3;
+  const top = y0 - 1;
+  const bot = y0 + 2;
+  const inner: Cell[] = [
+    { cx: x0, cy: y0 },
+    { cx: x0 + 1, cy: y0 },
+    { cx: x0 + 1, cy: y0 + 1 },
+  ];
+  const loopPairs: Cell[][] = [
+    [{ cx: x0, cy: top }, { cx: x0 + 1, cy: top }],
+    [{ cx: L, cy: y0 }, { cx: R, cy: y0 }],
+    [{ cx: x0, cy: bot }, { cx: x0 + 1, cy: bot }],
+    [{ cx: L, cy: y0 + 1 }, { cx: R, cy: y0 + 1 }],
+    [{ cx: x0 - 1, cy: top }, { cx: x0 + 2, cy: top }],
+    [{ cx: x0 - 1, cy: bot }, { cx: x0 + 2, cy: bot }],
+    [{ cx: L, cy: top }, { cx: R, cy: top }],
+    [{ cx: L, cy: bot }, { cx: R, cy: bot }],
+    // 輪と中央のあいだ（あふれたとき）
+    [{ cx: x0 - 1, cy: y0 }, { cx: x0 + 2, cy: y0 }],
+    [{ cx: x0 - 1, cy: y0 + 1 }, { cx: x0 + 2, cy: y0 + 1 }],
+  ];
+  const loop = loopPairs.flat();
+  const ins: Kind[] = [...repeat('archer', c.archer), ...repeat('cavalry', c.cavalry)];
+  const outs: Kind[] = [...repeat('shield', c.shield), ...repeat('infantry', c.infantry)];
+  // 輪の上は、少なくとも 6（3組）。足りなければ内側の兵種を輪へ出す
+  while (outs.length < 6 && ins.length > 0) outs.push(ins.pop() as Kind);
+  while (ins.length > inner.length) outs.push(ins.pop() as Kind);
+  ins.forEach((k, i) => wants.push({ kind: k, stance: 'hold', ...(inner[i] as Cell) }));
+  // 輪の数が奇数のときは、最後の1個を、空いた内側のマスへ（輪の形を左右対称に保つ）
+  const freeInner = inner.slice(ins.length);
+  outs.forEach((k, i) => {
+    let p = loop[i] ?? { cx: x0, cy: h - 1 };
+    if (i === outs.length - 1 && outs.length % 2 === 1 && outs.length <= loop.length) {
+      // 輪の後ろの組がまだ空なら本陣のすぐ後ろ（本陣の後ろを空けない）、埋まっていれば空いた内側のマス
+      if (outs.length < 6 && bot < h) p = { cx: x0, cy: bot };
+      else if (freeInner.length > 0) p = freeInner[0] as Cell;
+    }
+    wants.push({ kind: k, stance: 'hold', ...p });
   });
   return wants;
 };
 
-/** 偃月：中央の前に歩兵と騎兵（前進）、両翼に盾兵（守備）、弓兵は後ろ */
-const crescent: Layout = (c, w) => {
+/**
+ * 偃月：弓なり。中央の組が前（0 行目）、外の組ほど1行ずつ後ろへ下がる。弧に歩兵と騎兵（前進）、両翼（弧の外のほう）に盾兵（守備）。
+ * 弓兵は、弧の中央のさらに2行後ろ（弧の内側の奥）。弧に入りきらない部隊も、そこから外へ。
+ */
+const crescent: Layout = (c, w, h, mate) => {
   const wants: Want[] = [];
-  const order = centerOut(w);
-  const mid = (w - 1) / 2;
-  const arcRow = (x: number): number => Math.floor(Math.abs(x - mid) / 2);
+  const used = new Set<string>();
+  const pairs = colPairs(w);
+  const arcRow = (p: number): number => Math.min(h - 1, p === 0 ? 0 : p === 1 ? 1 : Math.max(1, p - 1));
+  const arcCells: Cell[] = [];
+  // 弧は中央の組のあと、いちばん外の組（両翼の端）を先に埋める（少ない数でも、両翼まで届いた弓なりに見える）
+  const arcOrder = pairs.length > 2 ? [0, pairs.length - 1, ...pairs.map((_, p) => p).slice(1, -1)] : pairs.map((_, p) => p);
+  for (const p of arcOrder) arcCells.push(...pairAt(w, p, arcRow(p)));
   const arc = [...repeat('infantry', c.infantry), ...repeat('cavalry', c.cavalry), ...repeat('shield', c.shield)];
-  const front = arc.slice(0, w);
-  const extra = arc.slice(w);
-  front.forEach((k, i) => {
-    const x = order[i] as number;
-    wants.push({ kind: k, stance: k === 'shield' ? 'hold' : 'advance', cx: x, cy: arcRow(x) });
+  const nArc = Math.min(arc.length, arcCells.length);
+  takeSym(arcCells, nArc, null, used)
+    .sort((a, b) => Math.abs(a.cx - (w - 1) / 2) - Math.abs(b.cx - (w - 1) / 2) || a.cx - b.cx)
+    .forEach((q, i) => {
+    const k = arc[i] as Kind;
+    wants.push({ kind: k, stance: k === 'shield' ? 'hold' : 'advance', ...q });
   });
-  const back = [...extra, ...repeat('archer', c.archer)];
-  back.forEach((k, i) => {
-    const x = order[i % w] as number;
-    wants.push({ kind: k, stance: k === 'shield' ? 'hold' : 'advance', cx: x, cy: arcRow(x) + 2 + Math.floor(i / w) });
+  // 弧の内側の奥：中央の組の 2 行目、その外の組の 3 行目、…（弧の 2 行後ろ）、それでも足りなければ弧の 1 行後ろ
+  const back: Cell[] = [];
+  // 弧の 1 行後ろ（中央の組を除き、内から外へ）→ 中央の組の 2 行後ろ → 中央の組の 1 行後ろ → さらに後ろ
+  for (let p = 1; p < pairs.length; p++) if (arcRow(p) + 1 < h) back.push(...pairAt(w, p, arcRow(p) + 1));
+  for (const d of [2, 1, 3]) if (d < h) back.push(...pairAt(w, 0, d));
+  for (let p = 1; p < pairs.length; p++) if (arcRow(p) + 2 < h) back.push(...pairAt(w, p, arcRow(p) + 2));
+  const rest = [...arc.slice(nArc), ...repeat('archer', c.archer)];
+  takeSym(back, rest.length, mate, used).forEach((q, i) => {
+    const k = rest[i] as Kind;
+    wants.push({ kind: k, stance: k === 'shield' ? 'hold' : 'advance', ...q });
   });
   return wants;
 };
 
-/** 雁行：右前から左後ろへの斜めの段々。前の段から歩兵、盾兵、弓兵。騎兵は前に出た側（右）の端（先頭の1騎は本陣狙い、残りは迂回） */
+/**
+ * 雁行：右前から左後ろへの斜めの段々（1段は横2マス、段ごとに左へ2列・後ろへ1行）。前の段から歩兵、盾兵、弓兵の順に埋める。
+ * 方針は、0・1 行目（前に出た側）は前進、ECHELON_HOLD_ROW 行目から後ろ（下がった側）は兵種によらず守備。
+ * 標準の手持ちでは、前の2段に歩兵が入り、後ろの段の盾兵・弓兵が守備になる（実験の記録 §35。全部前進だと R11 で全勝した）。
+ * 騎兵（迂回）は前に出た側（右）の端の列。入りきらない部隊は、段のすぐ後ろ。
+ */
+/** 雁行で、この行（自軍から見て前が 0）から後ろの段を守備にする */
+const ECHELON_HOLD_ROW = 2;
 const echelon: Layout = (c, w, h) => {
   const wants: Want[] = [];
-  const diag: { cx: number; cy: number }[] = [];
+  const diag: Cell[] = [];
   for (let s = 0; s < h; s++) {
     for (const off of [2, 3]) {
       const x = w - off - 2 * s;
       if (x >= 0) diag.push({ cx: x, cy: s });
     }
   }
-  // 足りなければ、各段のすぐ後ろ
-  const second = diag.map((p) => ({ cx: p.cx, cy: p.cy + 1 }));
+  const second = diag.map((p) => ({ cx: p.cx, cy: p.cy + 1 })).filter((p) => p.cy < h);
   const cells = [...diag, ...second];
   const body = [...repeat('infantry', c.infantry), ...repeat('shield', c.shield), ...repeat('archer', c.archer)];
   body.forEach((k, i) => {
     const p = cells[i] ?? { cx: 0, cy: h - 1 };
-    wants.push({ kind: k, stance: 'advance', cx: p.cx, cy: p.cy });
+    wants.push({ kind: k, stance: p.cy >= ECHELON_HOLD_ROW ? 'hold' : 'advance', cx: p.cx, cy: p.cy });
   });
-  // 騎兵：右前の角から、すぐ後ろ・その左へ
-  for (let k = 0; k < c.cavalry; k++) {
-    // 先頭の1騎は本陣狙い、残りは迂回（雁行が横陣に勝ち、鶴翼に負ける関係にするため）
-    if (k === 0) wants.push({ kind: 'cavalry', stance: 'hunt', cx: w - 1, cy: 0 });
-    else wants.push({ kind: 'cavalry', stance: 'flank', cx: w - 1 - ((k - 1) % 2), cy: 1 + Math.floor((k - 1) / 2) });
-  }
+  for (let k = 0; k < c.cavalry; k++) wants.push({ kind: 'cavalry', stance: 'flank', cx: w - 1, cy: k });
   return wants;
 };
 
 const LAYOUTS: Record<TemplateId, Layout> = { line, crane, scale, arrow, ring, crescent, echelon };
 
-/** 本陣の置き場所（後ろの中央。方円は輪の中心） */
-function hqCell(id: TemplateId, w: number, h: number): { cx: number; cy: number } {
-  if (id === 'ring') return { cx: centerCol(w), cy: Math.min(h - 1, 2) };
-  if (id === 'arrow') return { cx: centerCol(w), cy: h - 1 };
-  if (id === 'line') return { cx: centerCol(w), cy: Math.min(h - 1, 3) };
-  return { cx: centerCol(w), cy: Math.min(h - 1, 4) };
+/** 方円の本陣：中央の 2×2 の、左下（8列×4行なら (3, 2)） */
+function ringHq(w: number, h: number): Cell {
+  return { cx: centerCol(w), cy: Math.max(0, Math.min(h - 2, 2)) };
+}
+
+/** 本陣の置き場所（いちばん後ろの行の中央。横陣は後ろから LINE_HQ_FROM_BACK 行目の中央。方円は輪の中心） */
+function hqCell(id: TemplateId, w: number, h: number): Cell {
+  if (id === 'ring') return ringHq(w, h);
+  if (id === 'line') return { cx: centerCol(w), cy: Math.max(0, h - LINE_HQ_FROM_BACK) };
+  return { cx: centerCol(w), cy: h - 1 };
 }
 
 /**
@@ -343,11 +468,11 @@ export function applyTemplate(id: TemplateId, roster: Roster, zone: Zone, side: 
     local.push({ ...want, cx, cy });
   };
 
-  if (c.hq > 0) {
-    const hc = hqCell(id, w, h);
-    for (let i = 0; i < c.hq; i++) place({ kind: 'hq', stance: 'hold', cx: hc.cx, cy: hc.cy });
-  }
-  for (const want of layout(c, w, h)) place(want);
+  const hc = hqCell(id, w, h);
+  if (c.hq > 0) for (let i = 0; i < c.hq; i++) place({ kind: 'hq', stance: 'hold', cx: hc.cx, cy: hc.cy });
+  // 本陣と左右対称になるマス（偶数の幅で、本陣がいるときだけ）
+  const mate: Mate = c.hq > 0 && w % 2 === 0 && id !== 'ring' ? { cx: w - 1 - hc.cx, cy: hc.cy } : null;
+  for (const want of layout(c, w, h, mate)) place(want);
 
   // 自軍から見た座標 → 戦場の座標。陣営0は前が上（row が小さい）、陣営1は前が下で左右も逆。
   return local.map((p) => ({

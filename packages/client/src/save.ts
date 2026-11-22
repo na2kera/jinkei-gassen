@@ -3,7 +3,8 @@
 // 形が合わないデータは、その項目だけ捨てて初期値にする（古い形や壊れたデータで起動できなくなるのを防ぐため）。
 
 import type { Placement, ReserveSetup } from '@jinkei/engine';
-import type { ViewMode } from './battle/viewMode.ts';
+import { boardDirOf, type ViewMode } from './battle/viewMode.ts';
+import type { BoardDir } from './battle/camera.ts';
 import { cleanReserve, copyFormation, emptySave, MAX_FORMATIONS, sanitizeSave, type SaveData, type SavedFormation } from './saveFormat.ts';
 
 // 形と掃除は saveFormat.ts（画面なしで確かめるため）。ここからも同じ名前で読めるようにしておく
@@ -219,6 +220,11 @@ export function deleteFormation(name: string): void {
   const data = loadSave();
   data.formations = data.formations.filter((f) => f.name !== name);
   write();
+}
+
+/** 保存してある盤の向き（立体の画面。design §14.11） */
+export function savedBoardDir(): BoardDir {
+  return boardDirOf(loadSave().view);
 }
 
 export function savedView(): ViewMode {

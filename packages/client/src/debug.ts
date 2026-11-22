@@ -5,6 +5,7 @@
 import {
   KINDS,
   plainField,
+  STANDARD_WIDTH,
   PVP_MAPS,
   pvpField,
   STAGES,
@@ -25,6 +26,9 @@ import {
 } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import { effectCounts } from './art/effects.ts';
+import type { SetId } from './art/stack/jobs.ts';
+import { stackTextures } from './art/stack/stackTextures.ts';
+import { groundStats } from './art/stack/ground.ts';
 import { LocalBattleSource } from './battle/LocalBattleSource.ts';
 import { unitReach } from './art/formation.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
@@ -77,6 +81,12 @@ interface DebugHooks {
   /** ロビーのルール説明を出す・「閉じる」（design §10.6。画面のボタンと同じ道筋） */
   rulesOpen: (() => void) | null;
   rulesClose: (() => void) | null;
+  /** 配置・戦闘の画面の、マスの中心の画面の点（確かめ用。丘の高さを見る） */
+  cellScreen: ((col: number, row: number) => { x: number; y: number }) | null;
+  /** 公開の回転の進み具合を止める（null で止めない。画像を撮るため） */
+  revealFreeze: ((p: number | null) => void) | null;
+  /** 戦闘の向きの切り替えを、決まった進み具合で止める（null で止めない、jump ですぐ止まる先へ） */
+  cameraFreeze: ((p: number | null | 'jump') => void) | null;
 }
 
 export const debug: DebugHooks = {
@@ -104,12 +114,38 @@ export const debug: DebugHooks = {
   tutorialSkip: null,
   rulesOpen: null,
   rulesClose: null,
+  cellScreen: null,
+  revealFreeze: null,
+  cameraFreeze: null,
 };
 
 export function pushCapped<T>(arr: T[], v: T, cap: number): void {
   arr.push(v);
   if (arr.length > cap) arr.splice(0, arr.length - cap);
 }
+
+/** 城の場面の城壁の行（陣営1の配置エリアの最前列） */
+function castleWallRow(f: Field): number {
+  const z1 = f.zones[1];
+  return z1.row + z1.height - 1;
+}
+
+/** 城の場面の門の列（戦場のまん中の左の列。幅 10 なら列 4。engine の STD_CASTLE_GAP_COL と同じ） */
+function castleGateCol(f: Field): number {
+  return Math.floor((f.width - 1) / 2);
+}
+
+/** 城の場面の戦場（標準の盤。城壁の行は通り道の列も含めて横切る。design §3.8・§13.2 の 6） */
+function castleField(): Field {
+  const f = plainField();
+  const row = castleWallRow(f);
+  const gate = castleGateCol(f);
+  for (let c = 0; c < f.width; c++) if (c !== gate) f.terrain[row * f.width + c] = 'wall';
+  return f;
+}
+
+/** 開発用の口で出している、立体の絵の見本（stack.show） */
+let stackShow: Phaser.GameObjects.Container | null = null;
 
 export function installDebug(game: Phaser.Game): void {
   const api = {
@@ -125,14 +161,84 @@ export function installDebug(game: Phaser.Game): void {
     get effects(): typeof effectCounts {
       return { ...effectCounts };
     },
+    /**
+     * 立体の絵（design §14.3・§14.14 の段 2）：status はでき具合・焼く時間・取り込む時間・量、show は焼いた絵を画面のいちばん手前に出す
+     * （frames を渡せばそのコマを scale 倍で並べ、渡さなければ絵の全体を画面の幅に合わせて出す）、hide は消す。
+     * request・release は揃いを頼む・捨てる。failWorker はワーカーが誤りで止まったことにする（主スレッドの列に引き継ぐ道を確かめる）
+     */
+    stack: {
+      status: (): object => stackTextures.status(),
+      show(key: string, opts: { frames?: string[]; scale?: number; cols?: number } = {}): boolean {
+        const scene = game.scene.getScenes(true).find((s) => s.scene.key !== 'NetOverlay');
+        const sheet = stackTextures.sheet(key);
+        if (!scene || !sheet) return false;
+        stackShow?.destroy();
+        const c = scene.add.container(0, 0).setDepth(1e9);
+        const W = game.scale.width;
+        const H = game.scale.height;
+        c.add(scene.add.rectangle(0, 0, W, H, 0x404040).setOrigin(0, 0));
+        if (!opts.frames) {
+          const s = Math.min(1, W / sheet.w);
+          c.add(scene.add.image(0, 0, key).setOrigin(0, 0).setScale(s));
+        } else {
+          const scale = opts.scale ?? 3;
+          const cols = opts.cols ?? Math.max(1, Math.floor(W / (sheet.g.fw * scale)));
+          opts.frames.forEach((name, i) => {
+            if (!sheet.frames.has(name)) return;
+            const x = (i % cols) * sheet.g.fw * scale;
+            const y = Math.floor(i / cols) * sheet.g.fh * scale;
+            c.add(scene.add.image(x, y, key, name).setOrigin(0, 0).setScale(scale));
+          });
+        }
+        stackShow = c;
+        return true;
+      },
+      hide(): void {
+        stackShow?.destroy();
+        stackShow = null;
+      },
+      request: (set: SetId): void => stackTextures.request(set),
+      release: (set: SetId): void => stackTextures.release(set),
+      failWorker: (): boolean => stackTextures.simulateWorkerError(),
+      releaseHold: (set: SetId | null = null): void => stackTextures.releaseHold(set),
+    },
     /** 起動時に作った絵（兵やタイル）の canvas。拡大して見比べるため */
     texture(key: string): HTMLCanvasElement | null {
       if (!game.textures.exists(key)) return null;
       return game.textures.get(key).getSourceImage() as HTMLCanvasElement;
     },
-    /** 兵種ごとの、部隊の絵が中心から届く距離（px）。10 以下なら、隣の部隊と重ならない */
+    /** 兵種ごとの、部隊の絵が中心から届く距離（px）。14.4（0.9 マスの半分）未満なら、隣の部隊と重ならない */
     get reach(): Record<string, number> {
       return Object.fromEntries(KINDS.map((k) => [k, Math.round(unitReach(k) * 100) / 100]));
+    },
+    /** ゲーム（確かめ用。1 コマの処理時間を計るため） */
+    get game(): Phaser.Game {
+      return game;
+    },
+    /**
+     * 立体の絵で載る量（MB）。兵と木は揃いごとの量 × 載る場所の数（addUint8Array なら 2）、地面は Canvas の絵なので
+     * WebGL なら 3 か所（design §14.3 の数え方）
+     */
+    get memory(): { stackMb: number; groundMb: number; totalMb: number } {
+      const st = stackTextures.status() as { loadedMb: number };
+      const places = game.renderer.type === 2 ? 3 : 2;
+      const groundMb = Math.round((groundStats.bytes * places) / 1e5) / 10;
+      return { stackMb: st.loadedMb, groundMb, totalMb: Math.round((st.loadedMb + groundMb) * 10) / 10 };
+    },
+    cellScreen(col: number, row: number): { x: number; y: number } | null {
+      return debug.cellScreen ? debug.cellScreen(col, row) : null;
+    },
+    /** 公開の回転の進み具合を止める（null で止めない） */
+    revealFreeze(p: number | null): boolean {
+      if (!debug.revealFreeze) return false;
+      debug.revealFreeze(p);
+      return true;
+    },
+    /** 戦闘の向きの切り替えを止める（確かめ用。p は 0〜1、null で止めない、'jump' ですぐ止まる先へ） */
+    cameraFreeze(p: number | null | 'jump'): boolean {
+      if (!debug.cameraFreeze) return false;
+      debug.cameraFreeze(p);
+      return true;
     },
     get scene(): string {
       return debug.scene;
@@ -202,10 +308,14 @@ export function installDebug(game: Phaser.Game): void {
     get scenes(): string[] {
       return game.scene.getScenes(true).map((s) => s.scene.key);
     },
-    /** 前の部屋（または指定したコードの部屋）に、保存した名前で入る（確かめるときに画面の操作を省くため） */
-    pvpJoin(code?: string): boolean {
+    /**
+     * 前の部屋（または指定したコードの部屋）に、保存した名前で入る（確かめるときに画面の操作を省くため）。
+     * cv を渡すと、その版でつなぐ（古い画面として outdated で断られる様子を確かめるため。design §13.6）
+     */
+    pvpJoin(code?: string, cv?: number): boolean {
       const c = code ?? savedRoomCode();
       if (!c) return false;
+      client.versionForDebug = cv ?? null;
       pvp.begin();
       client.join(c, playerId(), savedName() || '試し');
       return true;
@@ -257,20 +367,34 @@ export function installDebug(game: Phaser.Game): void {
       else game.scene.start('Battle', data);
       return true;
     },
-    /** 城壁と門の場面（engine の sim/terrain-scenes.ts の castleSetup と同じ形）を戦闘の画面で流す */
+    /**
+     * 城壁と門の場面（engine の sim/terrain-scenes.ts の stdCastleSetup と同じ形に、敵の弓兵2を足したもの）を戦闘の画面で流す。
+     * 座標は標準の盤の配置エリアから作る（design §13.10）：城壁は陣営1のエリアの最前列（通り道の列も含めて横切る）、
+     * 切れ目（門）は戦場のまん中の左の列
+     */
     castle(win = false): unknown {
       const at = (kind: Placement['kind'], stance: Placement['stance'], cols: number[], row: number): Placement[] =>
         cols.map((col) => ({ kind, stance, col, row }));
-      const f = plainField();
-      for (let c = 0; c < f.width; c++) if (c !== 5) f.terrain[5 * f.width + c] = 'wall';
-      f.zones = [f.zones[0], { col: 0, row: 0, width: f.width, height: 6 }];
+      const f = castleField();
+      const z0 = f.zones[0];
+      const wallRow = castleWallRow(f);
+      const gate = castleGateCol(f);
+      const back0 = z0.row + z0.height - 1;
       return api.startCustom({
         field: f,
         armies: [
-          [{ kind: 'hq', stance: 'hold', col: 5, row: 14 }, ...at('infantry', 'advance', [3, 4, 5, 6], 10), ...at('shield', 'advance', [4, 6], 11)],
-          [{ kind: 'hq', stance: 'hold', col: 5, row: 1 }, ...at('infantry', 'hold', [4, 6], 3), ...at('archer', 'hold', [2, 8], 2)],
+          [
+            { kind: 'hq', stance: 'hold', col: gate, row: back0 },
+            ...at('infantry', 'advance', [gate - 2, gate - 1, gate, gate + 1], z0.row),
+            ...at('shield', 'advance', [gate - 1, gate + 1], z0.row + 1),
+          ],
+          [
+            { kind: 'hq', stance: 'hold', col: gate, row: wallRow - 3 },
+            ...at('infantry', 'hold', [gate - 1, gate + 1], wallRow - 2),
+            ...at('archer', 'hold', [gate - 3, gate + 3], wallRow - 3),
+          ],
         ],
-        gate: { side: 1, col: 5, row: 5, win },
+        gate: { side: 1, col: gate, row: wallRow, win },
       });
     },
     /** 面を仮に足す（同じ id があれば置き換える）。第2章・第3章のデータができるまで、霧・狭い戦場・門・ステージ選択を確かめるため */
@@ -280,17 +404,41 @@ export function installDebug(game: Phaser.Game): void {
       else STAGES.push(stage);
       return STAGES.length;
     },
+    /**
+     * 確かめ用：対戦の地図（または渡した戦場）で、両軍の部隊を並べた仮の面を作って配置の画面を開く（立体の画面の画像を撮るため）。
+     * 部隊は、配置エリアの前の 2 行に 5 種を順に並べる（手持ちは、その数をそのまま持たせる）
+     */
+    previewDeploy(opts: { map?: PvpMapId; field?: Field; gate?: { col: number; row: number }; fog?: { col: number; row: number }[]; per?: number; own?: Placement[]; enemy?: Placement[] } = {}): boolean {
+      const base = STAGES[0];
+      if (!base) return false;
+      const field = opts.field ?? (opts.map ? pvpField(opts.map) : plainField());
+      const army = (side: Side): Placement[] => {
+        const z = field.zones[side];
+        const out: Placement[] = [];
+        const kinds: Kind[] = ['hq', 'infantry', 'shield', 'archer', 'cavalry'];
+        const rows = side === 0 ? [z.row, z.row + 1] : [z.row + z.height - 1, z.row + z.height - 2];
+        let i = 0;
+        for (const row of rows)
+          for (let col = z.col; col < z.col + z.width && out.length < (opts.per ?? 11); col++) {
+            const kind = i === 0 ? 'hq' : kinds[1 + ((i - 1) % 4)]!;
+            out.push({ kind, stance: kind === 'hq' ? 'hold' : 'advance', col, row });
+            i++;
+          }
+        return out;
+      };
+      const own = opts.own ?? army(0);
+      const roster: Partial<Record<Kind, number>> = {};
+      for (const p of own) roster[p.kind] = (roster[p.kind] ?? 0) + 1;
+      api.addStage({ ...base, id: 'preview', name: '確かめ', field, enemy: opts.enemy ?? army(1), roster, solution: own, fog: opts.fog ?? [], ...(opts.gate ? { gate: opts.gate } : {}) } as Stage);
+      session.placements = own.map((p) => ({ ...p }));
+      return api.openStage('preview') && true;
+    },
     /** 確かめ用の戦場を作る道具 */
     fields: {
-      plain: (width = 12) => plainField(width),
+      plain: (width = STANDARD_WIDTH) => plainField(width),
       pvp: (id: PvpMapId) => pvpField(id),
-      /** engine の sim/terrain-scenes.ts の castleField と同じ形：城壁は行 5、切れ目（門）は列 5 */
-      castle: () => {
-        const f = plainField();
-        for (let c = 0; c < f.width; c++) if (c !== 5) f.terrain[5 * f.width + c] = 'wall';
-        f.zones = [f.zones[0], { col: 0, row: 0, width: f.width, height: 6 }];
-        return f;
-      },
+      /** castle の場面の戦場：城壁は陣営1のエリアの最前列、切れ目（門）はまん中の左の列（engine の stdCastleField と同じ） */
+      castle: () => castleField(),
       maps: () => PVP_MAPS,
     },
     /** フレームを止める・再開する（タブを裏にしてフレームが進まない状態を作り、その間に段階を進めて確かめるため） */

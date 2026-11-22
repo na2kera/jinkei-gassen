@@ -4,7 +4,8 @@
 import { describe, expect, it } from 'vitest';
 import { canOrder, createBattle, KIND_STATS, remainingRatio, step, type BattleState, type Kind, type Terrain } from '../src/index.ts';
 import { T } from '../src/tuning.ts';
-import { castleField, castleSetup, openTerrainField } from '../sim/terrain-scenes.ts';
+// 門と城壁の決まりは、古い盤（12 × 16、通り道なし）の城の場面で値を確かめる。標準の盤の形の検査だけ stdCastle* を使う（design §13.5）
+import { castleField, castleSetup, openTerrainField, stdCastleField, stdCastleSetup, STD_CASTLE_GAP_COL, STD_CASTLE_WALL_ROW } from '../sim/terrain-scenes.ts';
 import { face, p, place } from './helpers.ts';
 
 type Cells = [number, number, Terrain][];
@@ -418,6 +419,17 @@ describe('城壁と門の形の検査（createBattle）', () => {
     const o = createBattle({ field: openTerrainField([]), seed: 1, maxTicks: 10, timeout: 'compare', armies: [[p('hq', 5, 10, 'hold'), p('infantry', 1, 10)], [p('hq', 5, 10, 'hold'), p('infantry', 1, 3)]] });
     expect(o.ok).toBe(false);
     if (!o.ok) expect(o.error.armyErrors?.map((e) => e.code)).toContain('overlap');
+  });
+  it('標準の盤（通り道つき）：城の場面の形は通る。通り道の列に城壁がない（配置エリアの列 1〜8 だけの城壁）は「端から端まで」でないので通らない', () => {
+    const std = stdCastleSetup('advance', 1);
+    expect(code(std)).toBeNull();
+    const f = stdCastleField();
+    const W = f.width;
+    expect(f.zones[1].col).toBeGreaterThan(0);
+    // 通り道の列（配置エリアの外の両端）を平地にする
+    for (let c = 0; c < W; c++) if (c < f.zones[1].col || c >= f.zones[1].col + f.zones[1].width) f.terrain[STD_CASTLE_WALL_ROW * W + c] = 'plain';
+    expect(f.terrain[STD_CASTLE_WALL_ROW * W + STD_CASTLE_GAP_COL]).toBe('plain');
+    expect(code({ ...std, field: f })).toMatch(/invalid_field:.*切れ目/);
   });
   it('陣営0の配置エリアには城壁を置けない', () => {
     const f = castleField();

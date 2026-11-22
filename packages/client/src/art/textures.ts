@@ -144,7 +144,7 @@ export function soldierSize(shape: SoldierShape, dir: Dir4): { w: number; h: num
   return dir % 2 === 0 ? { w, h } : { w: h, h: w };
 }
 
-/** 兵の絵の、中心からいちばん遠い塗った点までの距離（部隊が半径 10px に収まるかを確かめるため） */
+/** 兵の絵の、中心からいちばん遠い塗った点までの距離（部隊の絵が届く距離 unitReach を出すため） */
 export function soldierReach(shape: SoldierShape): number {
   let best = 0;
   for (const rows of SHAPES[shape]) {
@@ -163,9 +163,15 @@ export function soldierReach(shape: SoldierShape): number {
   return best;
 }
 
-// ---- 戦場のタイル（24 × 24） ----
+// ---- 戦場のタイル（32 × 32。design §13.8） ----
 
-export const TILE = 24;
+/** 地面のタイルの大きさ（px）。真上の1マス（layout.ts の CELL）と同じ */
+export const TILE = 32;
+/**
+ * 斜めの立った絵（柵・城壁・門）の原画の幅（px）。地面のタイルとは別に持つ（design §13.8）。
+ * 置くときにマスの幅に合わせて伸ばす（art/tallArt.ts）
+ */
+export const TALL_ART_W = 24;
 
 /** 平地は4通りの模様を混ぜて、単調に見えないようにする */
 export const PLAIN_VARIANTS = 4;
@@ -191,9 +197,9 @@ function fill(ctx: CanvasRenderingContext2D, color: number, x: number, y: number
 /** 草地。2px 単位の草むらを散らす */
 function paintGrass(ctx: CanvasRenderingContext2D, seed: number): void {
   fill(ctx, COLOR.grass1, 0, 0, TILE, TILE);
-  for (let i = 0; i < 7; i++) {
-    const x = Math.floor(hash(seed * 31 + i) * 11) * 2;
-    const y = Math.floor(hash(seed * 57 + i * 7) * 11) * 2;
+  for (let i = 0; i < 12; i++) {
+    const x = Math.floor(hash(seed * 31 + i) * 15) * 2;
+    const y = Math.floor(hash(seed * 57 + i * 7) * 15) * 2;
     const dark = hash(seed * 13 + i * 3) < 0.6;
     fill(ctx, dark ? COLOR.grass2 : COLOR.grass3, x, y, 2, 2);
     if (dark) fill(ctx, COLOR.grass2, x + 2, y, 2, 2);
@@ -210,9 +216,9 @@ function paintTerrain(ctx: CanvasRenderingContext2D, terrain: Terrain, variant: 
       // 草地との違いが小さな絵でも分かるよう、明るい黄緑にしている
       fill(ctx, 0x7d9a40, 0, 0, TILE, TILE);
       for (const [y, x0, x1] of [
-        [4, 6, 18],
-        [10, 2, 22],
-        [16, 0, 24],
+        [6, 8, 24],
+        [14, 2, 30],
+        [22, 0, 32],
       ] as const) {
         fill(ctx, 0x9cb456, x0, y, x1 - x0, 2);
         fill(ctx, 0x5a7430, x0, y + 2, x1 - x0, 2);
@@ -220,12 +226,13 @@ function paintTerrain(ctx: CanvasRenderingContext2D, terrain: Terrain, variant: 
       return;
     }
     case 'forest': {
-      // 森：草地に木の冠を3つ
+      // 森：草地に木の冠を4つ
       paintGrass(ctx, 9);
       for (const [cx, cy] of [
-        [6, 6],
-        [17, 9],
-        [9, 17],
+        [6, 7],
+        [21, 8],
+        [10, 22],
+        [24, 24],
       ] as const) {
         // 木の冠は草地より暗いが、上に立つ部隊（藍・朱）が沈まない明るさにしている
         fill(ctx, 0x2a4418, cx - 4, cy - 2, 10, 8);
@@ -240,9 +247,11 @@ function paintTerrain(ctx: CanvasRenderingContext2D, terrain: Terrain, variant: 
       fill(ctx, 0x4a92ac, 0, 0, TILE, TILE);
       for (const [x, y] of [
         [2, 4],
-        [14, 8],
-        [6, 14],
-        [16, 18],
+        [24, 2],
+        [16, 10],
+        [6, 18],
+        [22, 22],
+        [10, 28],
       ] as const) {
         fill(ctx, 0x9ccfdc, x, y, 4, 2);
       }
@@ -251,23 +260,23 @@ function paintTerrain(ctx: CanvasRenderingContext2D, terrain: Terrain, variant: 
     case 'fence': {
       // 柵：草地に、横木と杭
       paintGrass(ctx, 5);
-      fill(ctx, 0x3a2a14, 0, 12, TILE, 4);
-      fill(ctx, ART.wood, 0, 10, TILE, 2);
-      for (const x of [2, 12, 20]) {
-        fill(ctx, 0x3a2a14, x, 6, 2, 12);
-        fill(ctx, 0xb07a3a, x, 6, 2, 2);
+      fill(ctx, 0x3a2a14, 0, 16, TILE, 4);
+      fill(ctx, ART.wood, 0, 14, TILE, 2);
+      for (const x of [4, 14, 24]) {
+        fill(ctx, 0x3a2a14, x, 8, 2, 16);
+        fill(ctx, 0xb07a3a, x, 8, 2, 2);
       }
       return;
     }
     case 'wall': {
-      // 城壁：石積み
+      // 城壁：石積み（1段 8px、石は 12 × 6、目地 2〜4px）
       fill(ctx, 0x4a4640, 0, 0, TILE, TILE);
       for (let row = 0; row < 4; row++) {
-        const off = row % 2 === 0 ? 0 : 6;
+        const off = row % 2 === 0 ? 0 : 8;
         for (let col = -1; col < 3; col++) {
-          const x = col * 12 + off;
-          fill(ctx, 0x77736a, x + 2, row * 6 + 2, 8, 2);
-          fill(ctx, 0x6a6660, x + 2, row * 6 + 4, 8, 2);
+          const x = col * 16 + off;
+          fill(ctx, 0x77736a, x + 2, row * 8 + 2, 12, 2);
+          fill(ctx, 0x6a6660, x + 2, row * 8 + 4, 12, 4);
         }
       }
       return;
@@ -291,6 +300,7 @@ function makeCanvasTexture(
   tex.refresh();
 }
 
+/** 古い兵の絵（真上と立った絵）と地形の絵を全部作る。ポスターと OGP の道具（scripts/render-*.js）のためのもの。ゲームの起動では使わない */
 export function buildTextures(scene: Phaser.Scene): void {
   for (const team of [0, 1] as const) {
     const colors = colorsFor(team);
@@ -313,6 +323,19 @@ export function buildTextures(scene: Phaser.Scene): void {
   buildSideTextures(scene);
 }
 
+/**
+ * ゲームの起動で作る分（art/gameTextures.ts の buildGameTextures から呼ぶ）：地形のタイルと、瓦礫・岩壁・霧・門。
+ * 立体の画面では、柵・城壁・門・瓦礫・霧のタイルを地面に平たく描く（design §14.1）。古い兵の絵と立った地形の絵は作らない。
+ * buildTextures（道具のためのもの）は、中身を変えずに残す
+ */
+export function buildGameTiles(scene: Phaser.Scene): void {
+  for (const t of TERRAINS) {
+    const n = t === 'plain' ? PLAIN_VARIANTS : 1;
+    for (let v = 0; v < n; v++) makeCanvasTexture(scene, tileKey(t, v), TILE, TILE, (ctx) => paintTerrain(ctx, t, v));
+  }
+  buildStage4Textures(scene);
+}
+
 /** 地形のタイルの見本を返す（段階4の確かめ用。開発用の口から使う） */
 export function terrainList(): readonly Terrain[] {
   return TERRAINS;
@@ -332,12 +355,13 @@ export function gateKey(stage: 0 | 1 | 2): string {
 function paintRubble(ctx: CanvasRenderingContext2D): void {
   fill(ctx, 0x6e6450, 0, 0, TILE, TILE);
   for (const [x, y, w] of [
-    [2, 4, 6],
-    [12, 2, 4],
-    [16, 10, 6],
-    [4, 14, 4],
-    [10, 18, 6],
-    [18, 18, 4],
+    [2, 6, 8],
+    [16, 2, 6],
+    [22, 14, 8],
+    [6, 18, 6],
+    [14, 26, 8],
+    [24, 24, 6],
+    [2, 28, 4],
   ] as const) {
     fill(ctx, 0x77736a, x, y, w, 2);
     fill(ctx, 0x4a4640, x, y + 2, w, 2);
@@ -347,9 +371,9 @@ function paintRubble(ctx: CanvasRenderingContext2D): void {
 /** 岩壁（戦場の幅が狭い面で、戦場の外側に置く）：暗い岩の段 */
 function paintRock(ctx: CanvasRenderingContext2D, seed: number): void {
   fill(ctx, 0x3a3428, 0, 0, TILE, TILE);
-  for (let i = 0; i < 5; i++) {
-    const x = Math.floor(hash(seed * 17 + i) * 9) * 2;
-    const y = Math.floor(hash(seed * 29 + i * 5) * 10) * 2;
+  for (let i = 0; i < 9; i++) {
+    const x = Math.floor(hash(seed * 17 + i) * 13) * 2;
+    const y = Math.floor(hash(seed * 29 + i * 5) * 14) * 2;
     fill(ctx, 0x4e4636, x, y, 6, 2);
     fill(ctx, 0x2a251c, x, y + 2, 6, 2);
   }
@@ -364,28 +388,28 @@ function paintFog(ctx: CanvasRenderingContext2D): void {
   }
 }
 
-/** 門：木の扉に鉄の帯。壊れ具合 1 でひびと欠け、2 で大きく割れて傾く */
+/** 門（真上。32 × 32）：木の扉に鉄の帯。壊れ具合 1 でひびと欠け、2 で大きく割れて傾く */
 function paintGate(ctx: CanvasRenderingContext2D, stage: 0 | 1 | 2): void {
-  fill(ctx, 0x2a1c0e, 0, 2, TILE, 22);
-  fill(ctx, 0x8a5a2a, 2, 4, 20, 18);
-  fill(ctx, 0x6e4620, 11, 4, 2, 18);
-  for (const y of [6, 12, 18]) fill(ctx, 0x45464e, 2, y, 20, 2);
-  for (const x of [4, 18]) for (const y of [6, 12, 18]) fill(ctx, 0xdcdcd2, x, y, 2, 2);
+  fill(ctx, 0x2a1c0e, 0, 2, TILE, 30);
+  fill(ctx, 0x8a5a2a, 2, 4, 28, 26);
+  fill(ctx, 0x6e4620, 15, 4, 2, 26);
+  for (const y of [8, 16, 24]) fill(ctx, 0x45464e, 2, y, 28, 2);
+  for (const x of [4, 26]) for (const y of [8, 16, 24]) fill(ctx, 0xdcdcd2, x, y, 2, 2);
   if (stage >= 1) {
     // ひびと欠け（小さな絵でも分かるよう、板が1枚抜け、角が欠ける）
-    fill(ctx, 0x2a1c0e, 4, 8, 6, 4);
-    fill(ctx, 0x2a1c0e, 6, 12, 2, 4);
-    fill(ctx, 0x2a1c0e, 14, 14, 6, 4);
-    fill(ctx, 0x2a1c0e, 18, 4, 4, 2);
-    fill(ctx, 0x6e6450, 2, 22, 4, 2);
+    fill(ctx, 0x2a1c0e, 6, 10, 8, 6);
+    fill(ctx, 0x2a1c0e, 8, 16, 2, 6);
+    fill(ctx, 0x2a1c0e, 18, 18, 8, 6);
+    fill(ctx, 0x2a1c0e, 24, 4, 6, 2);
+    fill(ctx, 0x6e6450, 2, 28, 6, 2);
   }
   if (stage >= 2) {
     // 大きく割れて、真ん中が抜けかける
-    fill(ctx, 0x2a1c0e, 10, 4, 4, 10);
-    fill(ctx, 0x2a1c0e, 8, 14, 8, 2);
-    fill(ctx, 0x2a1c0e, 12, 16, 2, 6);
-    fill(ctx, 0x6e6450, 2, 20, 6, 2);
-    fill(ctx, 0x6e6450, 16, 20, 6, 2);
+    fill(ctx, 0x2a1c0e, 14, 4, 4, 14);
+    fill(ctx, 0x2a1c0e, 10, 18, 12, 2);
+    fill(ctx, 0x2a1c0e, 16, 20, 2, 8);
+    fill(ctx, 0x6e6450, 2, 26, 8, 2);
+    fill(ctx, 0x6e6450, 22, 26, 8, 2);
   }
 }
 
@@ -479,15 +503,15 @@ function paintTallFence(ctx: CanvasRenderingContext2D): void {
     fill(ctx, 0x3a2a14, x, 0, 2, 12);
     fill(ctx, 0xb07a3a, x, 0, 2, 2);
   }
-  fill(ctx, ART.wood, 0, 3, TILE, 2);
-  fill(ctx, ART.wood, 0, 7, TILE, 2);
+  fill(ctx, ART.wood, 0, 3, TALL_ART_W, 2);
+  fill(ctx, ART.wood, 0, 7, TALL_ART_W, 2);
 }
 
 function paintTallWall(ctx: CanvasRenderingContext2D): void {
   // 上の面（明るい石）と、手前の面（石積み）。24 × 22
-  fill(ctx, 0x8a867c, 0, 0, TILE, 8);
-  fill(ctx, 0x77736a, 0, 6, TILE, 2);
-  fill(ctx, 0x4a4640, 0, 8, TILE, 14);
+  fill(ctx, 0x8a867c, 0, 0, TALL_ART_W, 8);
+  fill(ctx, 0x77736a, 0, 6, TALL_ART_W, 2);
+  fill(ctx, 0x4a4640, 0, 8, TALL_ART_W, 14);
   for (let row = 0; row < 3; row++) {
     const off = row % 2 === 0 ? 0 : 6;
     for (let col = -1; col < 3; col++) fill(ctx, 0x6a6660, col * 12 + off + 2, 10 + row * 4, 8, 2);
@@ -496,7 +520,7 @@ function paintTallWall(ctx: CanvasRenderingContext2D): void {
 
 function paintTallGate(ctx: CanvasRenderingContext2D, stage: 0 | 1 | 2): void {
   // 門：城壁と同じ高さの扉（24 × 22）
-  fill(ctx, 0x2a1c0e, 0, 0, TILE, 22);
+  fill(ctx, 0x2a1c0e, 0, 0, TALL_ART_W, 22);
   fill(ctx, 0x8a5a2a, 2, 2, 20, 20);
   fill(ctx, 0x6e4620, 11, 2, 2, 20);
   for (const y of [5, 11, 17]) fill(ctx, 0x45464e, 2, y, 20, 2);
@@ -523,9 +547,9 @@ export function buildStage5Textures(scene: Phaser.Scene): void {
     }
   }
   makeCanvasTexture(scene, TALL_TREE, 12, 16, paintTallTree);
-  makeCanvasTexture(scene, TALL_FENCE, TILE, 12, paintTallFence);
-  makeCanvasTexture(scene, TALL_WALL, TILE, 22, paintTallWall);
-  for (const s of [0, 1, 2] as const) makeCanvasTexture(scene, tallGateKey(s), TILE, 22, (ctx) => paintTallGate(ctx, s));
+  makeCanvasTexture(scene, TALL_FENCE, TALL_ART_W, 12, paintTallFence);
+  makeCanvasTexture(scene, TALL_WALL, TALL_ART_W, 22, paintTallWall);
+  for (const s of [0, 1, 2] as const) makeCanvasTexture(scene, tallGateKey(s), TALL_ART_W, 22, (ctx) => paintTallGate(ctx, s));
 }
 
 // ---- 横からの視点の絵（design §5.8.4）：柵・城壁・門 ----
@@ -555,6 +579,9 @@ const SIDE_COLORS: Record<string, number> = {
   C: 0xb07a3a,
   w: ART.wood,
 };
+
+/** 横からの柵・城壁・門の原画の幅（px）。置くときに、全体をマスの幅 ÷ この幅の倍率で伸ばす（art/tallArt.ts。design §13.8） */
+export const SIDE_ART_W = 18;
 
 /** 柵（18 × 18）：奥へ伸びる横木と、杭が1本。下の 3 行は空けて、柵の高さぶん持ち上げる */
 const SIDE_FENCE_ROWS = [

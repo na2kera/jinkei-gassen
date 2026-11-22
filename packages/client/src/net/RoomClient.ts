@@ -13,7 +13,7 @@ import type {
   ServerMessage,
   SnapMessage,
 } from '@jinkei/server/protocol';
-// cv は client の版。遊軍（design §7）を知っている版は 2（両方の席が 2 以上の部屋だけ、遊軍を使える）
+// cv は client の版（design §7.7、§13.6）。server は 3 より小さい版を outdated で断る
 import { CLIENT_VERSION } from './reserveMessages.ts';
 
 export type NetStatus =
@@ -27,7 +27,7 @@ export type NetStatus =
   | 'reconnecting';
 
 /** 入室・作成の失敗の理由（画面に出す1行に直す） */
-export type JoinFailure = 'not_found' | 'full' | 'busy' | 'wait' | 'network' | 'lost' | 'replaced';
+export type JoinFailure = 'not_found' | 'full' | 'busy' | 'wait' | 'network' | 'lost' | 'replaced' | 'outdated';
 
 export function failureText(f: JoinFailure): string {
   switch (f) {
@@ -45,6 +45,8 @@ export function failureText(f: JoinFailure): string {
       return 'つながりが切れました';
     case 'replaced':
       return '別の画面で開かれました';
+    case 'outdated':
+      return '新しい版があります。ページを読み込み直してください';
   }
 }
 
@@ -83,6 +85,8 @@ export class RoomClient {
   readonly received: Record<string, number> = {};
   readonly sentLog: string[] = [];
   lastType = '';
+  /** 開発用：つなぐときの版を差し替える（古い画面として断られる様子を確かめるため。debug.ts の pvpJoin）。null ならいまの版 */
+  versionForDebug: number | null = null;
 
   private ws: WebSocket | null = null;
   private pid = '';
@@ -324,7 +328,7 @@ export class RoomClient {
     const code = this.code;
     if (!code) return;
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${window.location.host}/api/rooms/${encodeURIComponent(code)}/ws?pid=${encodeURIComponent(this.pid)}&name=${encodeURIComponent(this.name)}&cv=${CLIENT_VERSION}`;
+    const url = `${proto}//${window.location.host}/api/rooms/${encodeURIComponent(code)}/ws?pid=${encodeURIComponent(this.pid)}&name=${encodeURIComponent(this.name)}&cv=${this.versionForDebug ?? CLIENT_VERSION}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
@@ -365,6 +369,7 @@ export class RoomClient {
    * サーバーが閉じた。コードを見て、つなぎ直すかを決める（protocol の CloseCode）。
    *   4001: 同じ pid の新しい接続に置き換えられた（別のタブで開いた）。つなぎ直すと奪い合いになるので、やめる
    *   1003・1008・1009: 決まりを破ったとして閉じられた。つなぎ直しても同じことになるので、やめる
+   *     （古い版で断られたときも 1008。直前に届く error の outdated で、先に失敗として止めてある）
    *   4002・4003・4004: 満員・部屋がない・接続が多すぎる。つなぎ直さない
    * それ以外（ネットワークの切断など）は、間隔を空けてつなぎ直す
    */
@@ -465,8 +470,9 @@ export class RoomClient {
         return;
       case 'error':
         for (const fn of [...this.errorListeners]) fn(msg);
-        // 入室の失敗。手元の環境では close が届かないことがあるので、error を受けた時点で失敗として扱う
-        if (msg.reason === 'not_found' || msg.reason === 'full') {
+        // 入室の失敗。手元の環境では close が届かないことがあるので、error を受けた時点で失敗として扱う。
+        // 古い版（outdated）も、つなぎ直さずに止める（読み込み直して新しい版になるまで、何度つないでも断られるため。design §13.6）
+        if (msg.reason === 'not_found' || msg.reason === 'full' || msg.reason === 'outdated') {
           this.closeSocket();
           this.clearTimer('retry');
           this.code = null;

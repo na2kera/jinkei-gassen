@@ -1,7 +1,7 @@
 // 部隊の上に出す、文字の箱の置き場所（戦闘の画面の兵数と士気、配置の画面の敵の兵種で共通）。
 // Phaser を使わない計算だけにして、画面なしで確かめられるようにする。
 
-import type { Point } from '../battle/FieldView.ts';
+import type { Point } from '../battle/BoardView.ts';
 import type { Rect } from '../layout.ts';
 
 /**

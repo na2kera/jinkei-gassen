@@ -53,7 +53,9 @@ describe('ひな形', () => {
     for (const t of listTemplates()) {
       const ps = applyTemplate(t.id, STANDARD_ROSTER, field.zones[0], 0);
       const hq = ps.find((x) => x.kind === 'hq')!;
-      expect([5, 6]).toContain(hq.col);
+      const z = field.zones[0];
+      const c = z.col + Math.floor((z.width - 1) / 2);
+      expect([c, c + 1]).toContain(hq.col);
       const others = ps.filter((x) => x.kind !== 'hq');
       if (t.id === 'ring') {
         // 輪の中心：前にも後ろにも部隊がいる

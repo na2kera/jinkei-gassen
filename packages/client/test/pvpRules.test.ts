@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { computeLayout, lobbyLayout, rulesDialogLayout, type Layout, type Rect } from '../src/layout.ts';
+import { computeLayout, LANDSCAPE_H, LANDSCAPE_W, lobbyLayout, rulesDialogLayout, type Layout, type Rect } from '../src/layout.ts';
 import { PVP_RULES_LINES, PVP_RULES_TITLE } from '../src/pvpRules.ts';
 import { emptySave, sanitizeSave } from '../src/saveFormat.ts';
 
@@ -134,11 +134,11 @@ function screen(l: Layout): Rect {
 }
 
 test('R4 置き場所：箱と「閉じる」と本文が画面と箱に収まる。「ルール」は「戻る」と重ならない', () => {
-  // 親の大きさから、縦長 320×620・320×720 と横長 640×400 になるものを選ぶ
+  // 親の大きさから、縦長 320×620・320×720 と横長（LANDSCAPE_W × LANDSCAPE_H。672×400）になるものを選ぶ
   const cases: [number, number, string][] = [
     [320, 620, 'portrait'],
     [320, 720, 'portrait'],
-    [640, 400, 'landscape'],
+    [LANDSCAPE_W, LANDSCAPE_H, 'landscape'],
   ];
   for (const [w, h, mode] of cases) {
     const l = computeLayout(w, h);

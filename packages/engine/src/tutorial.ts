@@ -5,13 +5,17 @@ import { plainField } from './army.ts';
 import { stageSetupWith, type Stage } from './stage.ts';
 import type { BattleSetup, OrderKind, OrderTarget, Placement, Stance } from './types.ts';
 
-/** 置き終えたあとの自軍。戦いに渡す順（この並びにそろえてから戦う） */
+/**
+ * 置き終えたあとの自軍。戦いに渡す順（この並びにそろえてから戦う）。
+ * 座標は 10×12 の盤（design §13.4）。自軍の歩兵と敵の歩兵のあいだが 7 行、自軍の歩兵と敵の本陣のあいだが 9 行、
+ * 敵の歩兵 2 つが本陣狙いの歩兵の左右 1 列ずつ、を保つ（号令の刻み 50 よりあとに最初の攻撃が始まる）
+ */
 export const TUTORIAL_ARMY: Placement[] = [
-  { kind: 'hq', stance: 'hold', col: 5, row: 14 },
-  { kind: 'infantry', stance: 'advance', col: 4, row: 10 },
+  { kind: 'hq', stance: 'hold', col: 4, row: 11 },
+  { kind: 'infantry', stance: 'advance', col: 3, row: 9 },
   // 真ん中の歩兵だけ本陣狙い。両脇の歩兵が敵の歩兵2つと戦っている間に、本陣へ抜ける
-  { kind: 'infantry', stance: 'hunt', col: 5, row: 10 },
-  { kind: 'infantry', stance: 'advance', col: 6, row: 10 },
+  { kind: 'infantry', stance: 'hunt', col: 4, row: 9 },
+  { kind: 'infantry', stance: 'advance', col: 5, row: 9 },
 ];
 
 /** チュートリアルの面。STAGES には入れない */
@@ -25,9 +29,9 @@ export const TUTORIAL_STAGE: Stage = {
   roster: { hq: 1, infantry: 3 },
   // 敵は守備で動かず、号令も遊軍もない
   enemy: [
-    { kind: 'hq', stance: 'hold', col: 5, row: 1 },
-    { kind: 'infantry', stance: 'hold', col: 4, row: 3 },
-    { kind: 'infantry', stance: 'hold', col: 6, row: 3 },
+    { kind: 'hq', stance: 'hold', col: 4, row: 0 },
+    { kind: 'infantry', stance: 'hold', col: 3, row: 2 },
+    { kind: 'infantry', stance: 'hold', col: 5, row: 2 },
   ],
   win: { type: 'defeat' },
   allow: { stances: ['hunt'], orders: true, templates: false },

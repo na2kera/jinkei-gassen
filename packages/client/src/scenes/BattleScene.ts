@@ -20,15 +20,14 @@ import {
   type UnitView,
 } from '@jinkei/engine';
 import Phaser from 'phaser';
-import { Effects } from '../art/effects.ts';
-import { GateSprite } from '../art/GateSprite.ts';
-import { FOG_KEY } from '../art/textures.ts';
-import { unitLift } from '../art/formation.ts';
-import { placeTallCell, tallArt } from '../art/tallArt.ts';
-import { addCellImage, addFieldImage, drawFieldFrame, drawOutsideBoards } from '../art/field.ts';
+import { arrowLife, Effects } from '../art/effects.ts';
+import { drawFieldFrame } from '../art/field.ts';
+import { Forest, Ground } from '../art/stack/ground.ts';
+import { fieldHeight } from '../art/stack/height.ts';
+import { SquadSprite } from '../art/stack/SquadSprite.ts';
+import { stackTextures } from '../art/stack/stackTextures.ts';
 import { drawDrum, drawSurviveIcon } from '../art/icons.ts';
 import { COLOR, css } from '../art/palette.ts';
-import { UnitSprite } from '../art/UnitSprite.ts';
 import {
   playArrow,
   playClash,
@@ -42,8 +41,10 @@ import {
   playWin,
 } from '../audio/sfx.ts';
 import type { BattleFrame, BattleSource } from '../battle/BattleSource.ts';
-import { centeredFieldView, FieldView } from '../battle/FieldView.ts';
-import { nextView, usableView, type ViewMode } from '../battle/viewMode.ts';
+import { BoardView, type Cam } from '../battle/BoardView.ts';
+import { BattleCamera } from '../battle/camera.ts';
+import { pickSquad } from '../battle/pick.ts';
+import { nextView, type ViewMode } from '../battle/viewMode.ts';
 import { followInspect, type Inspect } from '../battle/inspect.ts';
 import { FrameInterpolator, type UnitSample } from '../battle/interp.ts';
 import { debug, pushCapped } from '../debug.ts';
@@ -56,7 +57,7 @@ import { session } from '../session.ts';
 import { Button } from '../ui/Button.ts';
 import { addHitObstacle, FIELD_FRAME, padRect } from '../ui/hitRegistry.ts';
 import { holdWake, releaseWake } from '../wake.ts';
-import { ORDER_LABEL, RESERVE_FROM_LABEL, RESERVE_LABEL, TARGET_LABEL, VIEW_LABEL, wingForViewer } from '../ui/labels.ts';
+import { ORDER_LABEL, RESERVE_FROM_LABEL, RESERVE_LABEL, TARGET_LABEL, VIEW_LABEL, VIEW_LABEL_SHORT, wingForViewer } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
 import { drawBox } from '../ui/panel.ts';
 import { unitBoxAt } from '../ui/unitBox.ts';
@@ -109,11 +110,6 @@ export interface BattleSceneData {
   /** 時間切れまで守り切れば勝ちの面（win が survive）。残り時間の所に小さな印を付ける */
   survive?: boolean;
   /**
-   * 将軍の視点の遠景の絵の名前（art/backdrop.ts）。1人用は面の id、対戦は pvp-<地図の id>。
-   * 省略したときや、絵を読めなかったときは、空の色のべた塗り
-   */
-  backdrop?: string;
-  /**
    * チュートリアルの戦い（design §8.6）。視点は真上に固定し、視点・倍速・遊軍のボタンを隠し、「やめる」の場所に「飛ばす」を出す。
    * 号令は進み具合（session.tutorial）が許すものだけ。決着のあとは結果を残さず、onFinished を呼ぶ
    */
@@ -136,20 +132,23 @@ export class BattleScene extends Phaser.Scene {
   private fog: { col: number; row: number }[] = [];
   private fogCleared = false;
   private survive = false;
-  private backdrop: string | undefined = undefined;
   /** 視点（design §5.7、§5.8）。選んだ視点は保存し、次の戦いでも使う */
-  private mode: ViewMode = 'top';
+  private mode: ViewMode = 'right';
+  /** カメラの状態（表示物の作り直しとは別に持つ。design §14.4） */
+  private camera = new BattleCamera('right');
+  /** 前のコマのカメラ（変わったときだけ、地面と木を描き直す） */
+  private lastCam: Cam | null = null;
+  private ground: Ground | null = null;
+  private forest: Forest | null = null;
+  /** 門が破れたことを、もう地面に描いたか（作り直しでは演出を出さない） */
+  private gateBroken = false;
   private soldierLayer!: Phaser.GameObjects.Container;
   private markLayer!: Phaser.GameObjects.Container;
   /** 現れた遊軍の「遊軍」の知らせ（部隊の id と、消す時刻。0 はまだ出していない）。作り直しても続けて出すよう、表示物とは別に持つ */
   private reserveNotices: { unit: number; until: number }[] = [];
-  /** 戦場の描き場所（12列×16行ぶん。斜めや横からのときは戦場より縦に広い） */
+  /** 戦場の描き場所（標準の戦場 10 列 × 12 行ぶん。斜めや横からのときは戦場より縦に広い） */
   private area: Rect = { x: 0, y: 0, w: 0, h: 0 };
-  /** 立てる視点のときの、高さのある城壁の絵（門が破れたら、両隣を消すため。列ごと） */
-  private wallImages = new Map<number, Phaser.GameObjects.Image>();
   private viewButton: Button | null = null;
-  private gateSprite: GateSprite | null = null;
-  private gateLayer!: Phaser.GameObjects.Container;
   private fogLayer!: Phaser.GameObjects.Container;
   private stageId = '';
   private quitArmedUntil = 0;
@@ -174,12 +173,12 @@ export class BattleScene extends Phaser.Scene {
   private nextButton: Button | null = null;
 
   // 表示物（向きが変わると作り直す）
-  private fv!: FieldView;
+  private fv!: BoardView;
   private root!: Phaser.GameObjects.Container;
   /** 戦場の障害物を名簿から外す（design §9.9-3） */
   private fieldHit: (() => void) | null = null;
   private effects: Effects | null = null;
-  private sprites = new Map<number, UnitSprite>();
+  private sprites = new Map<number, SquadSprite>();
   private timeText!: Phaser.GameObjects.Text;
   private marks!: Phaser.GameObjects.Graphics;
   private markRects: Rect[] = [];
@@ -213,11 +212,12 @@ export class BattleScene extends Phaser.Scene {
     this.fog = data.fog ?? [];
     this.fogCleared = this.fog.length === 0;
     this.survive = data.survive ?? false;
-    this.backdrop = data.backdrop;
     this.tutorial = data.tutorial === true && session.tutorial !== null;
-    // 回す順に入っていない視点が保存されていたら、真上として扱う（いまは4つとも回す順に入っている）。
-    // チュートリアルは真上に固定し、保存した視点は読まない
-    this.mode = this.tutorial ? 'top' : usableView(savedView());
+    // チュートリアルは右斜めに固定し、保存した視点は読まない・書かない（design §14.11）
+    this.mode = this.tutorial ? 'right' : savedView();
+    // 戦闘の画面に入ったとき・途中に入り直したときは、保存してある向きの止まったカメラから始める（回さない）
+    this.camera = new BattleCamera(this.mode);
+    this.gateBroken = false;
     this.stageId = data.stageId ?? '';
   }
 
@@ -273,8 +273,14 @@ export class BattleScene extends Phaser.Scene {
 
     const onLayout = (): void => this.rebuild();
     this.game.events.on(LAYOUT_EVENT, onLayout);
+    // 木の絵が戦闘の途中で届いたら描き直す（兵は毎コマ apply するので、次のコマで替わる）。シーンの終わりでやめる
+    const offReady = stackTextures.onReady(() => this.forest?.update());
+    // 公開の揃いは戦闘では使わない。公開の画面を通らずに戦闘へ進んだとき（タブを裏に回して公開の 3 秒が過ぎた、など）も残さない
+    // （公開の画面を通ったときは、その終わりで捨ててある。何度捨てても困らない）
+    stackTextures.release('reveal');
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off(LAYOUT_EVENT, onLayout);
+      offReady();
       this.source?.dispose();
       this.source = null;
       debug.order = null;
@@ -283,7 +289,16 @@ export class BattleScene extends Phaser.Scene {
       debug.summon = null;
       debug.tutorialAct = null;
       debug.tutorialSkip = null;
+      debug.cameraFreeze = null;
+      this.ground?.destroy();
+      this.ground = null;
+      this.forest = null;
     });
+    // 確かめ用：カメラの向きの切り替えを、決まった進み具合で止める（null で止めない）・すぐ止まる先に飛ばす
+    debug.cameraFreeze = (p) => {
+      if (p === 'jump') this.camera.jump();
+      else this.camera.freeze = p;
+    };
     debug.order = (t, k) => {
       // チュートリアルの号令は、tutorialAct の口から（画面と同じ道筋で）だけ
       if (this.tutorial) return false;
@@ -311,8 +326,9 @@ export class BattleScene extends Phaser.Scene {
     this.cameras.main.setSize(layout.width, layout.height);
     const field = this.field;
     // 陣営1の人が見るときは上下左右を返し、自軍がいつも下に映るようにする
-    this.fv = centeredFieldView(layout.field, field, this.flip, this.mode);
     this.area = layout.field;
+    this.fv = new BoardView(layout.field, field, { flipped: this.flip, hm: fieldHeight(field), cam: this.camera.camAt(this.time.now, layout.field, field) });
+    this.lastCam = this.fv.cam;
     // 部隊を押して見る範囲（uiBounds。onDown が受ける所）と枠 4px には、ボタンの押せる範囲を広げない（design §9.9-3）。
     // 範囲は視点で変わり、rebuild（視点・向き・最初の場面）のたびにここを通るので、外してから入れ直す
     this.fieldHit?.();
@@ -320,33 +336,31 @@ export class BattleScene extends Phaser.Scene {
     this.root = this.add.container(0, 0);
     const frame = this.add.graphics();
     drawFieldFrame(frame, this.fv, layout.field);
-    const bg = addFieldImage(this, this.fv, field, layout.field, this.backdrop);
+    // 層の並び（下から）：枠 → 地面 → 影 → 兵（兵・木・棒） → 火花などと矢 → 霧の入れ物 → 印（design §14.4）
+    const groundLayer = this.add.container(0, 0);
+    const shadowLayer = this.add.container(0, 0);
     const soldierLayer = this.add.container(0, 0);
     this.soldierLayer = soldierLayer;
     const effectLayer = this.add.container(0, 0);
     const markLayer = this.add.container(0, 0);
     this.markLayer = markLayer;
-    this.gateLayer = this.add.container(0, 0);
     this.fogLayer = this.add.container(0, 0);
-    this.root.add([frame, bg, this.gateLayer, soldierLayer, effectLayer, this.fogLayer, markLayer]);
-    if (this.fv.masked) {
-      // 将軍：戦場の絵・兵・演出・旗と印を描き場所で切り抜く。外側を画面の地の色の板で覆い、枠を描き直す（UI はこの上に足す）
-      const boards = this.add.graphics();
-      drawOutsideBoards(boards, layout.field, layout.width, layout.height);
-      this.root.add(boards);
-    }
-    this.buildTallTerrain();
-    this.buildGate();
+    this.root.add([frame, groundLayer, shadowLayer, soldierLayer, effectLayer, this.fogLayer, markLayer]);
+    this.ground?.destroy();
+    const gate = this.interp.latest?.view.gate;
+    this.ground = new Ground(this, this.fv, field, groundLayer, this.fogLayer, gate ? { col: gate.col, row: gate.row } : null);
+    this.forest = new Forest(this, this.fv, field, soldierLayer);
+    this.syncGate(this.time.now, false);
     // 霧は、最初の場面が届いて部隊の絵を作ったあと（作り直し）に出す。最初の build で出すと、
     // 直後の作り直しで霧ごと壊れて、晴れる絵が見えずに音だけ鳴るため。晴れたあとの作り直しでは出さない（fogCleared）
     if (this.interp.latest) this.buildFog();
-    this.effects = new Effects(this, effectLayer);
+    this.effects = new Effects(this, effectLayer, shadowLayer);
 
     this.sprites = new Map();
     // 場面が届く前（最初の build）は部隊の絵を作らず、最初の場面が届いたときに作り直す
     const units = this.interp.latest?.view.units ?? [];
     for (const u of units) {
-      this.sprites.set(u.id, new UnitSprite(this, u.side === this.viewer ? 0 : 1, u.kind, u.id, soldierLayer, markLayer, this.fv));
+      this.sprites.set(u.id, new SquadSprite(this, u.side === this.viewer ? 0 : 1, u.kind, u.id, soldierLayer, markLayer, this.fv, 'battle'));
     }
 
     const panel = battlePanel(layout);
@@ -373,7 +387,7 @@ export class BattleScene extends Phaser.Scene {
       ? new Button(this, panel.quit, '飛ばす', () => this.onQuit(this)).addTo(this.root)
       : new Button(this, panel.quit, this.quitLabel, () => this.pressQuit()).addTo(this.root);
     // 視点の切り替え（各自の画面だけに効く。戦闘の中身は変わらない）。チュートリアルでは出さない
-    this.viewButton = this.tutorial ? null : new Button(this, panel.view, VIEW_LABEL[this.mode], () => this.toggleView()).addTo(this.root);
+    this.viewButton = this.tutorial ? null : new Button(this, panel.view, viewLabel(this.mode), () => this.toggleView()).addTo(this.root);
     this.targetButtons = new Map();
     this.orderButtons = new Map();
     this.reserveButtons = new Map();
@@ -499,8 +513,6 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private rebuild(): void {
-    this.gateSprite?.destroy();
-    this.gateSprite = null;
     if (!this.source && !this.summary) return;
     for (const s of this.sprites.values()) s.destroy();
     this.effects?.destroy();
@@ -627,8 +639,8 @@ export class BattleScene extends Phaser.Scene {
     if (!s) return;
     const text = s.winner === 'draw' ? '引き分け' : s.winner === this.viewer ? '勝ち' : '負け';
     this.endText.setText(text);
-    // 将軍は描き場所の中央、ほかの視点は戦場の矩形の中央
-    const f = this.fv.noticeBounds(this.area);
+    // 戦場の矩形の中央
+    const f = this.fv.rect;
     const w = Math.ceil(this.endText.width / 2) * 2 + 48;
     const r = { x: Math.round((f.x + f.w / 2 - w / 2) / 2) * 2, y: f.y + f.h / 2 - 28, w, h: 56 };
     this.endBox.clear();
@@ -684,12 +696,11 @@ export class BattleScene extends Phaser.Scene {
     // チュートリアルでは、部隊の長押し（情報の箱）は効かない（押した瞬間の入口で止める。design §8.10-8）
     if (this.tutorial) return;
     if (this.inspect || over.length > 0 || !inRect(this.fv.uiBounds(this.area), pointer.x, pointer.y)) return;
-    // 押した位置にいちばん近い部隊を選ぶ（選び方は視点ごとに FieldView.pick が決める）
-    const units = this.interp
-      .sample()
-      .filter((s) => s.view.status !== 'gone')
-      .map((s) => ({ id: s.view.id, x: s.x, y: s.y }));
-    const id = this.fv.pick(units, pointer.x, pointer.y);
+    // 押した兵の絵の部隊（重なっていれば手前の兵）。なければ、部隊のまん中から 12px 以内でいちばん近い部隊（design §14.4）
+    const live = this.interp.sample().filter((s) => s.view.status !== 'gone');
+    const boxes = live.flatMap((s) => this.sprites.get(s.view.id)?.hitBoxes() ?? []);
+    const centers = live.map((s) => ({ id: s.view.id, ...this.fv.toScreen(s.x, s.y) }));
+    const id = pickSquad(boxes, centers, pointer.x, pointer.y);
     if (id !== null) this.inspect = { pointerId: pointer.id, unit: id };
   }
 
@@ -741,6 +752,7 @@ export class BattleScene extends Phaser.Scene {
     const frame = this.interp.latest;
     if (!frame || !this.fv) return;
     const now = this.time.now;
+    this.stepCamera(now);
     const tick = this.interp.tick;
     const samples = this.interp.sample();
     this.flushEvents(samples, now);
@@ -753,7 +765,7 @@ export class BattleScene extends Phaser.Scene {
       if (!sprite) {
         // 戦闘の途中で増えた部隊（遊軍）は、その場で絵を作る（design §7.8。相手の遊軍も同じ）
         if (u.status === 'gone') continue;
-        sprite = new UnitSprite(this, u.side === this.viewer ? 0 : 1, u.kind, u.id, this.soldierLayer, this.markLayer, this.fv);
+        sprite = new SquadSprite(this, u.side === this.viewer ? 0 : 1, u.kind, u.id, this.soldierLayer, this.markLayer, this.fv, 'battle');
         this.sprites.set(u.id, sprite);
       }
       if (u.status === 'gone') {
@@ -765,34 +777,32 @@ export class BattleScene extends Phaser.Scene {
         if (!this.routStart.has(u.id)) this.routStart.set(u.id, frame.tick);
         rout = Math.max(0.01, Math.min(1, (tick - (this.routStart.get(u.id) ?? tick)) / ROUT_TICKS));
       }
-      const p = this.fv.toScreen(s.x, s.y);
       sprite.apply({
-        x: p.x,
-        y: p.y,
+        wx: s.x,
+        wy: s.y,
         fx: s.fx,
         fy: s.fy,
         menRatio: u.men / u.maxMen,
-        morale: u.morale,
+        bar: true,
         rout,
         highlight: this.isTargeted(u),
         moving: s.moving,
         fighting: fighting.has(u.id),
         time: now,
         order: u.status === 'active' ? u.order : null,
-        wave: (this.waveUntil.get(u.id) ?? 0) > now,
         bounds: this.fv.uiBounds(this.area),
       });
       drawn.push({ id: u.id, x: s.x, y: s.y, s });
     }
-    // 押している部隊の数字の箱。枠の外へ出たら（将軍）、押している状態ごと消し、戻ってきても出し直さない（battle/inspect.ts）
-    const follow = followInspect(this.fv, this.inspect, drawn);
+    // 押している部隊の数字の箱（battle/inspect.ts）
+    const follow = followInspect(this.inspect, drawn);
     this.inspect = follow.inspect;
     const inspected = follow.shown?.s ?? null;
-    // 立てる視点のときは、兵・門・森の木・柵・城壁を、並べる値の順（奥のものから）に並べ直す
-    if (this.fv.depthSorted) this.soldierLayer.sort('depth');
+    // 兵・木・棒を、前後の値の順（奥のものから）に並べ直す（毎コマ）
+    this.soldierLayer.sort('depth');
     this.shootArrows(samples, now);
-    this.updateGate(now);
-    this.effects?.update(now);
+    this.syncGate(now, true);
+    this.effects?.update(now, this.fv);
     this.drawTime(frame);
     this.drawMarks(frame);
     this.drawAnnounce(now);
@@ -856,12 +866,15 @@ export class BattleScene extends Phaser.Scene {
       if (now < (this.nextShot.get(u.id) ?? 0)) continue;
       this.nextShot.set(u.id, now + (700 + Math.random() * 300) / this.speed);
       pushCapped(debug.arrows, [u.id, target], 50);
-      const from = this.fv.toScreen(s.x, s.y);
-      const to = this.fv.toScreen(t.x, t.y);
-      const life = Math.max(160, Math.min(420, d * CELL * 3)) / this.speed;
+      // 山なりの矢（decisions §24）：放つ所は射手のまん中 ±4px の地面 + 10、落ちる所は相手のまん中 ±4px の地面 + 2
       for (let i = 0; i < 2; i++) {
-        const j = (): number => (Math.random() - 0.5) * 10;
-        this.effects?.arrow(from.x + j(), from.y + j(), to.x + j(), to.y + j(), now + i * 60, life);
+        const j = (): number => ((Math.random() - 0.5) * 8) / CELL;
+        const fx = s.x + j();
+        const fy = s.y + j();
+        const tx = t.x + j();
+        const ty = t.y + j();
+        const life = arrowLife(Math.hypot(tx - fx, ty - fy) * CELL, this.speed);
+        this.effects?.arrow({ x: fx, y: fy, h: this.fv.ground(fx, fy) + 10 }, { x: tx, y: ty, h: this.fv.ground(tx, ty) + 2 }, now + i * 60, life);
       }
       playArrow();
     }
@@ -912,8 +925,8 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
     if (cur.until === 0) cur.until = now + ANNOUNCE_MS;
-    // 将軍は描き場所の上の端から、ほかの視点は戦場の矩形の上の端から 8px
-    const f = this.fv.noticeBounds(this.area);
+    // 戦場の矩形の上の端から 8px
+    const f = this.fv.rect;
     if (this.announceText.text !== cur.text) this.announceText.setText(cur.text);
     // 太鼓の絵（12px）+ 間 + 文字
     const w = Math.ceil(this.announceText.width / 2) * 2 + 12 + 6 + 24;
@@ -924,8 +937,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   /**
-   * 現れた遊軍の上に「遊軍」と出す（号令の知らせと同じ長さ）。部隊について動く。
-   * 将軍の視点で部隊が枠の外にいるときは、現れた側の枠の端・その奥行きの高さに寄せて出す（battle/reserveUi.ts）
+   * 現れた遊軍の上に「遊軍」と出す（号令の知らせと同じ長さ）。部隊について動く（battle/reserveUi.ts）
    */
   private drawReserveNotices(samples: UnitSample[], now: number): void {
     this.noticeBox.clear();
@@ -947,7 +959,7 @@ export class BattleScene extends Phaser.Scene {
       // 箱の作りは、兵数と士気の箱と同じ
       const w = Math.ceil(text.width / 2) * 2 + 16;
       const h = Math.ceil(text.height / 2) * 2 + 12;
-      const at = reserveNoticeAt(this.fv, this.area, s.x, s.y, w, h);
+      const at = reserveNoticeAt(this.fv, this.area, s.x, s.y, w, h, this.liftOf(s));
       drawBox(this.noticeBox, { x: at.x, y: at.y, w, h });
       text.setPosition(at.x + 8, at.y + 6).setVisible(true);
     }
@@ -967,60 +979,58 @@ export class BattleScene extends Phaser.Scene {
     const h = Math.ceil(this.infoText.height / 2) * 2 + 12;
     const f = this.fv.uiBounds(this.area);
     const p = this.fv.toScreen(s.x, s.y);
-    // 立った兵は足もとより上に伸びるので、その分だけ上に離す
-    const lift = unitLift(this.fv, s.x, s.y);
+    // 部隊の上に出す高さは、その部隊のいま見えている兵の矩形のいちばん上の端（design §14.9）
+    const lift = this.liftOf(s);
     // 指で隠れないよう部隊の上に出し、戦場の中に収める
     const { x, y } = unitBoxAt(f, p, w, h, lift);
     drawBox(this.infoBox, { x, y, w, h });
     this.infoText.setPosition(x + 8, y + 6).setVisible(true);
   }
-  // ---- 門と霧 ----
-
-  /** 場面に門があれば、門の絵を置く（すでに破れていれば、瓦礫から始める） */
-  private buildGate(): void {
-    const g = this.interp.latest?.view.gate;
-    if (!g) return;
-    // 奥のものから描く視点では、高さのある門を兵と同じ層に入れる
-    this.gateSprite = new GateSprite(this, this.fv, this.field, g.col, g.row, this.fv.depthSorted ? this.soldierLayer : this.gateLayer);
-    this.gateSprite.setHealth(g.men / g.maxMen);
-    if (g.status === 'gone') {
-      // すでに破れている（入り直した・視点を切り替えた）：瓦礫から始め、崩れた城壁の高さのある絵も消す
-      for (const c of this.gateSprite.breakOpen()) {
-        this.wallImages.get(c.col)?.destroy();
-        this.wallImages.delete(c.col);
-      }
-    }
+  /** 部隊の足もとから、見えている兵の絵のいちばん上の端までの離れ（数字の箱を出す高さ。兵が見えていなければ 34） */
+  private liftOf(s: UnitSample): number {
+    const top = this.sprites.get(s.view.id)?.topY();
+    if (top === null || top === undefined) return 34;
+    return Math.max(0, this.fv.toScreen(s.x, s.y).y - top) + 2;
   }
 
-  /** 門の壊れ具合を場面に合わせる。破れた瞬間だけ、崩れる演出と音を出す */
-  private updateGate(now: number): void {
+  // ---- カメラ ----
+
+  /** カメラが動いていれば、地面・木を描き直す（兵は毎コマ apply するので、そのまま付いてくる） */
+  private stepCamera(now: number): void {
+    const cam = this.camera.camAt(now, this.area, this.field);
+    const last = this.lastCam;
+    if (last && last.rot === cam.rot && last.k === cam.k) return;
+    this.lastCam = cam;
+    this.fv.setCam(cam);
+    this.ground?.update();
+    this.forest?.update();
+  }
+
+  // ---- 門と霧（design §14.1・§14.7：立体にはせず、地面に平たく描く） ----
+
+  /** 門の様子（傷み具合の段と、破れたか）を地面に描く。破れた瞬間だけ（effect が true のとき）、崩れる演出と音を出す */
+  private syncGate(now: number, effect: boolean): void {
     const g = this.interp.latest?.view.gate;
-    if (!g) return;
-    if (!this.gateSprite) {
-      this.buildGate();
-      return;
-    }
-    this.gateSprite.setHealth(g.men / g.maxMen);
-    if (g.status === 'gone' && !this.gateSprite.isBroken) {
-      for (const c of this.gateSprite.breakOpen()) {
-        this.effects?.impact(c.x, c.y, now);
-        // 崩れた城壁の高さのある絵を消す（瓦礫になる）
-        this.wallImages.get(c.col)?.destroy();
-        this.wallImages.delete(c.col);
+    if (!g || !this.ground) return;
+    const ratio = g.men / g.maxMen;
+    const stage: 0 | 1 | 2 = ratio > 2 / 3 ? 0 : ratio > 1 / 3 ? 1 : 2;
+    const broken = g.status === 'gone';
+    const cells = this.ground.setGate(stage, broken);
+    if (broken && !this.gateBroken) {
+      this.gateBroken = true;
+      if (!effect) return;
+      for (const c of cells) {
+        const p = this.fv.cellCenter(c.col, c.row);
+        this.effects?.impact(p.x, p.y, now);
       }
       playGateBreak();
     }
   }
 
-  /** 配置中に霧で隠していたマスを、開戦の瞬間だけ霧の絵で覆う */
+  /** 配置中に霧で隠していたマスを、開戦の瞬間だけ霧の絵で覆う（地面と同じ変換の入れ物に入れる） */
   private buildFog(): void {
-    if (this.fogCleared) return;
-    const imgs = this.fog.map((c) => {
-      // マスの形に合わせて敷く（将軍は走査線で台形に描く）
-      const img = addCellImage(this, this.fv, c.col, c.row, FOG_KEY);
-      this.fogLayer.add(img);
-      return img;
-    });
+    if (this.fogCleared || !this.ground) return;
+    const imgs = this.ground.addFog(this.fog);
     // 晴れる演出：4回に分けて、霧のマスを少しずつ消す（なめらかに薄くせず、ドットらしく段で消す）
     this.fogCleared = true;
     playFogClear();
@@ -1031,38 +1041,27 @@ export class BattleScene extends Phaser.Scene {
       });
     }
   }
-  // ---- 視点（design §5.7、§5.8） ----
 
-  /** 視点を 真上 → 斜め → 横から → 将軍 → 真上 と回す（battle/viewMode.ts）。表示物だけを作り直すので、戦いの途中でも位置は飛ばない */
+  // ---- 視点（design §14.11） ----
+
+  /** 盤の向きを 右斜め → 左斜め → 横 → 後ろ → 右斜め と回す。表示物は作り直さず、カメラを 1.1 秒で回す（戦いの中身は変わらない） */
   private toggleView(): void {
-    // チュートリアルは真上に固定し、保存した視点を書き換えない
+    // チュートリアルは右斜めに固定し、保存した向きを書き換えない
     if (this.tutorial) return;
     this.mode = nextView(this.mode);
     saveView(this.mode);
-    this.rebuild();
+    this.camera.turnTo(this.mode, this.time.now, this.area, this.field);
+    this.viewButton?.setText(viewLabel(this.mode));
   }
+}
 
-  /** 立てる視点のときだけ、森の木・柵・城壁を高さのある絵で立てる（兵と同じ層に入れ、並べる値の順に描く） */
-  private buildTallTerrain(): void {
-    this.wallImages = new Map();
-    if (!this.fv.standing) return;
-    const f = this.field;
-    for (let row = 0; row < f.height; row++) {
-      for (let col = 0; col < f.width; col++) {
-        const t = f.terrain[row * f.width + col];
-        const kind = t === 'forest' ? 'tree' : t === 'fence' ? 'fence' : t === 'wall' ? 'wall' : null;
-        if (!kind) continue;
-        const a = tallArt(this.fv.art, kind, { alt: (col + row) % 2 !== 0 });
-        if (!a) continue;
-        // 将軍では、木は整数倍、柵・城壁はマスの手前の辺の幅に合わせて伸び縮みさせる（遠近のない視点では倍率 1）
-        const img = this.add.image(0, 0, a.key).setOrigin(a.originX, a.originY);
-        const at = placeTallCell(a, this.fv, col, row, { w: img.width, h: img.height });
-        img.setPosition(at.x, at.y).setScale(at.scaleX, at.scaleY).setDepth(at.depth);
-        this.soldierLayer.add(img);
-        if (kind === 'wall') this.wallImages.set(col, img);
-      }
-    }
-  }
+/**
+ * 視点のボタンの文字。案（「視点：右斜め」）は、ボタン（104px）の枠の内側に収まらず、字が枠に触れたので（画像で確かめた）、
+ * 短い案（「視点：右」など）にする（design §14.11）。文言はユーザーに確かめる
+ */
+export const USE_SHORT_VIEW_LABEL = true;
+function viewLabel(m: ViewMode): string {
+  return USE_SHORT_VIEW_LABEL ? VIEW_LABEL_SHORT[m] : VIEW_LABEL[m];
 }
 
 function inRect(r: Rect, x: number, y: number): boolean {
