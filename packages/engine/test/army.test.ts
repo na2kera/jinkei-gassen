@@ -5,6 +5,11 @@ import { p } from './helpers.ts';
 
 const zone0 = plainField().zones[0];
 const lim = { maxUnits: 16 };
+/** 自軍（陣営0）の配置エリアの、いちばん前の行といちばん後ろの行 */
+const FRONT = zone0.row;
+const BACK = zone0.row + zone0.height - 1;
+/** 敵（陣営1）の配置エリアの、いちばん前の行 */
+const FRONT1 = plainField().zones[1].row + plainField().zones[1].height - 1;
 
 function codes(ps: Placement[], limits: Parameters<typeof validateArmy>[2] = lim): string[] {
   return validateArmy(ps, zone0, limits).map((e) => e.code);
@@ -12,33 +17,33 @@ function codes(ps: Placement[], limits: Parameters<typeof validateArmy>[2] = lim
 
 describe('validateArmy', () => {
   it('正しい配置は誤りなし', () => {
-    expect(codes([p('hq', 5, 15, 'hold'), p('infantry', 5, 10)])).toEqual([]);
+    expect(codes([p('hq', 5, BACK, 'hold'), p('infantry', 5, FRONT)])).toEqual([]);
   });
   it('エリアの外', () => {
-    expect(codes([p('hq', 5, 15, 'hold'), p('infantry', 5, 9)])).toContain('out_of_zone');
+    expect(codes([p('hq', 5, BACK, 'hold'), p('infantry', 5, FRONT - 1)])).toContain('out_of_zone');
   });
   it('マスの重なり', () => {
-    expect(codes([p('hq', 5, 15, 'hold'), p('infantry', 5, 10), p('shield', 5, 10, 'hold')])).toContain('overlap');
+    expect(codes([p('hq', 5, BACK, 'hold'), p('infantry', 5, FRONT), p('shield', 5, FRONT, 'hold')])).toContain('overlap');
   });
   it('本陣は必ず1つ（requireHq の既定）。requireHq: false なら0でもよいが2つは不可', () => {
-    expect(codes([p('infantry', 5, 10)])).toContain('hq_count');
-    expect(codes([p('hq', 5, 15, 'hold'), p('hq', 6, 15, 'hold'), p('infantry', 5, 10)])).toContain('hq_count');
-    expect(codes([p('infantry', 5, 10)], { maxUnits: 16, requireHq: false })).toEqual([]);
+    expect(codes([p('infantry', 5, FRONT)])).toContain('hq_count');
+    expect(codes([p('hq', 5, BACK, 'hold'), p('hq', 6, BACK, 'hold'), p('infantry', 5, FRONT)])).toContain('hq_count');
+    expect(codes([p('infantry', 5, FRONT)], { maxUnits: 16, requireHq: false })).toEqual([]);
   });
   it('本陣が選べる方針は守備と前進だけ', () => {
-    expect(codes([p('hq', 5, 15, 'flank'), p('infantry', 5, 10)])).toContain('invalid_stance');
-    expect(codes([p('hq', 5, 15, 'advance'), p('infantry', 5, 10)])).toEqual([]);
+    expect(codes([p('hq', 5, BACK, 'flank'), p('infantry', 5, FRONT)])).toContain('invalid_stance');
+    expect(codes([p('hq', 5, BACK, 'advance'), p('infantry', 5, FRONT)])).toEqual([]);
   });
   it('マスは整数', () => {
-    expect(codes([p('hq', 5, 15, 'hold'), p('infantry', 5.5, 10)])).toContain('invalid_cell');
+    expect(codes([p('hq', 5, BACK, 'hold'), p('infantry', 5.5, FRONT)])).toContain('invalid_cell');
   });
   it('部隊数の上限と、本陣以外の下限', () => {
-    const many = [p('hq', 0, 15, 'hold'), ...Array.from({ length: 16 }, (_, i) => p('infantry', i % 12, 10 + Math.floor(i / 12)))];
+    const many = [p('hq', zone0.col, BACK, 'hold'), ...Array.from({ length: 16 }, (_, i) => p('infantry', zone0.col + (i % zone0.width), FRONT + Math.floor(i / zone0.width)))];
     expect(codes(many)).toContain('too_many_units');
-    expect(codes([p('hq', 5, 15, 'hold')])).toContain('too_few_units');
+    expect(codes([p('hq', 5, BACK, 'hold')])).toContain('too_few_units');
   });
   it('予算', () => {
-    const army = [p('hq', 5, 15, 'hold'), p('cavalry', 0, 10, 'flank'), p('cavalry', 1, 10, 'flank')];
+    const army = [p('hq', 5, BACK, 'hold'), p('cavalry', 1, FRONT, 'flank'), p('cavalry', 2, FRONT, 'flank')];
     expect(codes(army, { maxUnits: 16, budget: 7 })).toContain('over_budget');
     expect(codes(army, { maxUnits: 16, budget: 8 })).toEqual([]);
   });
@@ -74,7 +79,7 @@ describe('wingOf', () => {
 
 describe('createBattle の検査（例外を投げずにエラーを返す）', () => {
   it('配置の誤りは invalid_army で返す', () => {
-    const r = createBattle({ field: plainField(), armies: [[p('infantry', 5, 10)], [p('hq', 5, 0, 'hold'), p('infantry', 5, 5)]], seed: 1, maxTicks: 10, timeout: 'compare' });
+    const r = createBattle({ field: plainField(), armies: [[p('infantry', 5, FRONT)], [p('hq', 5, 0, 'hold'), p('infantry', 5, FRONT1)]], seed: 1, maxTicks: 10, timeout: 'compare' });
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error.code).toBe('invalid_army');
@@ -95,7 +100,7 @@ describe('createBattle の検査（例外を投げずにエラーを返す）', 
   it('初期状態：id は陣営0の配列の順、続けて陣営1。士気100、兵数は最大、向きは自陣営の前', () => {
     const r = createBattle({
       field: plainField(),
-      armies: [[p('hq', 5, 15, 'hold'), p('cavalry', 2, 10, 'flank')], [p('hq', 5, 0, 'hold'), p('archer', 3, 5)]],
+      armies: [[p('hq', 5, BACK, 'hold'), p('cavalry', 2, FRONT, 'flank')], [p('hq', 5, 0, 'hold'), p('archer', 3, FRONT1)]],
       seed: 1,
       maxTicks: 10,
       timeout: 'compare',
@@ -104,7 +109,7 @@ describe('createBattle の検査（例外を投げずにエラーを返す）', 
     if (!r.ok) return;
     const u = r.value.units;
     expect(u.map((x) => [x.id, x.side, x.kind])).toEqual([[0, 0, 'hq'], [1, 0, 'cavalry'], [2, 1, 'hq'], [3, 1, 'archer']]);
-    expect(u[1]).toMatchObject({ x: 2.5, y: 10.5, fx: 0, fy: -1, men: 60, maxMen: 60, morale: 100, status: 'active', target: null, order: null });
+    expect(u[1]).toMatchObject({ x: 2.5, y: FRONT + 0.5, fx: 0, fy: -1, men: 60, maxMen: 60, morale: 100, status: 'active', target: null, order: null });
     expect(u[3]).toMatchObject({ fx: 0, fy: 1, men: 80 });
     expect(JSON.parse(JSON.stringify(r.value))).toEqual(r.value);
   });

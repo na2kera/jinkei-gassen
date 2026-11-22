@@ -17,26 +17,38 @@ import {
 import { DEFAULT_COSTS } from './tuning.ts';
 import { isDenseArray, isInt, isKind, isObject, isStance } from './input.ts';
 
-/** 標準の戦場の大きさ（自軍6 + 中間4 + 敵軍6） */
-export const STANDARD_WIDTH = 12;
-export const STANDARD_HEIGHT = 16;
-export const STANDARD_ZONE_DEPTH = 6;
+/** 配置エリアの列の数（各軍とも中央の 8 列。decisions §22、design §13.2） */
+export const STANDARD_ZONE_WIDTH = 8;
+/** 戦場の両端の、誰も置けない通り道の列の数（片側） */
+export const STANDARD_LANE = 1;
+/** 標準の戦場の大きさ：横は通り道 1 + 配置 8 + 通り道 1、縦は自軍 4 + 中間 4 + 敵軍 4 */
+export const STANDARD_WIDTH = STANDARD_ZONE_WIDTH + STANDARD_LANE * 2;
+export const STANDARD_HEIGHT = 12;
+export const STANDARD_ZONE_DEPTH = 4;
 
-/** 本陣を含めた1軍の部隊数の上限（§2） */
-export const MAX_UNITS = 16;
+/** 本陣を含めた1軍の部隊数の上限（§2、decisions §22） */
+export const MAX_UNITS = 12;
 
 /**
- * 平地だけの戦場を作る。配置エリアは、陣営1が上側の depth 行、陣営0が下側の depth 行。
- * 標準は 12 × 16 で、陣営0が y 10〜16、陣営1が y 0〜6。
+ * 平地だけの戦場を作る。配置エリアは、陣営1が上側の depth 行、陣営0が下側の depth 行で、
+ * 両端の lane 列（通り道）を除いた列。lane を省略すると、標準の幅なら STANDARD_LANE、それ以外の幅（狭い面など）なら 0。
+ * lane * 2 が width 以上になる値（と整数でない値・負の値）は、通り道なし（0）として扱う。
+ * 標準は 10 × 12 で、通り道が列 0 と列 9、陣営0が列 1〜8・行 8〜11、陣営1が列 1〜8・行 0〜3。
  */
-export function plainField(width = STANDARD_WIDTH, height = STANDARD_HEIGHT, depth = STANDARD_ZONE_DEPTH): Field {
+export function plainField(
+  width = STANDARD_WIDTH,
+  height = STANDARD_HEIGHT,
+  depth = STANDARD_ZONE_DEPTH,
+  lane = width === STANDARD_WIDTH ? STANDARD_LANE : 0,
+): Field {
+  const l = Number.isInteger(lane) && lane > 0 && lane * 2 < width ? lane : 0;
   return {
     width,
     height,
     terrain: new Array<Field['terrain'][number]>(width * height).fill('plain'),
     zones: [
-      { col: 0, row: height - depth, width, height: depth },
-      { col: 0, row: 0, width, height: depth },
+      { col: l, row: height - depth, width: width - l * 2, height: depth },
+      { col: l, row: 0, width: width - l * 2, height: depth },
     ],
   };
 }
@@ -45,7 +57,7 @@ export function plainField(width = STANDARD_WIDTH, height = STANDARD_HEIGHT, dep
  * 配置した列から翼を決める。自分から見て左の3分の1が左翼、右の3分の1が右翼、あいだが中央。
  * 陣営1は向きが逆なので、列の大きいほうが左翼になる。
  * 幅が3で割れないときは、列の中心（col + 0.5）が width/3 より小さければ左の3分の1、
- * 2·width/3 以上なら右の3分の1とする（12列なら 0〜3・4〜7・8〜11）。
+ * 2·width/3 以上なら右の3分の1とする（10列なら 0〜2・3〜6・7〜9。12列なら 0〜3・4〜7・8〜11）。
  */
 export function wingOf(col: number, field: Pick<Field, 'width'>, side: Side): Wing {
   const c = col + 0.5;
