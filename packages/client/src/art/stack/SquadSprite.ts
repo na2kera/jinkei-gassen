@@ -68,7 +68,10 @@ interface Body {
   depth: number;
   /** 城壁・城門の線で直す前の depth と、足もとの戦場の座標（引っぱっている兵は null。design §16.5） */
   raw: number;
-  foot: { x: number; y: number } | null;
+  /** 足もとの戦場の座標を持っているか（引っぱっている兵は false）。毎コマ物を作らないよう、数のまま持つ */
+  hasFoot: boolean;
+  footX: number;
+  footY: number;
   /** 兵の大きさ（焼いた大きさ × 表示の倍率） */
   size: number;
 }
@@ -110,7 +113,7 @@ export class SquadSprite {
     for (let i = 0; i < 3; i++) {
       const img = scene.add.image(0, 0, '__DEFAULT').setVisible(false);
       layer.add(img);
-      this.bodies.push({ img, key: '', left: 0, right: 0, up: 0, down: 0, x: 0, y: 0, depth: 0, raw: 0, foot: null, size: 1 });
+      this.bodies.push({ img, key: '', left: 0, right: 0, up: 0, down: 0, x: 0, y: 0, depth: 0, raw: 0, hasFoot: false, footX: 0, footY: 0, size: 1 });
     }
     this.bar = scene.add.graphics().setVisible(false);
     layer.add(this.bar);
@@ -201,7 +204,9 @@ export class SquadSprite {
       let y: number;
       let depth: number;
       let raw: number;
-      let foot: { x: number; y: number } | null = null;
+      let hasFoot = false;
+      let footX = 0;
+      let footY = 0;
       const size = ref.sheet.scale * sc;
       if (drag) {
         // 引っぱっている部隊は、指の位置をまん中に、並びの間隔だけを写して描く
@@ -218,7 +223,9 @@ export class SquadSprite {
         x = p.x;
         y = p.y;
         raw = p.depth;
-        foot = { x: fx, y: fy };
+        hasFoot = true;
+        footX = fx;
+        footY = fy;
         // 城壁・城門のそばでは、線のどちら側にいるかで前後を直す（design §16.5。線がなければそのまま）
         depth = bv.lineDepth(fx, fy, p.depth, size / k);
       }
@@ -231,7 +238,9 @@ export class SquadSprite {
       b.y = Math.round(y);
       b.depth = depth;
       b.raw = raw;
-      b.foot = foot;
+      b.hasFoot = hasFoot;
+      b.footX = footX;
+      b.footY = footY;
       b.size = size;
       b.img.setVisible(true).setPosition(b.x, b.y).setScale(sc).setDepth(depth);
     });
@@ -259,7 +268,7 @@ export class SquadSprite {
     // いちばん手前の兵（直す前の depth で選ぶ）の depth に足し、その兵の足もとで城壁・城門の線の直しを通す（兵と同じ側に収める。design §16.5）
     const fb = shown.reduce((a, b) => (b.raw > a.raw ? b : a));
     const barRaw = fb.raw + 1.4 * k * SQUASH + 0.01;
-    const barDepth = fb.foot ? this.bv.lineDepth(fb.foot.x, fb.foot.y, barRaw, fb.size / k) : barRaw;
+    const barDepth = fb.hasFoot ? this.bv.lineDepth(fb.footX, fb.footY, barRaw, fb.size / k) : barRaw;
     const base = this.bv.project(look.wx, look.wy, 0);
     const x0 = Math.round(base.x - len / 2);
     g.clear();
