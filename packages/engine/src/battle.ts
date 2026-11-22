@@ -6,7 +6,7 @@ import { MAX_UNITS, validateArmy } from './army.ts';
 import { angleBetween, dist, leftOf, normalize, rotateToward, sideSign } from './geom.ts';
 import { applyOrder, endOrder } from './orders.ts';
 import { nextFloat, rngFromSeed } from './rng.ts';
-import { terrainAllowsImpact, terrainArcherRange, terrainArrowClear, terrainDamageMult, terrainSpeedMult, type AttackKind } from './terrain.ts';
+import { CELL_EPS, terrainAllowsImpact, terrainArcherRange, terrainArrowClear, terrainDamageMult, terrainSpeedMult, type AttackKind } from './terrain.ts';
 import { collapseBesideGate, pathLength, pushOutOfWalls, readWalls, routeTo, sideOfWall, wallsOfGate, type WallInfo } from './walls.ts';
 import { DT, KIND_STATS, T } from './tuning.ts';
 import { isDenseArray, isInt, isObject, isOrderKind, isOrderTarget, isSide, isTerrain, MAX_FIELD_SIDE, MAX_ORDERS_PER_STEP, MAX_SCRIPTED_ORDERS } from './input.ts';
@@ -377,11 +377,14 @@ function inRange(d: number, range: number): boolean {
   return d <= range + RANGE_EPS;
 }
 
-/** 後退で止まる行（配置エリアのいちばん奥の2行）に入っているか */
+/**
+ * 後退で止まる行（配置エリアのいちばん奥の2行）に入っているか。行の境目ちょうど（と、丸めで CELL_EPS だけぶれた値）は、
+ * どちらの陣営でも「入っている」にする（180° 回した戦いで、陣営によって判定が分かれないように。terrain.ts の cellIndex と同じ遊び）
+ */
 function inRetreatRows(state: BattleState, u: Unit, y: number): boolean {
   const z = state.field.zones[u.side];
-  if (u.side === 0) return y >= z.row + z.height - T.retreatRows;
-  return y < z.row + T.retreatRows;
+  if (u.side === 0) return y >= z.row + z.height - T.retreatRows - CELL_EPS;
+  return y <= z.row + T.retreatRows + CELL_EPS;
 }
 
 /** 近接の距離にいる敵から、狙いを選ぶ：いまの狙いが届くなら変えない。そうでなければ、いまの向きにいちばん近い方向の敵。同じなら近いほう、それも同じなら id の小さいほう。 */

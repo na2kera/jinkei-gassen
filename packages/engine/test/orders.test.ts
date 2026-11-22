@@ -93,7 +93,8 @@ describe('号令中の動き', () => {
     expect(s.units[0]!.fy).toBeGreaterThan(0.9); // 後ろ（y が増える向き）を向いた
     for (let i = 0; i < 40; i++) step(s, []); // 号令の 6 秒のうち 5 秒目
     expect(s.units[0]!.order?.kind).toBe('retreat');
-    expect(s.units[0]!.y).toBeGreaterThanOrEqual(14);
+    // 境目（y 14）は余裕 1e-9 つきで「入っている」（両陣営で同じ決まり。下のテスト）。この場面では 13.999999999999988 で止まる
+    expect(s.units[0]!.y).toBeGreaterThanOrEqual(14 - 1e-9);
     expect(s.units[0]!.y).toBeLessThan(14.5);
   });
   it('後退中は戦わず、撃たない', () => {
@@ -103,6 +104,37 @@ describe('号令中の動き', () => {
     const m = s.units[2]!.men;
     step(s, [{ side: 0, target: 'all', kind: 'retreat' }]);
     expect(s.units[2]!.men).toBe(m);
+  });
+  it('後退で止まる行の境目は、両陣営とも「入っている」（余裕 1e-9 つき）。境目ちょうどの部隊と 180° 回した対で判定が同じ', () => {
+    // 戦場 12×16。陣営0の配置エリアは y 10〜16（奥の2行の境目 y = 14）、陣営1は y 0〜6（境目 y = 2。14 を 180° 回した位置）。
+    // 前は陣営0が y >= 境目、陣営1が y < 境目 で、境目ちょうどでは陣営0だけが止まっていた
+    const run = (off0: number, off1: number): [number, number] => {
+      const s = battle([p('infantry', 5, 14)], [p('infantry', 6, 1)]);
+      s.field.zones[0] = { col: 0, row: 10, width: 12, height: 6 };
+      s.field.zones[1] = { col: 0, row: 0, width: 12, height: 6 };
+      // 陣営0は境目から off0 だけ前（y が小さい側）、陣営1は境目から off1 だけ前（y が大きい側）＝鏡写しの位置
+      place(s, 0, 5.5, 14 - off0);
+      place(s, 1, 12 - 5.5, 2 + off1);
+      step(s, [
+        { side: 0, target: 'all', kind: 'retreat' },
+        { side: 1, target: 'all', kind: 'retreat' },
+      ]);
+      for (let i = 0; i < 5; i++) step(s, []);
+      return [s.units[0]!.y, s.units[1]!.y];
+    };
+    // 境目ちょうど：どちらも止まったまま
+    expect(run(0, 0)).toEqual([14, 2]);
+    // 丸めで 1e-9 より小さくぶれた値（片方だけ・両方）も、境目と同じ扱い
+    const [a0, a1] = run(5e-10, 5e-10);
+    expect(a0).toBe(14 - 5e-10);
+    expect(a1).toBe(2 + 5e-10);
+    const [b0, b1] = run(0, 5e-10);
+    expect([b0, b1]).toEqual([14, 2 + 5e-10]);
+    // 境目より 1e-9 を超えて前なら、どちらも奥へ下がる（同じだけ）
+    const [c0, c1] = run(1e-6, 1e-6);
+    expect(c0).toBeGreaterThan(14 - 1e-6);
+    expect(c1).toBeLessThan(2 + 1e-6);
+    expect(c0 - (14 - 1e-6)).toBeCloseTo(2 + 1e-6 - c1, 9);
   });
 });
 
