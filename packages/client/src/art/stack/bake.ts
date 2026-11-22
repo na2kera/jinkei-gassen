@@ -70,36 +70,50 @@ export function scratchFor(g: Geom): Int32Array {
   return new Int32Array(g.fw * g.fh);
 }
 
-/**
- * 型 m を角度 angle（画面で時計回り。ラジアン）、大きさ s で、buf（幅 bw）の (ox, oy) から fw × fh に描く。
- * vi は枠 1 つぶんの作業用の配列。
- */
-export function bakeOne(buf: Uint32Array, bw: number, ox: number, oy: number, g: Geom, m: Model, angle: number, s: number, cmap: ColorTable, vi: Int32Array): void {
+/** 型 mm の箱が写る画素に、target へ印を付ける（mark なら 1、そうでなければ箱の番号）。bakeOne の中で使う */
+function plot(mm: Model, target: Int32Array, mark: boolean, g: Geom, c: number, sn: number, s: number): void {
   const { fw, fh, ax, ay } = g;
-  vi.fill(-1);
-  const c = Math.cos(angle);
-  const sn = Math.sin(angle);
   const sq = SQUASH * s;
-  for (let z = 0; z < m.H; z++) {
-    const Rz = m.layerR[z]!;
+  for (let z = 0; z < mm.H; z++) {
+    const Rz = mm.layerR[z]!;
     if (Rz < 0) continue;
     const cy = ay - z * s;
     const y0 = Math.max(0, Math.floor(cy - Rz * sq - 1));
     const y1 = Math.min(fh - 1, Math.ceil(cy + Rz * sq + 1));
     const x0 = Math.max(0, Math.floor(ax - Rz * s - 1));
     const x1 = Math.min(fw - 1, Math.ceil(ax + Rz * s + 1));
-    const base = z * m.D * m.W;
+    const base = z * mm.D * mm.W;
     for (let py = y0; py <= y1; py++) {
       const dy = (py + 0.5 - cy) / sq;
       for (let px = x0; px <= x1; px++) {
         const dx = (px + 0.5 - ax) / s;
-        const ix = Math.floor(dx * c + dy * sn + m.cx);
-        const iy = Math.floor(-dx * sn + dy * c + m.cy);
-        if (ix < 0 || iy < 0 || ix >= m.W || iy >= m.D) continue;
-        const i = base + iy * m.W + ix;
-        if (m.vox[i]) vi[py * fw + px] = i;
+        const ix = Math.floor(dx * c + dy * sn + mm.cx);
+        const iy = Math.floor(-dx * sn + dy * c + mm.cy);
+        if (ix < 0 || iy < 0 || ix >= mm.W || iy >= mm.D) continue;
+        const i = base + iy * mm.W + ix;
+        if (mm.vox[i]) target[py * fw + px] = mark ? 1 : i;
       }
     }
+  }
+}
+
+/**
+ * 型 m を角度 angle（画面で時計回り。ラジアン）、大きさ s で、buf（幅 bw）の (ox, oy) から fw × fh に描く。
+ * vi は枠 1 つぶんの作業用の配列。
+ * mask（省いてよい）：輪郭を付けない所（隣のマスとつながる余白。design §16.2）を表す型。そこに重なる所には輪郭を描かない。
+ * maskOff は mask を写す作業用の配列（枠 1 つぶん）。試作の bakeOne の mask・maskOff と同じ
+ */
+export function bakeOne(buf: Uint32Array, bw: number, ox: number, oy: number, g: Geom, m: Model, angle: number, s: number, cmap: ColorTable, vi: Int32Array, mask: Model | null = null, maskOff: Int32Array | null = null): void {
+  const { fw, fh } = g;
+  vi.fill(-1);
+  const c = Math.cos(angle);
+  const sn = Math.sin(angle);
+  plot(m, vi, false, g, c, sn, s);
+  let mk: Int32Array | null = null;
+  if (mask) {
+    mk = maskOff ?? new Int32Array(fw * fh);
+    mk.fill(-1);
+    plot(mask, mk, true, g, c, sn, s);
   }
   // 明暗と色
   for (let p = 0; p < fw * fh; p++) {
@@ -127,6 +141,7 @@ export function bakeOne(buf: Uint32Array, bw: number, ox: number, oy: number, g:
       for (let px = 0; px < fw; px++) {
         const p = py * fw + px;
         if (vi[p]! >= 0) continue;
+        if (mk && mk[p]! >= 0) continue;
         if ((px > 0 && vi[p - 1]! >= 0) || (px < fw - 1 && vi[p + 1]! >= 0) || (py > 0 && vi[p - fw]! >= 0) || (py < fh - 1 && vi[p + fw]! >= 0)) {
           buf[(oy + py) * bw + ox + px] = OUTLINE_ABGR;
         }

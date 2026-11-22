@@ -336,6 +336,17 @@ export function colorsFor(team: 0 | 1): Record<string, number> {
     L: TERRAIN.leafLo,
     F: TERRAIN.leaf,
     E: TERRAIN.leafHi,
+    // 地形（柵・城壁・城門。design §16.2。横木は兵の木の色 w）
+    T: TERRAIN.stoneTop,
+    t: TERRAIN.stone,
+    f: TERRAIN.stoneFace,
+    j: TERRAIN.stoneLine,
+    K: TERRAIN.gateDark,
+    W: TERRAIN.gateWood,
+    V: TERRAIN.gateWoodLo,
+    I: TERRAIN.gateIron,
+    N: TERRAIN.gateStud,
+    C: TERRAIN.stakeTop,
   };
 }
 
@@ -365,4 +376,15 @@ export const SHADE: Readonly<Record<string, readonly [string, string]>> = {
   L: ['L', 'L'],
   F: ['L', 'E'],
   E: ['F', 'E'],
+  // 地形（柵・城壁・城門。試作の値のまま）
+  T: ['t', 'T'],
+  t: ['f', 't'],
+  f: ['f', 'f'],
+  j: ['f', 'j'],
+  K: ['K', 'K'],
+  W: ['V', 'W'],
+  V: ['K', 'V'],
+  I: ['I', 'I'],
+  N: ['N', 'N'],
+  C: ['P', 'C'],
 };
