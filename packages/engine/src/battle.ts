@@ -6,7 +6,7 @@ import { MAX_UNITS, validateArmy } from './army.ts';
 import { angleBetween, dist, leftOf, normalize, rotateToward, sideSign } from './geom.ts';
 import { applyOrder, endOrder } from './orders.ts';
 import { nextFloat, rngFromSeed } from './rng.ts';
-import { hasTerrain, terrainAllowsImpact, terrainArcherRange, terrainArrowClear, terrainDamageMult, terrainSpeedMult, type AttackKind } from './terrain.ts';
+import { terrainAllowsImpact, terrainArcherRange, terrainArrowClear, terrainDamageMult, terrainSpeedMult, type AttackKind } from './terrain.ts';
 import { collapseBesideGate, pathLength, pushOutOfWalls, readWalls, routeTo, sideOfWall, wallsOfGate, type WallInfo } from './walls.ts';
 import { DT, KIND_STATS, T } from './tuning.ts';
 import { isDenseArray, isInt, isObject, isOrderKind, isOrderTarget, isSide, isTerrain, MAX_FIELD_SIDE, MAX_ORDERS_PER_STEP, MAX_SCRIPTED_ORDERS } from './input.ts';
@@ -343,12 +343,6 @@ interface TickCtx {
   walls: WallInfo | null;
   /** 刻みの初めに立っている門の id（ないか、もう破れていれば null） */
   gateUp: number | null;
-  /**
-   * 距離のしきい値（近接の距離）の比べ方の遊び。地形のある戦場では 1e-9、平地だけの戦場では 0。
-   * 地形（速さ 0.5 倍など）で動く距離の刻みが変わると、鏡写しの位置どうしで浮動小数の丸めの差（1e-14 ほど）がしきい値をまたぎ、
-   * 対称な戦場でも陣営で判定が分かれる。平地だけの戦場は、地形を入れる前と1刻みも変えない（T10）ため 0 のままにする
-   */
-  eps: number;
 }
 
 function isEnemy(a: Unit, b: Unit): boolean {
@@ -369,6 +363,18 @@ function sd(ctx: TickCtx, a: number, b: number): number {
   const p = ctx.snap[a] as Snap;
   const q = ctx.snap[b] as Snap;
   return dist(p.x, p.y, q.x, q.y);
+}
+
+/**
+ * 「範囲内か」（距離がしきい値以内か）の比べ方の遊び。陣営を入れ替えて 180° 回した戦いでは、同じはずの距離が丸めで
+ * 1.6000000000000014 と 1.5999999999999934 のように上下に分かれ、そのまま d <= しきい値 で比べると陣営で判定が分かれる。
+ * 平地・地形のある戦場で同じ値を使う。大きさは、距離の同点の比べ方や回り込みの判定（DETOUR_EPS）の 1e-9 と同じ
+ */
+const RANGE_EPS = 1e-9;
+
+/** 距離 d がしきい値 range 以内か（丸めの差を RANGE_EPS だけ許す）。range が Infinity なら、いつも以内 */
+function inRange(d: number, range: number): boolean {
+  return d <= range + RANGE_EPS;
 }
 
 /** 後退で止まる行（配置エリアのいちばん奥の2行）に入っているか */
@@ -409,7 +415,7 @@ function pickArrow(ctx: TickCtx, u: Unit): number | null {
     // 弓兵は門を狙わない
     if (!isEnemy(u, e) || isGate(e) || (ctx.snap[e.id] as Snap).status !== 'active') continue;
     const d = sd(ctx, u.id, e.id);
-    if (d > range || !terrainArrowClear(state.field, me, ctx.snap[e.id] as Snap)) continue;
+    if (!inRange(d, range) || !terrainArrowClear(state.field, me, ctx.snap[e.id] as Snap)) continue;
     if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && best !== null && e.id < best)) {
       best = e.id;
       bestD = d;
@@ -418,7 +424,7 @@ function pickArrow(ctx: TickCtx, u: Unit): number | null {
   if (best !== null) return best;
   const cur = (ctx.snap[u.id] as Snap).target;
   if (cur !== null) {
-    if ((ctx.snap[cur] as Snap).status === 'routing' && sd(ctx, u.id, cur) <= range && terrainArrowClear(state.field, me, ctx.snap[cur] as Snap)) return cur;
+    if ((ctx.snap[cur] as Snap).status === 'routing' && inRange(sd(ctx, u.id, cur), range) && terrainArrowClear(state.field, me, ctx.snap[cur] as Snap)) return cur;
   }
   return null;
 }
@@ -430,7 +436,7 @@ function nearestEnemy(ctx: TickCtx, u: Unit, filter: (e: Unit) => boolean, maxD 
   for (const e of ctx.state.units) {
     if (!isEnemy(u, e) || isGate(e) || (ctx.snap[e.id] as Snap).status !== 'active' || !filter(e)) continue;
     const d = sd(ctx, u.id, e.id);
-    if (d > maxD) continue;
+    if (!inRange(d, maxD)) continue;
     if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && best !== null && e.id < best)) {
       best = e.id;
       bestD = d;
@@ -629,10 +635,10 @@ function decide(ctx: TickCtx, u: Unit): Decision {
   const meleeEnemies: number[] = [];
   for (const e of state.units) {
     if (!isEnemy(u, e) || isGate(e) || (ctx.snap[e.id] as Snap).status !== 'active') continue;
-    if (sd(ctx, u.id, e.id) <= T.meleeRange + ctx.eps) meleeEnemies.push(e.id);
+    if (inRange(sd(ctx, u.id, e.id), T.meleeRange)) meleeEnemies.push(e.id);
   }
   // 門は大きな構えなので、門を攻めるときだけ、近接が届く距離を gateReach にする（門の前に3部隊ほどが並んで攻められる）
-  const gateInMelee = ctx.gateUp !== null && isEnemy(u, state.units[ctx.gateUp] as Unit) && sd(ctx, u.id, ctx.gateUp) <= T.gateReach + ctx.eps;
+  const gateInMelee = ctx.gateUp !== null && isEnemy(u, state.units[ctx.gateUp] as Unit) && inRange(sd(ctx, u.id, ctx.gateUp), T.gateReach);
   d.hadMeleeEnemy = meleeEnemies.length > 0;
   const cur = s.target;
   const curInMelee =
@@ -640,7 +646,7 @@ function decide(ctx: TickCtx, u: Unit): Decision {
     isEnemy(u, state.units[cur] as Unit) &&
     !isGate(state.units[cur] as Unit) &&
     (ctx.snap[cur] as Snap).status !== 'gone' &&
-    sd(ctx, u.id, cur) <= T.meleeRange + ctx.eps;
+    inRange(sd(ctx, u.id, cur), T.meleeRange);
   const hasMelee = meleeEnemies.length > 0 || curInMelee;
   const order = u.order?.kind ?? null;
 
@@ -1104,8 +1110,8 @@ function supportMult(ctx: TickCtx, u: Unit): number {
   for (const o of ctx.state.units) {
     if (o.id === u.id || o.side !== u.side || isGate(o) || (ctx.snap[o.id] as Snap).status !== 'active') continue;
     const d = sd(ctx, u.id, o.id);
-    if (d <= T.supportRange) allies++;
-    if (o.kind === 'hq' && d <= T.hqSupportRange) hqNear = true;
+    if (inRange(d, T.supportRange)) allies++;
+    if (o.kind === 'hq' && inRange(d, T.hqSupportRange)) hqNear = true;
   }
   let m = 1 - T.supportPerAlly * Math.min(T.supportMaxAllies, allies);
   if (hqNear && u.kind !== 'hq') m *= T.hqSupportMult;
@@ -1185,8 +1191,7 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
   // 城壁は門のある戦場だけ（createBattle で調べ済み）。門が破れたあとは、崩れた3マスのうち自分の x にいちばん近い列を通る
   const gateUp = state.gate && (state.units[state.gate.id] as Unit).status === 'active' ? state.gate.id : null;
   const walls = state.gate ? wallsOfGate(state.gate, gateUp === null, state.field.width) : null;
-  const eps = hasTerrain(state.field) ? 1e-9 : 0;
-  const ctx: TickCtx = { state, snap, t, walls, gateUp, eps };
+  const ctx: TickCtx = { state, snap, t, walls, gateUp };
 
   // ③ 狙いと動く向きを決める。続けて、守備の味方の並びを回り込むかを決める（§3.6.6）
   const decisions = state.units.map((u) => decide(ctx, u));
@@ -1373,10 +1378,10 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
       if (rec.unit === u.id) continue;
       const d = dist(s.x, s.y, rec.x, rec.y);
       if (rec.side === u.side) {
-        if (d <= T.allyRoutedRange) delta -= rec.reason === 'routed' ? T.allyRoutedLoss : T.allyDestroyedLoss;
+        if (inRange(d, T.allyRoutedRange)) delta -= rec.reason === 'routed' ? T.allyRoutedLoss : T.allyDestroyedLoss;
       } else if (rec.holders.includes(u.id)) {
         delta += T.targetBrokenGain;
-      } else if (d <= T.enemyBrokenRange) {
+      } else if (inRange(d, T.enemyBrokenRange)) {
         delta += T.enemyBrokenGain;
       }
     }
@@ -1386,8 +1391,8 @@ export function step(state: BattleState, orders: readonly OrderInput[], summons?
     for (const o of state.units) {
       if (o.id === u.id || isGate(o) || (snap[o.id] as Snap).status !== 'active') continue;
       const d = sd(ctx, u.id, o.id);
-      if (o.side !== u.side && d <= T.recoverEnemyRange) enemyNear = true;
-      if (o.side === u.side && o.kind === 'hq' && d <= T.hqSupportRange) hqNear = true;
+      if (o.side !== u.side && inRange(d, T.recoverEnemyRange)) enemyNear = true;
+      if (o.side === u.side && o.kind === 'hq' && inRange(d, T.hqSupportRange)) hqNear = true;
     }
     const quiet = (u.lastHitTick === null || t - u.lastHitTick >= T.recoverQuietTicks) && (menLoss[u.id] as number) <= 0;
     if (!enemyNear && quiet) delta += T.recoverPerSec * DT;
