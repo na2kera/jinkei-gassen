@@ -354,3 +354,17 @@ export function lineDepth(lines: readonly DepthLine[], lineDepths: readonly numb
   }
   return out;
 }
+
+/**
+ * 城壁の行の切れ目（門のマス）。戦闘の画面の最初の組み立てでは、場面（view.gate）がまだ届かないので、ここから門の位置を決める
+ * （1 コマだけ「門なし・切り口の閉じた城壁」が出ないように）。城壁が 1 行で切れ目が 1 マスのときだけ返す（engine の readWalls と同じ形）
+ */
+export function gateFromWalls(field: Field): GateCell | null {
+  const rows = new Set<number>();
+  for (let i = 0; i < field.terrain.length; i++) if (field.terrain[i] === 'wall') rows.add(Math.floor(i / field.width));
+  if (rows.size !== 1) return null;
+  const row = [...rows][0]!;
+  const gaps: number[] = [];
+  for (let c = 0; c < field.width; c++) if (field.terrain[row * field.width + c] !== 'wall') gaps.push(c);
+  return gaps.length === 1 ? { col: gaps[0]!, row } : null;
+}

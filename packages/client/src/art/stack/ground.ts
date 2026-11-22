@@ -1,4 +1,5 @@
-// 立体の画面の地面（design §14.7）：下地（市松の草地・川・森の点・柵や城壁のタイル）と丘の層、森の木、門の描き直し、霧の入れ物。
+// 立体の画面の地面（design §14.7・§16.5）：下地（市松の草地・川・森の点・城壁と城門の土の帯）と丘の層、森の木、立った地形（柵・城壁・城門）、
+// 門が破れたあとの瓦礫、霧の入れ物。
 // 地面は盤と同じ大きさの絵を、盤と一緒に回して縦をつぶして置く（入れ物を 2 つ重ね、外側に位置と拡大、内側に回転）。
 // 地面の絵はシーンが終わるとき・作り直すときに捨てる（destroy でテクスチャごと消す）。試作（proto17v2/main.js）の paintBase・buildGround を写した。
 
@@ -6,7 +7,7 @@ import type { Field } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { BOARD_CELL, type BoardView } from '../../battle/BoardView.ts';
 import { COLOR, TERRAIN, css } from '../palette.ts';
-import { FOG_KEY, gateKey, RUBBLE_KEY, tileKey } from '../textures.ts';
+import { FOG_KEY, RUBBLE_KEY } from '../textures.ts';
 import { abgr, ANGLES } from './bake.ts';
 import { HILL_MAX } from './height.ts';
 import { treeFrameName, TREE_SCALES, wrapAngle } from './jobs.ts';
@@ -54,7 +55,6 @@ export class Ground {
   private readonly fogOuter: Phaser.GameObjects.Container;
   private readonly fogInner: Phaser.GameObjects.Container;
   private readonly gate: GateLook | null;
-  private gateStage: 0 | 1 | 2 = 0;
   private gateBroken = false;
   /** 画素 1 枚ぶんの量の合計（バイト。開発用の口に出す） */
   readonly bytes: number;
@@ -187,12 +187,15 @@ export class Ground {
     });
   }
 
-  /** 門の様子（傷み具合の段と、破れたか）。門のマスと両隣の城壁のマスだけを描き直す。戻り値は描き直したマス */
+  /**
+   * 門の様子。破れたら、門のマスと両隣の城壁のマスに瓦礫を描く。戻り値は描き直したマス（崩れる演出に使う）。
+   * 傷み具合の段は、地面には描かない（立った門の絵が受け持つ。design §16.6）
+   */
   setGate(stage: 0 | 1 | 2, broken: boolean): { col: number; row: number }[] {
+    void stage;
     const g = this.gate;
-    if (!g || (stage === this.gateStage && broken === this.gateBroken)) return [];
-    this.gateStage = stage;
-    this.gateBroken = broken;
+    if (!g || !broken || this.gateBroken) return [];
+    this.gateBroken = true;
     const tex = this.scene.textures.get(this.baseKey) as Phaser.Textures.CanvasTexture;
     const ctx = tex.getContext();
     const cells: { col: number; row: number }[] = [];
@@ -201,8 +204,7 @@ export class Ground {
       const t = this.field.terrain[g.row * this.field.width + c];
       // 門のマスと、両隣のうち城壁のマスだけ（field は開戦時のものなので、崩れる前の城壁が入っている）
       if (c !== g.col && t !== 'wall') continue;
-      const key = broken ? RUBBLE_KEY : c === g.col ? gateKey(stage) : tileKey('wall');
-      this.drawTile(ctx, key, c, g.row);
+      this.drawTile(ctx, RUBBLE_KEY, c, g.row);
       cells.push({ col: c, row: g.row });
     }
     tex.refresh();
@@ -215,7 +217,7 @@ export class Ground {
     ctx.drawImage(src, col * BOARD_CELL, row * BOARD_CELL, BOARD_CELL, BOARD_CELL);
   }
 
-  /** 平地・川・森の地面・柵や城壁や門のタイル・外枠（試作の paintBase と同じ。点の位置は決まった乱数（種 7）） */
+  /** 平地・川・森の地面・城壁と城門の土の帯・外枠（試作の paintBase と同じ。点の位置は決まった乱数（種 7）） */
   private paintBase(ctx: CanvasRenderingContext2D): void {
     const f = this.field;
     const C = BOARD_CELL;
@@ -241,6 +243,9 @@ export class Ground {
         const sp = (C - 6) / 2;
         for (let i = 0; i < 4; i++) fill(COLOR.grass3, x + 2 + Math.floor(R() * sp) * 2, y + 2 + Math.floor(R() * sp) * 2, 2, 2);
         if (t === 'forest') for (let i = 0; i < 6; i++) fill(TERRAIN.leafLo, x + 2 + Math.floor(R() * sp) * 2, y + 2 + Math.floor(R() * sp) * 2, 4, 2);
+        // 城壁と城門のマスは、まん中に土の帯（幅いっぱい × 16px）。柵のマスは草地のまま（立った絵は Scenery）
+        const isGate = !!this.gate && this.gate.col === c && this.gate.row === r;
+        if (t === 'wall' || isGate) fill(TERRAIN.dirt, x, y + C / 2 - 8, C, 16);
       }
     // 川の岸：川と陸の境に 2px の暗い縁
     for (let r = 0; r < f.height; r++)
@@ -254,13 +259,6 @@ export class Ground {
         if (land(c - 1, r)) fill(TERRAIN.hillLo, x, y, 2, C);
         if (land(c + 1, r)) fill(TERRAIN.hillLo, x + C - 2, y, 2, C);
       }
-    // 柵・城壁（あとに回すもの）：いまの 32px のタイルを、地面にそのまま描く
-    for (let r = 0; r < f.height; r++)
-      for (let c = 0; c < f.width; c++) {
-        const t = T(c, r);
-        if (t === 'fence' || t === 'wall') this.drawTile(ctx, tileKey(t), c, r);
-      }
-    if (this.gate) this.drawTile(ctx, gateKey(0), this.gate.col, this.gate.row);
     // 盤のまわりに、輪郭の色の線を 2px
     fill(COLOR.outline, 0, 0, w, 2);
     fill(COLOR.outline, 0, h - 2, w, 2);
