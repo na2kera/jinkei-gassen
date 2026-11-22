@@ -1,10 +1,10 @@
 // 守備の味方の並びを回り込む（design §3.6.6 の D1〜D8。D8 の総当たりの分は a06-a07-a09-a12-matrix.test.ts で数える）
 import { describe, expect, it } from 'vitest';
-import { createBattle, plainField, STAGES, step, viewFor, type BattleEvent, type BattleState, type Placement } from '../src/index.ts';
+import { createBattle, plainField, STAGES, step, viewFor, type BattleEvent, type BattleState, type Field, type Placement } from '../src/index.ts';
 import { T } from '../src/tuning.ts';
 import { SEEDS_40 } from '../sim/lib.ts';
 import { runStage, stageTemplateArmy, STAGE_SEEDS } from '../sim/stagelib.ts';
-import { battle, blockedCounter, p, place } from './helpers.ts';
+import { battle, blockedCounter, openField, p, place } from './helpers.ts';
 
 const row = (kind: Placement['kind'], stance: Placement['stance'], cols: number[], r: number): Placement[] => cols.map((col) => ({ kind, stance, col, row: r }));
 
@@ -13,19 +13,22 @@ function d1Armies(enemyCols = [4, 5]): [Placement[], Placement[]] {
   return [[...row('shield', 'hold', [3, 4, 5], 10), ...row('infantry', 'advance', [4, 5], 11)], row('infantry', 'hold', enemyCols, 3)];
 }
 
-/** D5：D1 の歩兵を列 3・4 に置き、敵を右（列 9・10）に置く */
+/** D5：D1 の歩兵を列 3・4 に置き、敵を右（配置エリアの右端の2列）に置く */
 function d5Armies(): [Placement[], Placement[]] {
-  return [[...row('shield', 'hold', [3, 4, 5], 10), ...row('infantry', 'advance', [3, 4], 11)], row('infantry', 'hold', [9, 10], 3)];
+  const z = plainField().zones[1];
+  const right = [z.col + z.width - 2, z.col + z.width - 1];
+  return [[...row('shield', 'hold', [3, 4, 5], 10), ...row('infantry', 'advance', [3, 4], 11)], row('infantry', 'hold', right, 3)];
 }
 
 /** 180° 回して陣営を入れ替える（配置の配列の中の順は保つ） */
 function rotated([a, b]: [Placement[], Placement[]]): [Placement[], Placement[]] {
-  const rot = (ps: Placement[]): Placement[] => ps.map((p) => ({ ...p, col: 11 - p.col, row: 15 - p.row }));
+  const { width, height } = plainField();
+  const rot = (ps: Placement[]): Placement[] => ps.map((p) => ({ ...p, col: width - 1 - p.col, row: height - 1 - p.row }));
   return [rot(b), rot(a)];
 }
 
-function make(armies: [Placement[], Placement[]], seed: number): BattleState {
-  const r = createBattle({ field: plainField(), armies, seed, maxTicks: 1800, timeout: 'compare', requireHq: false });
+function make(armies: [Placement[], Placement[]], seed: number, field: Field = plainField()): BattleState {
+  const r = createBattle({ field, armies, seed, maxTicks: 1800, timeout: 'compare', requireHq: false });
   if (!r.ok) throw new Error(r.error.message);
   return r.value;
 }
@@ -50,7 +53,7 @@ interface Crossing {
   blockedMax: number;
 }
 
-/** 陣営 side の歩兵（ids）が、盾兵の行（陣営0なら y < 9、陣営1なら y > 7）を越えた刻みと、攻撃した刻みを見る */
+/** 陣営 side の歩兵（ids）が、盾兵の行（陣営0なら y < 9、陣営1なら、それを 180° 回した y > 高さ − 9）を越えた刻みと、攻撃した刻みを見る */
 function watch(s: BattleState, ids: number[], side: 0 | 1, until = 1800): Crossing {
   const out: Crossing = { cross: ids.map(() => -1), attack: ids.map(() => -1), exit: ids.map(() => null), blockedMax: 0 };
   const bc = blockedCounter();
@@ -59,7 +62,7 @@ function watch(s: BattleState, ids: number[], side: 0 | 1, until = 1800): Crossi
     bc.onTick(s);
     ids.forEach((id, i) => {
       const u = s.units[id]!;
-      if (out.cross[i] === -1 && (side === 0 ? u.y < 9 : u.y > 7)) out.cross[i] = s.tick;
+      if (out.cross[i] === -1 && (side === 0 ? u.y < 9 : u.y > s.field.height - 9)) out.cross[i] = s.tick;
       if (out.attack[i] === -1 && u.attacking !== null) out.attack[i] = s.tick;
       if (out.exit[i] === null && u.detourX !== null) out.exit[i] = u.detourX;
     });
@@ -139,17 +142,19 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
     expect(bad.slice(0, 10)).toEqual([]);
   }, 120_000);
 
+  // (a) は通り道の列にも盾兵を置くので、戦場全体を配置エリアにした標準の大きさの戦場で作る
+  const full = openField(plainField().width, plainField().height);
   const d4 = {
-    '(a) 戦場の端から端まで盾兵が並ぶ': [[...row('shield', 'hold', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 10), ...row('infantry', 'advance', [5], 11)], row('infantry', 'hold', [4, 5], 3)],
+    '(a) 戦場の端から端まで盾兵が並ぶ': [[[...row('shield', 'hold', Array.from({ length: full.width }, (_, c) => c), 10), ...row('infantry', 'advance', [5], 11)], row('infantry', 'hold', [4, 5], 3)], full],
     '(b) 盾兵の囲みの真ん中': [
-      [...row('shield', 'hold', [3, 4, 5], 10), ...row('shield', 'hold', [3, 5], 11), ...row('shield', 'hold', [3, 4, 5], 12), ...row('infantry', 'advance', [4], 11)],
-      row('infantry', 'hold', [4, 5], 3),
+      [[...row('shield', 'hold', [3, 4, 5], 9), ...row('shield', 'hold', [3, 5], 10), ...row('shield', 'hold', [3, 4, 5], 11), ...row('infantry', 'advance', [4], 10)], row('infantry', 'hold', [4, 5], 3)],
+      plainField(),
     ],
-  } as Record<string, [Placement[], Placement[]]>;
-  for (const [name, armies] of Object.entries(d4)) {
+  } as Record<string, [[Placement[], Placement[]], Field]>;
+  for (const [name, [armies, field]] of Object.entries(d4)) {
     it(`D4 出口がなければ始めない ${name}：60 秒の間、歩兵の detourX は入らず、5 秒の位置から 1.0 より離れず、A12 を破らない`, () => {
       const inf = armies[0].findIndex((p) => p.kind === 'infantry');
-      const s = make(armies, 1);
+      const s = make(armies, 1, field);
       let at5: { x: number; y: number } | null = null;
       const bad: string[] = [];
       while (!s.outcome && s.tick < 600) {

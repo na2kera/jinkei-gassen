@@ -260,8 +260,9 @@ describe('膠着（design §3.6.4）', () => {
   }, 300_000);
 
   it('K9 引っかかって少しずつ進む部隊を、止まっていると数えない：決まりを切ったときと同じ刻みに同じ結果（陣営0の勝ち）で終わる', () => {
+    // 刻みの数を記録した場面なので、記録したときの 12 × 16 の戦場（配置エリア 6 行、通り道なし）で作る
     const setup: BattleSetup = {
-      field: plainField(),
+      field: plainField(12, 16, 6, 0),
       armies: [
         [p('infantry', 1, 14, 'flank'), p('archer', 0, 12, 'hold'), p('archer', 2, 12, 'flank'), p('hq', 11, 15, 'hold')],
         [p('infantry', 5, 1, 'hold'), p('hq', 11, 0, 'hold')],

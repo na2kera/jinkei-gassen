@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { step } from '../src/index.ts';
 import { T } from '../src/tuning.ts';
-import { battle, p, place } from './helpers.ts';
+import { battle, openField, p, place } from './helpers.ts';
 
 const d = (s: ReturnType<typeof battle>, a: number, b: number): number =>
   Math.hypot(s.units[a]!.x - s.units[b]!.x, s.units[a]!.y - s.units[b]!.y);
@@ -150,8 +150,9 @@ describe('迂回', () => {
 
 describe('本陣狙い', () => {
   // 陣営0の騎兵（本陣狙い）を (5,12) に、陣営1の本陣を (5,1) に、そのあいだの行 6 に守備の歩兵の列を置く
-  const huntScene = (wallCols: number[]) =>
-    battle([p('cavalry', 5, 12, 'hunt'), p('infantry', 0, 15, 'hold')], [p('hq', 5, 1, 'hold'), ...wallCols.map((c) => p('infantry', c, 6, 'hold'))]);
+  // width を渡すと、その幅の戦場で作る（幅いっぱいの列は、部隊数の上限 MAX_UNITS に収まる幅 11 で作る）
+  const huntScene = (wallCols: number[], width = 12) =>
+    battle([p('cavalry', 5, 12, 'hunt'), p('infantry', 0, 15, 'hold')], [p('hq', 5, 1, 'hold'), ...wallCols.map((c) => p('infantry', c, 6, 'hold'))], { field: openField(width) });
   const run = (s: ReturnType<typeof battle>, n: number, each?: () => void): void => {
     for (let i = 0; i < n && !s.outcome; i++) {
       step(s, []);
@@ -201,8 +202,8 @@ describe('本陣狙い', () => {
     expect(t.units[1]!.men).toBeLessThan(80);
   });
   it('続けて2秒のあいだ 0.3 マスも進めなければ「詰まった」として、近接の距離のいちばん近い敵と戦う', () => {
-    // 列が戦場の幅いっぱいで抜けられない。端まで滑って詰まる
-    const s = huntScene([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    // 列が戦場の幅いっぱい（幅 11）で抜けられない。端まで滑って詰まる
+    const s = huntScene([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 11);
     let stuckAt = -1;
     run(s, 200, () => {
       if (stuckAt < 0 && s.units[0]!.huntStuckOn !== null) stuckAt = s.tick;
@@ -212,7 +213,7 @@ describe('本陣狙い', () => {
     expect(s.units[2]!.stats.taken).toBe(0);
   });
   it('詰まって戦っていた相手が消えたら、また本陣へ向かう', () => {
-    const s = huntScene([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    const s = huntScene([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 11);
     const u = s.units[0]!;
     for (let i = 0; i < 200 && u.huntStuckOn === null; i++) step(s, []);
     expect(u.status).toBe('active');
