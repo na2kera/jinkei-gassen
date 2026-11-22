@@ -651,7 +651,9 @@ describe('R10 隠す情報', () => {
     it(`陣営${hider}の遊軍だけを変えた3つの戦いで、呼ぶ前の相手の場面が全刻みで一致する`, () => {
       const viewer: Side = hider === 0 ? 1 : 0;
       const runs = variants.map((r) => {
-        const base = matchupSetup('line', 'scale', 9);
+        // 遊軍なしで 300 刻みまで決着しない組と種（横陣 対 魚鱗・種 9 は、8×4 の配置エリアのひな形では 300 刻みより前に決着する。
+        // 実験の記録 §39 で 42 組 × 種 30 を流し、両陣営で 300 刻みを超える 横陣 対 鶴翼・種 9 にした）
+        const base = matchupSetup('line', 'crane', 9);
         const armies = base.armies.map((a, i) => (i === hider ? a.slice(0, -1) : a)) as BattleSetup['armies'];
         const s = make({
           ...base,

@@ -203,11 +203,15 @@ describe('膠着（design §3.6.4）', () => {
     expect(bad).toEqual([]);
   }, 120_000);
 
-  it('K6 待つだけの時間がなくなる：鶴翼どうし（種10個）は、どれも膠着の引き分けで、60 秒以内に終わる', () => {
+  // 前の条件は「60 秒以内」だった。最終の鶴翼は中央の盾兵が前進なので、両軍の盾兵が正面でぶつかり、盾兵どうしは削り合いが遅く
+  // 80 秒ほど戦い続けてから静かになり、膠着の引き分けまで約 93 秒かかる（実験の記録 §37）。中央を守備にすると 60 秒以内に収まるが、
+  // 鶴翼が弱くなりすぎて全敗に近づく（A7 が外れる）。そこで親の判断で「膠着の引き分けで終わり、100 秒以内」に直した。
+  // 時間切れ（180 秒）を待たずに膠着で終わる、という膠着の決まりのねらいは保たれる。
+  it('K6 待つだけの時間がなくなる：鶴翼どうし（種10個）は、どれも膠着の引き分けで、100 秒以内に終わる', () => {
     const bad: string[] = [];
     for (const seed of SEEDS_10) {
       const sm = summarize(runSetup(matchupSetup('crane', 'crane', seed)).state);
-      if (!(sm.reason === 'stalemate' && sm.winner === 'draw' && sm.seconds <= 60)) bad.push(`種${seed}: ${sm.reason}/${sm.winner} ${sm.seconds}秒`);
+      if (!(sm.reason === 'stalemate' && sm.winner === 'draw' && sm.seconds <= 100)) bad.push(`種${seed}: ${sm.reason}/${sm.winner} ${sm.seconds}秒`);
     }
     expect(bad).toEqual([]);
   }, 120_000);
