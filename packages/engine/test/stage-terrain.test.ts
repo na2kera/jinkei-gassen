@@ -2,7 +2,7 @@
 // 敵の配置エリアの検査を外す口、両軍のマスの重なり、Stage の seconds と gate
 import { describe, expect, it } from 'vitest';
 import { applyTemplate, createBattle, listTemplates, MAX_UNITS, plainField, STAGES, stageSetup, validateArmy, validateStageArmy, type Kind, type Roster, type Stage } from '../src/index.ts';
-import { castleField } from '../sim/terrain-scenes.ts';
+import { stdCastleField, STD_CASTLE_GAP_COL, STD_CASTLE_WALL_ROW } from '../sim/terrain-scenes.ts';
 
 const KINDS: Kind[] = ['infantry', 'shield', 'cavalry', 'archer'];
 function rosters(): Roster[] {
@@ -59,22 +59,25 @@ describe('面の戦場と配置', () => {
     expect(validateStageArmy(st, mine).map((e) => e.code)).toContain('overlap');
     expect(createBattle(stageSetup(st, mine, 1)).ok).toBe(false);
   });
-  it('gate のある面：門は陣営1のもの。win が gate なら、門が破れた側の負けで決着する。城壁と門のマスには置けない', () => {
-    const f = castleField();
+  it('gate のある面（標準の盤の城の場面）：門は陣営1のもの。win が gate なら、門が破れた側の負けで決着する。城壁と門のマスには置けない', () => {
+    const f = stdCastleField();
+    // 自軍は横陣のひな形で置く（一人用の面 STAGES[0] はまだ古い盤の座標のため、その見本は使わない）
+    const mine = applyTemplate('line', base.roster, f.zones[0], 0);
     const st: Stage = {
       ...base,
       field: f,
-      gate: { col: 5, row: 5 },
+      gate: { col: STD_CASTLE_GAP_COL, row: STD_CASTLE_WALL_ROW },
       win: { type: 'gate' },
-      enemy: [{ kind: 'hq', stance: 'hold', col: 5, row: 1 }, { kind: 'infantry', stance: 'hold', col: 4, row: 3 }],
+      enemy: [{ kind: 'hq', stance: 'hold', col: 4, row: 0 }, { kind: 'infantry', stance: 'hold', col: 3, row: 1 }],
+      solution: mine,
     };
-    const setup = stageSetup(st, base.solution, 1);
-    expect(setup.gate).toEqual({ side: 1, col: 5, row: 5, win: true });
+    const setup = stageSetup(st, mine, 1);
+    expect(setup.gate).toEqual({ side: 1, col: STD_CASTLE_GAP_COL, row: STD_CASTLE_WALL_ROW, win: true });
     expect(setup.timeout).toBe('side0_loses');
     expect(createBattle(setup).ok).toBe(true);
-    expect(stageSetup({ ...st, win: { type: 'defeat' } }, base.solution, 1).gate?.win).toBe(false);
-    const onWall = [{ kind: 'hq' as const, stance: 'hold' as const, col: 5, row: 14 }, { kind: 'infantry' as const, stance: 'advance' as const, col: 3, row: 5 }];
-    // 自軍のエリア（行 10〜15）の外なので out_of_zone も出るが、城壁の検査も出ること
+    expect(stageSetup({ ...st, win: { type: 'defeat' } }, mine, 1).gate?.win).toBe(false);
+    const onWall = [{ kind: 'hq' as const, stance: 'hold' as const, col: 4, row: 11 }, { kind: 'infantry' as const, stance: 'advance' as const, col: 3, row: STD_CASTLE_WALL_ROW }];
+    // 自軍のエリア（行 8〜11）の外なので out_of_zone も出るが、城壁の検査も出ること
     expect(validateStageArmy(st, onWall).map((e) => e.code)).toContain('on_wall');
   });
 });

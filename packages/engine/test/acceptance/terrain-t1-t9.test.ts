@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createBattle, step, type BattleEvent, type BattleState, type Stance } from '../../src/index.ts';
 import { T } from '../../src/tuning.ts';
 import { clearOfWalls, sideOfWall, wallsOf } from '../../src/walls.ts';
-import { castleSetup, t1, t2, t3, t4, t4Cav, withTerrain, at, CASTLE_WALL_ROW } from '../../sim/terrain-scenes.ts';
+// T5・T6・T8 は標準の盤（10 × 12、通り道つき）の城の場面、T7・T9 は古い盤（12 × 16）の城の場面（design §13.5「地形の場面」）
+import { castleSetup, stdCastleSetup, t1, t2, t3, t4, t4Cav, withTerrain, at, STD_CASTLE_GAP_COL, STD_CASTLE_WALL_ROW } from '../../sim/terrain-scenes.ts';
 import { place } from '../helpers.ts';
 
 function make(setup: Parameters<typeof createBattle>[0]): BattleState {
@@ -43,16 +44,28 @@ describe('T1〜T4：地形が戦いに効く（種40個）', () => {
   }, 120_000);
 });
 
-/** 城壁と門の戦場を最後まで流し、刻みごとに check を呼ぶ */
+/** 標準の盤の城壁と門の戦場を最後まで流し、刻みごとに check を呼ぶ */
 function runCastle(stance: Stance, seed: number, check: (s: BattleState, ev: BattleEvent[]) => void): BattleState {
-  const s = make(castleSetup(stance, seed));
+  const s = make(stdCastleSetup(stance, seed));
   while (!s.outcome) check(s, step(s, []));
   return s;
 }
 
 describe('T5 城壁と門', () => {
+  it('標準の盤の城の場面：城壁は通り道の列も含めて端から端まで（門の列だけが切れ目）。門は陣営1の配置エリアの中', () => {
+    const f = stdCastleSetup('advance', 1).field;
+    const lanes = [0, f.width - 1];
+    for (const c of lanes) expect(c < f.zones[1].col || c >= f.zones[1].col + f.zones[1].width, `列 ${c} は通り道`).toBe(true);
+    for (let c = 0; c < f.width; c++) expect(f.terrain[STD_CASTLE_WALL_ROW * f.width + c], `列 ${c}`).toBe(c === STD_CASTLE_GAP_COL ? 'plain' : 'wall');
+    const w = wallsOf(f)!;
+    expect(w.row).toBe(STD_CASTLE_WALL_ROW);
+    expect(w.gapCol).toBe(STD_CASTLE_GAP_COL);
+    const z = f.zones[1];
+    expect(STD_CASTLE_GAP_COL >= z.col && STD_CASTLE_GAP_COL < z.col + z.width && STD_CASTLE_WALL_ROW >= z.row && STD_CASTLE_WALL_ROW < z.row + z.height).toBe(true);
+  });
+
   it('前進の部隊が門を破り、そのあと切れ目を通って中の敵と戦う。城壁に入らず、門が立っている間は反対側へ出ず、城壁ごしの近接はない', () => {
-    const w = wallsOf(castleSetup('advance', 1).field)!;
+    const w = wallsOf(stdCastleSetup('advance', 1).field)!;
     const problems: string[] = [];
     let gateDown = -1;
     let insideFight = -1;
@@ -83,10 +96,10 @@ describe('T5 城壁と門', () => {
 });
 
 describe('T6 門の決着', () => {
-  /** 門の正面に陣営0の歩兵を置き、門の耐久を 0.01 にして、刻み 0 で破れるようにする（決まりの確認のための仕込み） */
+  /** 門の正面に陣営0の歩兵を置き、門の耐久を 0.01 にして、刻み 0 で破れるようにする（決まりの確認のための仕込み）。門の位置は場面の定数から読む */
   function brink(win: boolean): BattleState {
-    const s = make(castleSetup('advance', 1, win));
-    place(s, 1, 5.5, 6.45);
+    const s = make(stdCastleSetup('advance', 1, win));
+    place(s, 1, STD_CASTLE_GAP_COL + 0.5, STD_CASTLE_WALL_ROW + 1.45);
     s.units[1]!.target = s.gate!.id;
     s.units[s.gate!.id]!.men = 0.01;
     return s;
@@ -139,9 +152,9 @@ describe('T7 弓は城壁を越える', () => {
 describe('T8 止まったままにならない', () => {
   for (const stance of ['advance', 'flank', 'hunt'] as const) {
     it(`攻める側の全部隊を ${stance} にして最後まで流しても、30 秒以上ほとんど動かない部隊がいない（攻撃している部隊・持ち場にいる守備の部隊・門が立っている間に門の前で待つ部隊を除く）。門が破れる`, () => {
-      const w = wallsOf(castleSetup(stance, 1).field)!;
-      const gx = 5.5;
-      const gy = CASTLE_WALL_ROW + 0.5;
+      const w = wallsOf(stdCastleSetup(stance, 1).field)!;
+      const gx = STD_CASTLE_GAP_COL + 0.5;
+      const gy = STD_CASTLE_WALL_ROW + 0.5;
       const history: { x: number; y: number }[][] = [];
       let gateDown = -1;
       const stuck: string[] = [];
@@ -173,7 +186,7 @@ describe('T8 止まったままにならない', () => {
       // 検査が実際に走っていること（門が破れたあとも含めて）
       expect(checked).toBeGreaterThan(100);
       expect(checkedAfterGate).toBeGreaterThan(0);
-      expect(w.gapCol).toBe(5);
+      expect(w.gapCol).toBe(STD_CASTLE_GAP_COL);
     }, 60_000);
   }
 });
