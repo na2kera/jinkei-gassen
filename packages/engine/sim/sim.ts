@@ -10,6 +10,7 @@ import { castleSetup, stdCastleSetup } from './terrain-scenes.ts';
 import type { TemplateId } from '../src/index.ts';
 import { a1, a2, a3, a4, a5, a8, a11, a13, a14 } from './scenes.ts';
 import { reserveMain } from './reserve.ts';
+import { starMain } from './star.ts';
 import { formatMatrix, matchupSetup, matrixStats, renderBoard, runMatrix, runSetup, TEMPLATE_IDS, unitLine } from './lib.ts';
 
 function usage(): void {
@@ -20,6 +21,7 @@ function usage(): void {
   console.log('  sim stage-templates [面の id ...]   7つのひな形をそのまま置いたときの勝ち数');
   console.log('  sim castle [advance|flank|hunt] [種] [何秒おき] [--old]   城壁と門の戦場（T5。既定は標準の盤、--old で古い 12×16 の盤）');
   console.log('  sim accept [a1 a2 a3 a4 a5 a8 a11 a13 a14]   合格条件の実測値');
+  console.log('  sim star <面の id ...> [--iters 400] [--screen 6] [--keep 4] [--rand 1] [--quiet]   星3つの配置を探す（テストには使わない）');
   console.log('  sim reserve [a|b|all] [--jobs 8] [--out .reserve-out]   遊軍の強さ（design §7.9 の R13）');
   console.log(`ひな形: ${TEMPLATE_IDS.join(', ')}`);
 }
@@ -117,6 +119,7 @@ if (cmd === 'battle') battle(rest);
 else if (cmd === 'matrix') matrix();
 else if (cmd === 'accept') accept(rest);
 else if (cmd === 'stage') stage(rest);
+else if (cmd === 'star') starMain(rest);
 else if (cmd === 'reserve') {
   reserveMain(rest).catch((e: unknown) => {
     console.error(e);

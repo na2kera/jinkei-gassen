@@ -7,7 +7,7 @@ import { A11_DEFENSE, allHold } from '../sim/scenes.ts';
 import { castleSetup } from '../sim/terrain-scenes.ts';
 import { runStage, stageTemplateArmy, STAGE_SEEDS } from '../sim/stagelib.ts';
 import { STAR3_FOUND } from './fixtures/star3.ts';
-import { battle, clone, DIFFICULTY_LATER, p, STAR3_LATER } from './helpers.ts';
+import { battle, clone, DIFFICULTY_LATER, p, STAR3_LATER, STAR3_PENDING_CH23 } from './helpers.ts';
 
 /** A11 の守る側の編成（本陣・盾兵4・弓兵4・歩兵6 を横陣に並べ、全部隊を守備）どうし */
 function holdVsHold(extra: Partial<BattleSetup> = {}): BattleSetup {
@@ -257,9 +257,10 @@ describe('膠着（design §3.6.4）', () => {
   }, 300_000);
 
   it('K8 星3つの配置（stages-ch23.test.ts のもの）も膠着で終わらない。号令の渡し方を変えても同じ結果', (ctx) => {
-    ctx.skip(STAR3_LATER);
+    const ready = Object.entries(STAR3_FOUND).filter(([id]) => !STAR3_PENDING_CH23.has(id));
+    ctx.skip(ready.length === 0, STAR3_LATER);
     const bad: string[] = [];
-    for (const [id, f] of Object.entries(STAR3_FOUND)) {
+    for (const [id, f] of ready) {
       const ps: Placement[] = f.ps.map(([kind, col, row, stance]) => ({ kind, col, row, stance }));
       checkOrders(byId(id), ps, f.orders, `${id} 星3つ`, bad);
     }

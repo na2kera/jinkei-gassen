@@ -4,7 +4,7 @@ import { createBattle, plainField, STAGES, step, viewFor, type BattleEvent, type
 import { T } from '../src/tuning.ts';
 import { SEEDS_40 } from '../sim/lib.ts';
 import { runStage, stageTemplateArmy, STAGE_SEEDS } from '../sim/stagelib.ts';
-import { battle, blockedCounter, DIFFICULTY_LATER, openField, p, place } from './helpers.ts';
+import { battle, blockedCounter, openField, p, place } from './helpers.ts';
 
 const row = (kind: Placement['kind'], stance: Placement['stance'], cols: number[], r: number): Placement[] => cols.map((col) => ({ kind, stance, col, row: r }));
 
@@ -141,10 +141,7 @@ describe('守備の味方の並びを回り込む（design §3.6.6）', () => {
     expect(bad.slice(0, 10)).toEqual([]);
   }, 120_000);
 
-  // 置き直した 1-3 の見本（decisions §25）では、見本の部隊（部隊 8・9。歩兵）に detourX が入る（何にふさがれているかは未検証）。
-  // 見本の並びに頼る条件なので、見本を作り直すまで止める
-  it('D3 1-3 の見本では、detourX はどの部隊にも入らない', (ctx) => {
-    ctx.skip(DIFFICULTY_LATER);
+  it('D3 1-3 の見本では、detourX はどの部隊にも入らない', () => {
     const s13 = STAGES.find((s) => s.id === '1-3')!;
     const bad: string[] = [];
     for (const seed of STAGE_SEEDS) {
