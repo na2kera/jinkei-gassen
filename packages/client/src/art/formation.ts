@@ -12,22 +12,25 @@ export interface Slot {
   shape: SoldierShape;
 }
 
+// 並びの間隔は、1マス 32px に合わせて、24px のときの約 4/3 倍にした整数の px（design §13.8）。
+// 部隊どうしの中心は 0.9 マス（28.8px）まで近づくので、unitReach を全兵種で 14.4px 未満に収める
+
 /** 歩兵・盾兵・弓兵：3×3。並びの順は前の列から（兵が減るときは後ろから消す） */
 const FOOT: { lx: number; ly: number }[] = [];
-for (const ly of [-4, 0, 4]) for (const lx of [-5, 0, 5]) FOOT.push({ lx, ly });
+for (const ly of [-5, 0, 5]) for (const lx of [-7, 0, 7]) FOOT.push({ lx, ly });
 /** 騎兵：馬が大きいので 2×2 */
 const CAVALRY = [
-  { lx: -3, ly: -4 },
-  { lx: 3, ly: -4 },
-  { lx: -3, ly: 4 },
-  { lx: 3, ly: 4 },
+  { lx: -4, ly: -5 },
+  { lx: 4, ly: -5 },
+  { lx: -4, ly: 5 },
+  { lx: 4, ly: 5 },
 ];
 /** 本陣：まん中に将、四隅に護衛 */
 const HQ_GUARDS = [
-  { lx: -5, ly: -4 },
-  { lx: 5, ly: -4 },
-  { lx: -5, ly: 4 },
-  { lx: 5, ly: 4 },
+  { lx: -7, ly: -5 },
+  { lx: 7, ly: -5 },
+  { lx: -7, ly: 5 },
+  { lx: 7, ly: 5 },
 ];
 
 /** 兵種ごとの兵の並び（ly が負なら前の列、lx が正なら部隊の右手） */
