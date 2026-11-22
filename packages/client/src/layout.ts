@@ -19,7 +19,7 @@ export interface Layout {
   /** 内部の大きさ（Phaser の gameSize） */
   width: number;
   height: number;
-  /** 戦場を描く矩形（どちらの向きでも 320 × 384。標準の戦場 10 列 × 12 行ぶん） */
+  /** 戦場を描く矩形（横長は 320 × 384、縦長は 320 × 328。盤を傾けて描くので、縦長は詰める。design §14.6） */
   field: Rect;
   /** 操作の欄 */
   panel: Rect;
@@ -37,13 +37,15 @@ export const FIELD_COLS = STANDARD_WIDTH;
 export const FIELD_ROWS = STANDARD_HEIGHT;
 const FIELD_W = CELL * FIELD_COLS;
 const FIELD_H = CELL * FIELD_ROWS;
+/** 縦長の描き場所の高さ（盤を傾けると縦が 0.75 倍になり、兵の背丈を足しても 322px で足りる。design §14.6） */
+export const PORTRAIT_FIELD_H = 328;
 
 /** 横長の内部の大きさ。盤（320）＋操作の欄（328）＋すき間 8 × 3（design §13.7） */
 export const LANDSCAPE_W = 672;
 export const LANDSCAPE_H = 400;
 const PORTRAIT_W = 320;
-// S13 の下限は 568 だが、面の名前・戻る・ひな形2列と、戦場の下の1行の帯が入るよう 620 にする（これより細長い端末では左右が少し空く）
-const PORTRAIT_MIN_H = 620;
+// 描き場所 328 ＋ 帯のすき間 8 ＋ 帯 24 ＋ 6 ＋ 操作の欄 190 ＋ 上下の余白 8 ＝ 564（design §14.6。これより細長い端末では左右が少し空く）
+const PORTRAIT_MIN_H = 564;
 // 縦に伸ばしすぎると FIT で全体が小さくなるので上限を置く（細長い端末でも 19.5:9 程度まで）
 const PORTRAIT_MAX_H = 720;
 const GAP = 8;
@@ -79,14 +81,14 @@ export function computeLayout(parentW: number, parentH: number): Layout {
   const h = Math.min(PORTRAIT_MAX_H, Math.max(PORTRAIT_MIN_H, Math.round((PORTRAIT_W * parentH) / parentW)));
   const fieldX = (PORTRAIT_W - FIELD_W) / 2;
   // 戦場・1行の帯・操作の欄を、ひとまとまりにして縦の中央に寄せる
-  const block = FIELD_H + STRIP_GAP + STRIP_H + PANEL_GAP_PORTRAIT + PORTRAIT_PANEL_H;
+  const block = PORTRAIT_FIELD_H + STRIP_GAP + STRIP_H + PANEL_GAP_PORTRAIT + PORTRAIT_PANEL_H;
   const top = even(Math.max(GAP, (h - block) / 2));
-  const stripY = top + FIELD_H + STRIP_GAP;
+  const stripY = top + PORTRAIT_FIELD_H + STRIP_GAP;
   return {
     mode: 'portrait',
     width: PORTRAIT_W,
     height: h,
-    field: { x: fieldX, y: top, w: FIELD_W, h: FIELD_H },
+    field: { x: fieldX, y: top, w: FIELD_W, h: PORTRAIT_FIELD_H },
     strip: { x: GAP, y: stripY, w: PORTRAIT_W - GAP * 2, h: STRIP_H },
     panel: { x: GAP, y: stripY + STRIP_H + PANEL_GAP_PORTRAIT, w: PORTRAIT_W - GAP * 2, h: PORTRAIT_PANEL_H },
   };

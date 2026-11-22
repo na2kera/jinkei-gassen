@@ -8,7 +8,8 @@ import { test } from 'node:test';
 import { listTemplates, plainField, STAGES, STANDARD_HEIGHT, STANDARD_ROSTER, STANDARD_WIDTH, STANDARD_ZONE_WIDTH, validateStageArmy, type Placement, type ReserveView, type Roster } from '@jinkei/engine';
 import type { RoomMessage, SnapMessage } from '@jinkei/server/protocol';
 import { remainingShown, reserveNoticeAt, summonEnabled, summonShown } from '../src/battle/reserveUi.ts';
-import { centeredFieldView } from '../src/battle/FieldView.ts';
+import { BoardView } from '../src/battle/BoardView.ts';
+import { battleCam } from '../src/battle/camera.ts';
 import { battlePanel, battleReserveButtons, CELL, computeLayout, deployInfo, FIELD_COLS, FIELD_ROWS, LANDSCAPE_H, LANDSCAPE_W, deployPanel, deployReserveSlot, pvpDeployPanel, type Rect } from '../src/layout.ts';
 import { draftMessage, readyMessage, reserveAllowed, roomReserve, summonMessage } from '../src/net/reserveMessages.ts';
 import { snapReserve, viewOfSnap } from '../src/net/snapView.ts';
@@ -215,12 +216,13 @@ test('snap の遊軍は自分の側に入れ、相手の側は null。遊軍が�
 
 // ---- 「遊軍」の知らせの位置 ----
 
-/** 描き場所（標準の戦場 10 列 × 12 行ぶん = 320 × 384） */
+/** 描き場所（横長の 320 × 384） */
 const AREA: Rect = { x: 8, y: 8, w: FIELD_COLS * CELL, h: FIELD_ROWS * CELL };
 
-test('「遊軍」の知らせは、兵数と士気の箱と同じく部隊の上に出す（真上・斜め・横から）', () => {
-  for (const mode of ['top', 'oblique', 'side'] as const) {
-    const fv = centeredFieldView(AREA, { width: STANDARD_WIDTH, height: STANDARD_HEIGHT }, false, mode);
+test('「遊軍」の知らせは、兵数と士気の箱と同じく部隊の上に出す（盤の 4 つの向き。立体の画面）', () => {
+  for (const mode of ['right', 'left', 'side', 'back'] as const) {
+    const board = { width: STANDARD_WIDTH, height: STANDARD_HEIGHT };
+    const fv = new BoardView(AREA, board, { cam: battleCam(mode, AREA, board) });
     const x = 0.5;
     const y = STANDARD_HEIGHT / 2 + 0.5;
     const at = reserveNoticeAt(fv, AREA, x, y, 48, 32);

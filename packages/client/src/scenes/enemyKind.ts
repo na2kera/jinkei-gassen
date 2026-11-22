@@ -1,7 +1,7 @@
 // 配置の画面で押したマスにいる、見えている敵の部隊を探す（Phaser を使わず、画面なしで確かめられるようにする）。
 
 import type { StageEnemyView } from '@jinkei/engine';
-import type { Cell } from '../battle/FieldView.ts';
+import type { Cell } from '../battle/BoardView.ts';
 
 /**
  * cell にいる敵の部隊。visible には stageEnemyVisible の結果（霧のマスの部隊と方針を含まない）を渡す。

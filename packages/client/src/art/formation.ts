@@ -1,9 +1,7 @@
 // 部隊の中の兵の並び（design §5.3、§5.8.1）。Phaser を使わない計算だけにして、画面なしで確かめられるようにする。
-// 兵ごとのずれ（lx, ly。px で書いてある）は、戦場の座標の上で部隊の向きに回してから、FieldView.shiftOnScreen で画面に直す
-// （画面に直したあとの向きから直角の向きを作らない。縮みの比が縦横で違うと、並びがゆがむため）。
+// 立体の画面では使わない（立体の部隊の並びは art/stack/squad.ts）。ポスターと OGP の道具が古い兵の絵と並びを使うので、そのために残す。
 
 import type { Kind } from '@jinkei/engine';
-import type { FieldView, Point } from '../battle/FieldView.ts';
 import { shapeOf, soldierReach, type Dir4, type SoldierShape } from './textures.ts';
 
 export interface Slot {
@@ -45,7 +43,7 @@ export function slotsOf(kind: Kind): Slot[] {
 /** 敗走で散らばるときの、兵ごとのずれ（毎回同じになるよう固定の値） */
 export const SCATTER = Array.from({ length: 9 }, (_, i) => ({ x: ((i * 37) % 11) / 10 - 0.5, y: ((i * 53) % 13) / 12 - 0.5 }));
 
-/** 画面の上での向き（FieldView.facingOnScreen）から、兵の4方向の絵を選ぶ */
+/** 画面の上での向きから、兵の4方向の絵を選ぶ（古い絵の並びの検査に使う） */
 export function dirOf(dx: number, dy: number): Dir4 {
   if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 1 : 3;
   return dy < 0 ? 0 : 2;
@@ -54,20 +52,4 @@ export function dirOf(dx: number, dy: number): Dir4 {
 /** 部隊の絵が中心からどこまで届くか（並びを回しても、この値を超えない。真上の絵で測る） */
 export function unitReach(kind: Kind): number {
   return Math.max(...slotsOf(kind).map((s) => Math.hypot(s.lx, s.ly) + soldierReach(s.shape)));
-}
-
-/**
- * 兵1人の足もとの画面の px。c は部隊の中心（画面の px）、at は同じ点の戦場の座標、
- * (fx, fy) は部隊の向き（戦場の座標の単位ベクトル）。並びの「右」は、前を時計回りに 90° 回した向き。
- * 戦場の上でのずれは「右へ lx」−「前へ ly」で、2つの項のまま FieldView.shiftOnScreen に渡す
- */
-export function soldierPoint(fv: FieldView, c: Point, at: Point, fx: number, fy: number, lx: number, ly: number): Point {
-  const rx = -fy;
-  const ry = fx;
-  return fv.shiftOnScreen(c.x, c.y, at.x, at.y, lx * rx, lx * ry, ly * fx, ly * fy);
-}
-
-/** 部隊の足もとから、数字の箱の下の端までの離れ（立った兵は絵の高さの分だけ上に離す） */
-export function unitLift(fv: FieldView, _x: number, _y: number): number {
-  return fv.standing ? 34 : 20;
 }

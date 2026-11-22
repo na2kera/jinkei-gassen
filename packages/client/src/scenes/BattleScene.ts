@@ -690,7 +690,6 @@ export class BattleScene extends Phaser.Scene {
     // チュートリアルでは、部隊の長押し（情報の箱）は効かない（押した瞬間の入口で止める。design §8.10-8）
     if (this.tutorial) return;
     if (this.inspect || over.length > 0 || !inRect(this.fv.uiBounds(this.area), pointer.x, pointer.y)) return;
-    // 押した位置にいちばん近い部隊を選ぶ（選び方は視点ごとに FieldView.pick が決める）
     // 押した兵の絵の部隊（重なっていれば手前の兵）。なければ、部隊のまん中から 12px 以内でいちばん近い部隊（design §14.4）
     const live = this.interp.sample().filter((s) => s.view.status !== 'gone');
     const boxes = live.flatMap((s) => this.sprites.get(s.view.id)?.hitBoxes() ?? []);

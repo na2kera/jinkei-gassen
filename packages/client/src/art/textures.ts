@@ -300,6 +300,7 @@ function makeCanvasTexture(
   tex.refresh();
 }
 
+/** 古い兵の絵（真上と立った絵）と地形の絵を全部作る。ポスターと OGP の道具（scripts/render-*.js）のためのもの。ゲームの起動では使わない */
 export function buildTextures(scene: Phaser.Scene): void {
   for (const team of [0, 1] as const) {
     const colors = colorsFor(team);
@@ -320,6 +321,19 @@ export function buildTextures(scene: Phaser.Scene): void {
   buildStage4Textures(scene);
   buildStage5Textures(scene);
   buildSideTextures(scene);
+}
+
+/**
+ * ゲームの起動で作る分（art/gameTextures.ts の buildGameTextures から呼ぶ）：地形のタイルと、瓦礫・岩壁・霧・門。
+ * 立体の画面では、柵・城壁・門・瓦礫・霧のタイルを地面に平たく描く（design §14.1）。古い兵の絵と立った地形の絵は作らない。
+ * buildTextures（道具のためのもの）は、中身を変えずに残す
+ */
+export function buildGameTiles(scene: Phaser.Scene): void {
+  for (const t of TERRAINS) {
+    const n = t === 'plain' ? PLAIN_VARIANTS : 1;
+    for (let v = 0; v < n; v++) makeCanvasTexture(scene, tileKey(t, v), TILE, TILE, (ctx) => paintTerrain(ctx, t, v));
+  }
+  buildStage4Textures(scene);
 }
 
 /** 地形のタイルの見本を返す（段階4の確かめ用。開発用の口から使う） */
