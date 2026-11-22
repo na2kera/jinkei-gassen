@@ -1,8 +1,9 @@
 // 遊軍（design §7.7、§7.9 の R14）：隠す情報、現れたあとの場面、もう一戦、配置の検査、組で扱うこと、
 // 現れた直後の作り直し、古い画面の入り直し、遊軍のエラーの op と、渡す前の入力は陣営ごとに1つまで、同じ刻みの遊軍と号令。
 
+import { plainField, PVP_RULES } from '@jinkei/engine';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client, army, holdArmy, loneArcherArmy, setupPair, startServer, stepTicks, testRoute, unpack } from './helpers.mjs';
+import { Client, army, attackArmy, BACK, FRONT, holdArmy, loneArcherArmy, MID, ZONE, zc, zoneArmy, setupPair, startServer, stepTicks, testRoute, unpack } from './helpers.mjs';
 
 let server;
 beforeAll(async () => {
@@ -59,10 +60,11 @@ async function stepToEnd(code, chunk = 20) {
 describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令。刻みを手で進める）', () => {
   it('現れた遊軍は両者の snap に出る。現れた直後に作り直しても消えず、二度は呼べない。渡す前の入力は1つまで。同じ刻みの号令もかかる', async () => {
     // A（陣営0）は本陣と弓兵1（どちらも中央の翼。左翼と右翼はだれもいない）、遊軍は騎兵・守備。
-    // B（陣営1）は盾兵11の壁（守備）、遊軍は歩兵・守備。弓兵が撃ち続けるので膠着にならず、時間切れまで続く
+    // B（陣営1）は盾兵の壁（守備。遊軍の歩兵と合わせて予算に収まる数）、遊軍は歩兵・守備。弓兵が撃ち続けるので膠着にならず、時間切れまで続く
     const timing = { tickMs: 100, revealMs: 300, maxTicks: 400, setupMs: 30_000, watchdogMs: 1000, testManualTicks: 1 };
     let { A, B, code } = await setupPair(server.base, timing, { cv: [3, 3] });
-    const wall = army([['hq', 5, 15, 'hold'], ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((c) => ['shield', c, 10, 'hold'])]);
+    const nShield = Math.min(ZONE.width, Math.floor((PVP_RULES.budget - PVP_RULES.costs.infantry) / PVP_RULES.costs.shield));
+    const wall = zoneArmy([['hq', 4, ZONE.height - 1, 'hold'], ...Array.from({ length: nShield }, (_, c) => ['shield', c + ZONE.width - nShield, 0, 'hold'])]);
     const aReserve = { kind: 'cavalry', stance: 'hold' };
     const bReserve = { kind: 'infantry', stance: 'hold' };
     A.send({ type: 'ready', army: loneArcherArmy(), reserve: aReserve });
@@ -115,15 +117,17 @@ describe('遊軍を呼ぶ（R14 b・f・h、同じ刻みの遊軍と号令。刻
     expect(ev).toEqual({ type: 'reserve', tick: 62, side: 1, unit: nUnits, from: 'left' });
     expect(sa.events.find((e) => e.type === 'reserve')).toEqual(ev);
     expect(sb.reserve).toEqual({ ...bReserve, state: 'used' });
-    // 現れた部隊は、ふつうの部隊として両者の units に入る。B から見て左（自分が下の座標で列 0・行 8）、A から見て右上（列 11・行 7）
+    // 現れた部隊は、ふつうの部隊として両者の units に入る。B から見て左の端の列（通り道）で、中央の線のすぐ自陣側の行
+    // （10×12 の盤なら、自分が下の座標で列 0・行 6）。A から見て右上（列 9・行 5）
+    const f = plainField();
     const unitB = sb.units.map(unpack).find((u) => u.id === nUnits);
     expect(unitB).toMatchObject({ side: 1, kind: 'infantry', wing: 'left', stance: 'hold' });
     expect(Math.abs(unitB.x - 0.5)).toBeLessThan(0.6);
-    expect(Math.abs(unitB.y - 8.5)).toBeLessThan(0.6);
+    expect(Math.abs(unitB.y - (f.height / 2 + 0.5))).toBeLessThan(0.6);
     const unitA = sa.units.map(unpack).find((u) => u.id === nUnits);
     expect(unitA).toMatchObject({ side: 1, kind: 'infantry', wing: 'left', stance: null });
-    expect(Math.abs(unitA.x - 11.5)).toBeLessThan(0.6);
-    expect(Math.abs(unitA.y - 7.5)).toBeLessThan(0.6);
+    expect(Math.abs(unitA.x - (f.width - 0.5))).toBeLessThan(0.6);
+    expect(Math.abs(unitA.y - (f.height / 2 - 0.5))).toBeLessThan(0.6);
 
     // --- 作り直す（保存は刻み 64 より前の 63 のまま。定期の保存は 60 なので、すぐ保存していなければ遊軍は消える）。
     // 戻っても遊軍は現れたまま、もう一度は呼べない
@@ -190,16 +194,7 @@ describe('隠す情報：届く列そのもの（R14 a。刻みを手で進め�
     // A（陣営0）が攻める。B（陣営1）は守備で、遊軍を呼ばないまま兵が減る
     // 公開の段階で入り直すため、公開は長めにとる（入り直しが終わる前に戦闘に移ると、列が変わってテストが落ちる）
     const timing = { tickMs: 100, revealMs: 3000, maxTicks: 600, setupMs: 30_000, testManualTicks: 1 };
-    const attack = army([
-      ['hq', 5, 15, 'hold'],
-      ['infantry', 2, 10, 'advance'],
-      ['infantry', 4, 10, 'advance'],
-      ['infantry', 6, 10, 'advance'],
-      ['infantry', 8, 10, 'advance'],
-      ['cavalry', 0, 11, 'hunt'],
-      ['cavalry', 11, 11, 'hunt'],
-      ['archer', 5, 12, 'advance'],
-    ]);
+    const attack = attackArmy();
     const run = async (variant) => {
       const { A, B, code } = await setupPair(server.base, timing, { cv: [3, 3], seed: 20261119 });
       // A の接続を入り直すたびに足していく（列は、全部の接続に届いたものを順につないだもの）
@@ -296,21 +291,24 @@ describe('配置の検査・組で扱う・もう一戦（R14 c・d・e）', () 
       c.send(msg);
       return c.waitMsg((m) => m.type === 'error', { from, label: 'army error' });
     };
-    // 値段 32 の配置（本陣・盾兵8・騎兵2）
-    const army32 = army([
-      ['hq', 5, 15, 'hold'],
-      ...[1, 2, 3, 4, 5, 6, 7, 8].map((c) => ['shield', c, 11, 'hold']),
-      ['cavalry', 0, 12, 'advance'],
-      ['cavalry', 11, 12, 'advance'],
+    // 騎兵の遊軍と合わせて予算ちょうどになる配置（本陣・盾兵・騎兵2。予算 24 なら盾兵4 で値段 20）
+    const C = PVP_RULES.costs;
+    const nShield = (PVP_RULES.budget - C.cavalry * 3) / C.shield;
+    expect(Number.isInteger(nShield) && nShield > 0 && nShield <= ZONE.width).toBe(true);
+    const armyFull = army([
+      ['hq', MID, BACK, 'hold'],
+      ...Array.from({ length: nShield }, (_, i) => ['shield', zc(i + 2), FRONT + 1, 'hold']),
+      ['cavalry', zc(0), FRONT + 2, 'advance'],
+      ['cavalry', zc(ZONE.width - 1), FRONT + 2, 'advance'],
     ]);
-    // 予算を遊軍で超える：32 + 2 (歩兵) + 4（騎兵の遊軍）= 38
-    const army34 = [...army32, { kind: 'infantry', col: 5, row: 13, stance: 'advance' }];
-    let e = await errOf(B, { type: 'ready', army: army34, reserve: { kind: 'cavalry', stance: 'advance' } });
+    // 予算を遊軍で超える：予算ちょうど − 騎兵の遊軍 + 歩兵 + 騎兵の遊軍
+    const armyOver = [...armyFull, { kind: 'infantry', col: MID, row: FRONT + 2, stance: 'advance' }];
+    let e = await errOf(B, { type: 'ready', army: armyOver, reserve: { kind: 'cavalry', stance: 'advance' } });
     expect(e.reason).toBe('invalid_army');
     expect(e.armyErrors.map((x) => x.code)).toEqual(['over_budget']);
-    // 戦場 16 部隊（本陣と歩兵15）+ 遊軍
-    const army16 = army([['hq', 5, 15, 'hold'], ...Array.from({ length: 15 }, (_, i) => ['infantry', i % 12, 10 + Math.floor(i / 12), 'advance'])]);
-    e = await errOf(B, { type: 'ready', army: army16, reserve: { kind: 'infantry', stance: 'advance' } });
+    // 戦場に本陣と歩兵（部隊数の上限ちょうど）+ 遊軍で、上限を 1 超える
+    const armyMany = army([['hq', MID, BACK, 'hold'], ...Array.from({ length: PVP_RULES.maxUnits }, (_, i) => ['infantry', zc(i % ZONE.width), FRONT + Math.floor(i / ZONE.width), 'advance'])]);
+    e = await errOf(B, { type: 'ready', army: armyMany, reserve: { kind: 'infantry', stance: 'advance' } });
     expect(e.armyErrors.map((x) => x.code)).toEqual(['too_many_units']);
     // 本陣を遊軍に・知らない方針（どちらも index なし）
     e = await errOf(B, { type: 'ready', army: holdArmy(), reserve: { kind: 'hq', stance: 'hold' } });
@@ -326,14 +324,14 @@ describe('配置の検査・組で扱う・もう一戦（R14 c・d・e）', () 
     const sentinel = await errOf(B, { type: 'ready', army: holdArmy(), reserve: { kind: 'hq', stance: 'hold' } });
     expect(sentinel.armyErrors).toEqual([expect.objectContaining({ code: 'invalid_kind' })]);
     expect(B.messages.slice(fromB, B.messages.indexOf(sentinel))).toEqual([]);
-    // 予算ちょうど（32 + 騎兵の遊軍 4 = 36）は通る
-    B.send({ type: 'ready', army: army32, reserve: { kind: 'cavalry', stance: 'advance' } });
+    // 予算ちょうど（配置 + 騎兵の遊軍 = 予算）は通る
+    B.send({ type: 'ready', army: armyFull, reserve: { kind: 'cavalry', stance: 'advance' } });
     await A.waitRoom((r) => r.seats[1].ready === true, 5000, 'B ready');
 
     // A：正しい組のあとに、正しくない下書き（配置が不正・遊軍が不正）を送り、時間切れを待つ
     const good = { army: holdArmy(), reserve: { kind: 'cavalry', stance: 'flank' } };
     A.send({ type: 'draft', ...good });
-    const twoHq = [...holdArmy(), { kind: 'hq', col: 0, row: 15, stance: 'hold' }];
+    const twoHq = [...holdArmy(), { kind: 'hq', col: zc(0), row: BACK, stance: 'hold' }];
     A.send({ type: 'draft', army: twoHq, reserve: { kind: 'archer', stance: 'hold' } });
     A.send({ type: 'draft', army: holdArmy().slice(0, 5), reserve: { kind: 'hq', stance: 'hold' } });
     // 番兵：正しくない組での確定（エラーが返る。最後に検査を通った組は変えない）。返事が届けば、前の3通の下書きは処理済み

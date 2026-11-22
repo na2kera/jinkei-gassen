@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pvpField } from '@jinkei/engine';
 
 const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WRANGLER_JS = join(SERVER_DIR, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
@@ -276,43 +277,81 @@ export async function setupPair(base, timing, { names = ['A', 'B'], map = 'plain
 }
 
 /**
- * 「自分が下」の座標の配置を作る。下側の6行（行 10〜15）に置く。
- * cells は [kind, col, row, stance] の並び。
+ * 「自分が下」の座標の配置を作る。cells は [kind, col, row, stance] の並び（戦場の列と行）。
  */
 export function army(cells) {
   return cells.map(([kind, col, row, stance]) => ({ kind, col, row, stance }));
 }
 
 /**
- * 全部隊が守備の軍。予算 36 以内。この軍どうしは、だれも攻めず動かないので、開戦から 10 秒（100 刻み）で膠着の引き分けになる
- * （design §3.6.4、§3.9 A11）。maxTicks が 100 以下なら時間切れの引き分け
+ * 「自分が下」の配置エリア（平原の戦場の zones[0]。通り道の列を含まない。design §13.2・§13.6）。
+ * テストの軍は、行や列を直書きせず、このエリアから作る
+ */
+export const ZONE = pvpField('plain').zones[0];
+/** エリアの最前列と最後列の行（戦場の行） */
+export const FRONT = ZONE.row;
+export const BACK = ZONE.row + ZONE.height - 1;
+/** エリアの中の列（0 がエリアの左端）を、戦場の列に直す */
+export const zc = (i) => ZONE.col + i;
+/** エリアのまん中の列（戦場の列） */
+export const MID = zc(Math.floor(ZONE.width / 2));
+
+/**
+ * エリアの左上を原点にした [kind, 列, 行, stance] の並びから、「自分が下」の座標の配置を作る
+ */
+export function zoneArmy(cells) {
+  return cells.map(([kind, c, r, stance]) => ({ kind, col: zc(c), row: FRONT + r, stance }));
+}
+
+/**
+ * 全部隊が守備の軍（値段 20・9 部隊。どの遊軍（値段 4 まで）を足しても予算 24 に収まる）。この軍どうしは、だれも攻めず動かないので、開戦から 10 秒（100 刻み）で膠着の引き分けになる
+ * （design §3.6.4、§3.9 A11）。maxTicks が 100 以下なら時間切れの引き分け。
+ * 新しい盤（10×12、通り道つき）でも、engine で種 400 個を流して、すべて 100 刻みの膠着になることを確かめた（design §13.6）
  */
 export function holdArmy() {
-  return army([
-    ['hq', 5, 15, 'hold'],
-    ['shield', 3, 11, 'hold'],
-    ['shield', 5, 11, 'hold'],
-    ['shield', 7, 11, 'hold'],
-    ['infantry', 2, 12, 'hold'],
-    ['infantry', 4, 12, 'hold'],
-    ['infantry', 6, 12, 'hold'],
-    ['infantry', 8, 12, 'hold'],
-    ['archer', 4, 13, 'hold'],
-    ['archer', 6, 13, 'hold'],
+  const back = ZONE.height - 1;
+  return zoneArmy([
+    ['hq', 4, back, 'hold'],
+    ['shield', 2, 0, 'hold'],
+    ['shield', 4, 0, 'hold'],
+    ['shield', 6, 0, 'hold'],
+    ['infantry', 1, 1, 'hold'],
+    ['infantry', 3, 1, 'hold'],
+    ['infantry', 5, 1, 'hold'],
+    ['infantry', 7, 1, 'hold'],
+    ['archer', 4, 2, 'hold'],
+  ]);
+}
+
+/**
+ * 勝ち負けが付く、動きのある配置（前進と本陣狙い）。騎兵はエリアの両端の列（通り道のすぐ内側）に置く
+ */
+export function attackArmy() {
+  const back = ZONE.height - 1;
+  return zoneArmy([
+    ['hq', 4, back, 'hold'],
+    ['infantry', 1, 0, 'advance'],
+    ['infantry', 3, 0, 'advance'],
+    ['infantry', 5, 0, 'advance'],
+    ['infantry', 7, 0, 'advance'],
+    ['cavalry', 0, 1, 'hunt'],
+    ['cavalry', ZONE.width - 1, 1, 'hunt'],
+    ['archer', 4, 2, 'advance'],
   ]);
 }
 
 /**
  * 攻撃が続いて時間切れになる組（design §3.9 の「この決まりで意味が変わる、いまあるテストと集計」）。
- * 盾の壁（本陣と盾兵12、全部隊が守備）を、本陣と弓兵1（前進）の軍が端から1部隊ずつ撃ち続ける。弓兵は盾兵の近接の距離に入らず、
+ * 盾の壁（本陣と、配置エリアの最前列いっぱいの盾兵。全部隊が守備）を、本陣と弓兵1（前進）の軍が端から1部隊ずつ撃ち続ける。弓兵は盾兵の近接の距離に入らず、
  * 盾兵は撃たれても持ち場を離れないので、毎刻みだれかが撃つか動こうとしていて膠着にならず、3分では決着しない。
- * engine で種400個を流して、すべて 1800 刻みの時間切れ（弓兵の側の勝ち）になることを確かめた（盾の壁の側が翼ごとに堅守を3回出しても同じ）
+ * engine で種400個を流して、すべて 1800 刻みの時間切れ（弓兵の側の勝ち）になることを確かめた（盾の壁の側が翼ごとに堅守を3回出しても同じ）。
+ * 新しい盤（盾兵 8、値段 24）でも、種 400 個がすべて時間切れになることを確かめた（堅守の号令の場合は、測り直していない）
  */
 export function shieldWallArmy() {
-  return army([['hq', 5, 15, 'hold'], ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((c) => ['shield', c, 10, 'hold'])]);
+  return zoneArmy([['hq', 4, ZONE.height - 1, 'hold'], ...Array.from({ length: ZONE.width }, (_, c) => ['shield', c, 0, 'hold'])]);
 }
 export function loneArcherArmy() {
-  return army([['hq', 5, 15, 'hold'], ['archer', 5, 10, 'advance']]);
+  return zoneArmy([['hq', 4, ZONE.height - 1, 'hold'], ['archer', 4, 0, 'advance']]);
 }
 
 /** 部隊を名前つきの形に戻す（PackedUnit の並び、protocol.ts） */
