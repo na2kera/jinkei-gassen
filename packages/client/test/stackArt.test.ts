@@ -211,7 +211,8 @@ const GOLDEN: Record<string, string> = JSON.parse(fs.readFileSync(new URL('./sta
 test('S7 焼いた絵が、試作と一致したときの絵のまま（画素の要約）', () => {
   const got: Record<string, string> = {};
   for (const [k, s] of SHEETS) got[k] = hash(new Uint32Array(s.rgba));
-  if (process.env.JG_WRITE_GOLDEN === '1') fs.writeFileSync(new URL('./stackArt.golden.json', import.meta.url), JSON.stringify(got, null, 1) + '\n');
+  // 書き直しは、試作と比べられるときだけ（比べずに要約を書き換えないため）
+  if (process.env.JG_WRITE_GOLDEN === '1' && HAVE_PROTO) fs.writeFileSync(new URL('./stackArt.golden.json', import.meta.url), JSON.stringify(got, null, 1) + '\n');
   assert.deepEqual(got, GOLDEN);
 });
 
@@ -451,4 +452,47 @@ test('S15 型の箱の文字は、どれも色の対応がある', () => {
   };
   for (const id of MODEL_IDS) check(makeModel(dimsOf(id), carve(dimsOf(id), modelParts(id, 0), id)));
   for (const v of TREE_IDS) check(makeModel(TREE_DIMS, carve(TREE_DIMS, treeParts(v), 'tree')));
+});
+
+test('J6 できた揃いを捨ててから頼み直すと、同じ列で作り直す（主スレッドの列で、捨てて頼み直したとき）', () => {
+  const order: string[] = [];
+  const q = new BakeQueue((s) => order.push(s.key));
+  const reveal = (): TaskSpec[] => setSheets('reveal').map((spec): TaskSpec => ({ t: 'sheet', spec }));
+  q.push(reveal());
+  q.runAll();
+  assert.equal(order.length, 8);
+  q.cancel('reveal');
+  q.front(reveal());
+  q.runAll();
+  assert.equal(order.length, 16);
+  assert.deepEqual(order.slice(8), order.slice(0, 8));
+});
+
+test('Q4 配置の画面（縮み 1）で、左右の隣のマスの部隊の絵の横の重なりが 2px 以下（全部の型の組み合わせ。design §14.8）', () => {
+  // 自軍は上向き（番号 0）、敵軍は下向き（番号 N/2）。部隊のまん中は 32px 離れる。3 体の並びのいちばん外の兵の、焼いた絵の範囲で比べる
+  const ext = (id: ModelId, team: 0 | 1): { left: number; right: number } => {
+    const s = SHEETS.get(`stk-deploy-${id}`)!;
+    return s.frames.find((f) => f.name === soldierFrameName(team, 0, team === 0 ? 0 : ANGLES / 2))!.ext;
+  };
+  const heading = { 0: -Math.PI / 2, 1: Math.PI / 2 } as const;
+  const kinds = ['infantry', 'shield', 'archer', 'cavalry', 'hq'] as const;
+  let worst = -Infinity;
+  for (const team of [0, 1] as const)
+    for (const a of kinds)
+      for (const b of kinds) {
+        // 左の部隊の右の端と、右の部隊の左の端（盤の px。表示の倍率 1）
+        let right = -Infinity;
+        for (let slot = 0; slot < 3; slot++) {
+          const o = slotOffset(heading[team], slot, 3)!;
+          right = Math.max(right, o.u + ext(modelFor(a, 3, slot), team).right);
+        }
+        let left = Infinity;
+        for (let slot = 0; slot < 3; slot++) {
+          const o = slotOffset(heading[team], slot, 3)!;
+          left = Math.min(left, 32 + o.u - ext(modelFor(b, 3, slot), team).left);
+        }
+        worst = Math.max(worst, right - left);
+      }
+  if (process.env.JG_VERBOSE) console.log(`横の重なりの最大 ${worst.toFixed(2)}px`);
+  assert.ok(worst <= 2, `横の重なり ${worst.toFixed(2)}px`);
 });

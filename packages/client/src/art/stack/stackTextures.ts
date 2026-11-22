@@ -232,13 +232,14 @@ class StackTextures {
       try {
         const w = new Worker(new URL('./bakeWorker.ts', import.meta.url), { type: 'module' });
         w.onmessage = (e: MessageEvent<FromWorker>): void => this.onWorkerMessage(w, e.data);
-        w.onerror = (e: ErrorEvent): void => {
+        // onmessageerror の属性は、ヘッドレスの Chrome で送った messageerror を受け取らなかったので、どちらも addEventListener で受ける
+        w.addEventListener('error', (e: ErrorEvent): void => {
           e.preventDefault();
           if (w === this.worker) this.failWorker(`error: ${e.message}`);
-        };
-        w.onmessageerror = (): void => {
+        });
+        w.addEventListener('messageerror', (): void => {
           if (w === this.worker) this.failWorker('messageerror');
-        };
+        });
         this.worker = w;
         this.workerState = 'running';
         this.stats.workersStarted++;
@@ -316,6 +317,9 @@ class StackTextures {
       if (!more) {
         q.dropModels();
         this.mainQ = null;
+        // 捨ててから頼み直した揃いなど、まだ要る絵が残っていれば、新しい列で続ける（ワーカーの「終わった」と同じ）
+        const rest = this.missing();
+        if (rest.length > 0) this.runOnMain(rest.map((spec): TaskSpec => ({ t: 'sheet', spec })));
       }
     }
     const next = this.inbox.shift();

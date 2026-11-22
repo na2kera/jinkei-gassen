@@ -216,8 +216,9 @@ export class BakeQueue {
     this.pending = [...tasks, ...this.pending.filter((t) => !(t.t === 'sheet' && keys.has(t.spec.key)))];
   }
 
-  /** その揃いの、まだできていない仕事を捨てる（途中のものもやめる） */
+  /** その揃いの、まだできていない仕事を捨てる（途中のものもやめる）。できた絵も「できていない」に戻す（捨てた揃いは、頼み直せば作り直す） */
   cancel(set: SetId): void {
+    for (const s of setSheets(set, this.n)) this.skip.delete(s.key);
     this.pending = this.pending.filter((t) => !(t.t === 'sheet' && t.spec.set === set));
     if (this.cur && this.cur.task.t === 'sheet' && this.cur.task.spec.set === set) this.cur = null;
   }
