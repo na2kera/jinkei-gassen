@@ -210,7 +210,7 @@ export function deployReserveSlot(l: Layout, pvp: boolean): Rect {
     return { x: s.x + 40, y: s.y, w: 104, h: s.h };
   }
   const head = pvpDeployPanel(l);
-  // 予算の残り（「残り 36」で幅 60px ほど）の右から、「音あり」の手前 4px まで
+  // 予算の残り（「残り 24」で幅 60px ほど）の右から、「音あり」の手前 4px まで
   const x = head.budget.x + 68;
   return { x, y: head.back.y, w: head.mute.x - 4 - x, h: head.back.h };
 }
