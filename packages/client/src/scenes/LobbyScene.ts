@@ -46,7 +46,7 @@ export class LobbyScene extends Phaser.Scene {
     this.shownInRoom = null;
     this.rulesDialog = null;
     const l = lobbyLayout(layout);
-    this.statusText = addText(this, Math.round(l.centerX), l.status, '', 16, COLOR.red).setOrigin(0.5, 0).setAlign('center');
+    this.statusText = addText(this, Math.round(l.centerX), l.status, '', 16, COLOR.red).setOrigin(0.5, 0).setAlign('center').setLineSpacing(4);
     this.build();
     // 部屋の様子が変わったら、表示物だけを組み直す（入った・失敗した など）。画面を移すのは pvp.ts
     this.unsubscribe = client.subscribe(() => this.build());
