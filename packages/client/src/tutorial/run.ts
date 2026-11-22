@@ -16,14 +16,14 @@ let battle: LocalBattleSource | null = null;
 /** 始める前の面（ステージ選択から始めたときは、終えたら戻す） */
 let prevStageId = '';
 
-/** チュートリアルを始める。配置は空から */
+/** チュートリアルを始める。配置は本陣だけから（本陣は最初から置いてある。design §15.7） */
 export function startTutorial(from: TutorialRun['from']): void {
   if (!session.tutorial) prevStageId = session.stageId;
   battle?.dispose();
   battle = null;
   session.tutorial = newRun(from);
   session.stageId = TUTORIAL_STAGE.id;
-  session.placements = [];
+  session.placements = session.tutorial.placed.map((p) => ({ ...p }));
   session.reserve = null;
 }
 

@@ -9,9 +9,7 @@ import {
   computeLayout,
   deployInfo,
   deployPanel,
-  deployReserveSlot,
   lobbyLayout,
-  pvpDeployPanel,
   resultLayout,
   stageSelectLayout,
   titleLayout,
@@ -149,20 +147,22 @@ function screens(l: Layout): Screen[] {
     const info = deployInfo(l, false);
     out.push({
       name: '配置',
-      buttons: [d.back, d.mute, ...d.roster, ...d.templates, d.formations, d.start, ...(info.hintButton ? [info.hintButton] : []), deployReserveSlot(l, false)],
+      buttons: [d.back, d.mute, ...d.cards, ...d.templates, d.formations, d.start, ...(info.hintButton ? [info.hintButton] : []), d.reserve],
       obstacles: [field],
     });
-    // チュートリアル：「飛ばす」が広く、遊軍の枠と「？」がない
-    out.push({ name: 'チュートリアルの配置', buttons: [tutorialDeployHead(l).back, d.mute, ...d.roster.slice(0, 2), d.start], obstacles: [field] });
+    // チュートリアル：「飛ばす」が広く、遊軍の枠と「？」がない（カードは歩兵だけ。「開戦」は欄の幅いっぱい）
+    out.push({ name: 'チュートリアルの配置', buttons: [tutorialDeployHead(l).back, d.mute, d.cards[0]!, d.startFull], obstacles: [field] });
   }
   // 対戦の配置
   {
-    const d = pvpDeployPanel(l);
+    // 1人用と同じ並び（design §15.2）。遊軍を使えない部屋では、枠を出さず「完了」を欄の幅いっぱいにする
+    const d = deployPanel(l);
     out.push({
       name: '対戦の配置',
-      buttons: [d.back, d.mute, ...d.roster, ...d.minus.slice(1), ...d.plus.slice(1), ...d.templates, d.formations, d.start, deployReserveSlot(l, true)],
+      buttons: [d.back, d.mute, ...d.cards, ...d.templates, d.formations, d.start, d.reserve],
       obstacles: [field],
     });
+    out.push({ name: '対戦の配置（遊軍なし）', buttons: [d.back, d.mute, ...d.cards, ...d.templates, d.formations, d.startFull], obstacles: [field] });
   }
   // 戦闘（遊軍のボタンも出ているとき）
   {
@@ -235,14 +235,16 @@ test('M6 iPhone SE の縦（320×564。縦長の下限。design §14.6）で、�
     return growRects(s.buttons, s.obstacles, bounds, HIT_GROW_MAX)[i]!;
   };
   const d = deployPanel(l);
-  const roster = grownOf('配置', d.roster[1]!);
-  assert.ok(roster.h > d.roster[1]!.h && roster.w > d.roster[1]!.w, '配置の兵種');
+  const card = grownOf('配置', d.cards[1]!);
+  assert.ok(card.h > d.cards[1]!.h && card.w > d.cards[1]!.w, '配置の手札のカード');
   const tpl = grownOf('配置', d.templates[1]!);
   assert.ok(tpl.h > d.templates[1]!.h, 'ひな形');
   const b = battlePanel(l);
   const order = grownOf('戦闘', b.orders[1]!);
   assert.ok(order.h > b.orders[1]!.h, '号令');
-  const p = pvpDeployPanel(l);
-  const minus = grownOf('対戦の配置', p.minus[1]!);
-  assert.ok(minus.h > p.minus[1]!.h, '対戦の配置の「−」');
+  // 置き換え：もとは対戦の「−」。「＋」「−」はなくなったので、対戦の手札のカードと遊軍の枠で確かめる
+  const pc = grownOf('対戦の配置', d.cards[2]!);
+  assert.ok(pc.h > d.cards[2]!.h, '対戦の配置の手札のカード');
+  const slot = grownOf('対戦の配置', d.reserve);
+  assert.ok(slot.h > d.reserve.h || slot.w > d.reserve.w, '対戦の配置の遊軍の枠');
 });

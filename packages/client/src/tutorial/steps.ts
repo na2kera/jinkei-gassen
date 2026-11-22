@@ -13,8 +13,8 @@ import {
   type Stance,
 } from '@jinkei/engine';
 
+// 本陣は最初から置いてあるので、本陣を置く手順はない（design §15.7）
 export type TutorialStep =
-  | 'placeHq' // 本陣を置く
   | 'placeInf' // 歩兵を3つ置く
   | 'tapUnit' // 真ん中の歩兵を押す
   | 'pickStance' // 「本陣狙い」を選ぶ
@@ -28,9 +28,9 @@ export interface TutorialRun {
   step: TutorialStep;
   /** どこから始めたか。終わったあとの行き先を決める */
   from: 'auto' | 'list';
-  /** 兵種のボタンで選んでいる兵種（placeHq・placeInf の間） */
+  /** 手札のカードで選んでいる兵種（placeInf の間。カードを光るマスへ離したときも、選んでから置いたとして扱う） */
   picked: Kind | null;
-  /** 置いた部隊（置いた順） */
+  /** 置いた部隊（置いた順。はじめから本陣が入っている） */
   placed: Placement[];
   /** order の手順で「全軍」を押したか */
   targetPicked: boolean;
@@ -64,8 +64,8 @@ export interface TutorialLit {
   next: boolean;
 }
 
-/** 本陣を置くマス */
-const HQ_CELL = cellOf(TUTORIAL_ARMY.find((p) => p.kind === 'hq')!);
+/** 最初から置いてある本陣 */
+const HQ = TUTORIAL_ARMY.find((p) => p.kind === 'hq')!;
 /** 歩兵を置くマス（TUTORIAL_ARMY の順） */
 const INF_CELLS = TUTORIAL_ARMY.filter((p) => p.kind === 'infantry').map(cellOf);
 /** 押す部隊のマス（方針を変える部隊） */
@@ -80,7 +80,7 @@ function same(a: { col: number; row: number }, b: { col: number; row: number }):
 }
 
 export function newRun(from: 'auto' | 'list'): TutorialRun {
-  return { step: 'placeHq', from, picked: null, placed: [], targetPicked: false };
+  return { step: 'placeInf', from, picked: null, placed: [{ ...HQ }], targetPicked: false };
 }
 
 /** まだ空いている、歩兵を置くマス */
@@ -91,10 +91,6 @@ function freeInfCells(run: TutorialRun): { col: number; row: number }[] {
 /** いまその操作をしてよいか */
 export function allowed(run: TutorialRun, a: TutorialAction): boolean {
   switch (run.step) {
-    case 'placeHq':
-      if (a.type === 'pickKind') return a.kind === 'hq';
-      if (a.type === 'cell') return run.picked === 'hq' && same(a, HQ_CELL);
-      return false;
     case 'placeInf':
       if (a.type === 'pickKind') return a.kind === 'infantry';
       if (a.type === 'cell') return run.picked === 'infantry' && freeInfCells(run).some((c) => same(c, a));
@@ -128,7 +124,6 @@ export function apply(run: TutorialRun, a: TutorialAction): TutorialRun {
     case 'cell': {
       const kind = run.picked!;
       const placed = [...run.placed, { kind, col: a.col, row: a.row, stance: defaultStance(kind) }];
-      if (run.step === 'placeHq') return { ...run, step: 'placeInf', picked: null, placed };
       const done = placed.filter((p) => p.kind === 'infantry').length >= INF_CELLS.length;
       return done ? { ...run, step: 'tapUnit', picked: null, placed } : { ...run, placed };
     }
@@ -154,7 +149,6 @@ export function apply(run: TutorialRun, a: TutorialAction): TutorialRun {
 
 /** 手順ごとの一行（design §8.3 の表。一字も変えない） */
 export const TUTORIAL_LINES: Record<TutorialStep, string> = {
-  placeHq: '本陣を選んで、光るマスに置こう',
   placeInf: '歩兵を3つ、光るマスに置こう',
   tapUnit: '部隊を押すと、動き方を選べる',
   pickStance: '「本陣狙い」を選ぼう',
@@ -175,13 +169,10 @@ export function line(run: TutorialRun): string {
 export function lit(run: TutorialRun): TutorialLit {
   const out: TutorialLit = { kinds: [], cells: [], stances: [], start: false, targets: [], orders: [], next: false };
   switch (run.step) {
-    case 'placeHq':
-      if (run.picked === 'hq') out.cells = [HQ_CELL];
-      else out.kinds = ['hq'];
-      break;
     case 'placeInf':
-      if (run.picked === 'infantry') out.cells = freeInfCells(run);
-      else out.kinds = ['infantry'];
+      // 歩兵のカードと、空いている光るマスを、はじめから両方とも目立たせる（引っぱって置けるように。design §15.7）
+      out.kinds = ['infantry'];
+      out.cells = freeInfCells(run);
       break;
     case 'tapUnit':
       out.cells = [UNIT_CELL];

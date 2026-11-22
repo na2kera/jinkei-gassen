@@ -117,21 +117,31 @@ function row(x: number, y: number, w: number, h: number, n: number, gap: number)
   return Array.from({ length: n }, (_, i) => ({ x: x + i * (bw + gap), y, w: bw, h }));
 }
 
-/** 配置の画面の操作の欄 */
+/**
+ * 配置の画面の操作の欄（1人用と対戦で同じ並び。違いは見出しの行のまん中の中身だけ。design §15.2）。
+ * 上から：見出し（戻る・面の名前か予算・音あり）／手札のカード4枚／ひな形の2列／（横長は知らせと陣形名）／遊軍の枠と「開戦」「完了」
+ */
 export interface DeployPanel {
-  /** ステージ選択へ戻る */
+  /** ステージ選択へ戻る（対戦は「出る」） */
   back: Rect;
-  /** 面の名前を書く場所（左端と縦の中央） */
+  /** 見出しのまん中の文字（1人用は面の名前、対戦は予算と部隊数）を書く場所（左端と縦の中央） */
   name: { x: number; y: number };
   /** 音を切るボタン */
   mute: Rect;
-  /** 手持ち5種（本陣・歩兵・盾兵・騎兵・弓兵の順） */
-  roster: Rect[];
+  /** 手札のカード4枚（歩兵・盾兵・騎兵・弓兵の順。手持ちにない兵種は出さず、左に詰める） */
+  cards: Rect[];
+  /** 手札の欄（カード4枚の場所を合わせた矩形）。盤の部隊を引っぱっている間は「ここで外す」の枠をここに出す */
+  hand: Rect;
   /** ひな形7つ */
   templates: Rect[];
   /** 陣形の保存と呼び出し（ひな形と同じ並びの8つ目） */
   formations: Rect;
+  /** 遊軍の枠（design §7.8。遊軍を出さない場面では使わない） */
+  reserve: Rect;
+  /** 遊軍の枠を出す場面の「開戦」「完了」 */
   start: Rect;
+  /** 遊軍の枠を出さない場面（チュートリアル、遊軍を使えない部屋）の「開戦」「完了」 */
+  startFull: Rect;
 }
 
 const MUTE_W = 64;
@@ -143,17 +153,30 @@ export function deployPanel(l: Layout): DeployPanel {
   const back = { x: p.x, y: p.y, w: BACK_W, h: head };
   const mute = { x: p.x + p.w - MUTE_W, y: p.y, w: MUTE_W, h: head };
   const name = { x: p.x + BACK_W + 8, y: p.y + head / 2 };
+  const span = (rs: Rect[]): Rect => {
+    const a = rs[0]!;
+    const b = rs[rs.length - 1]!;
+    return { x: a.x, y: a.y, w: b.x + b.w - a.x, h: a.h };
+  };
   if (l.mode === 'landscape') {
-    const roster = row(p.x, p.y + 42, p.w, 36, 5, 4);
-    const t1 = row(p.x, p.y + 88, p.w, 32, 4, 4);
-    const t2 = row(p.x, p.y + 124, p.w, 32, 4, 4);
-    return { back, name, mute, roster, templates: [...t1, ...t2.slice(0, 3)], formations: t2[3]!, start: { x: p.x, y: p.y + p.h - 40, w: p.w, h: 40 } };
+    const cards = row(p.x, p.y + 42, p.w, 48, 4, 4);
+    const t1 = row(p.x, p.y + 98, p.w, 32, 4, 4);
+    const t2 = row(p.x, p.y + 134, p.w, 32, 4, 4);
+    const start = { x: p.x, y: p.y + p.h - 40, w: p.w, h: 40 };
+    // 遊軍の枠は「開戦」「完了」のすぐ上。幅はひな形2つぶん（ひな形のボタンと同じ並びの左の2列にそろえる）
+    const [a, b] = row(p.x, 0, p.w, 0, 4, 4);
+    const reserve = { x: a!.x, y: start.y - 8 - 36, w: b!.x + b!.w - a!.x, h: 36 };
+    return { back, name, mute, cards, hand: span(cards), templates: [...t1, ...t2.slice(0, 3)], formations: t2[3]!, reserve, start, startFull: start };
   }
   // ひな形は1列に7つ並べると、名前が枠に触れるほど窮屈になるので、4つと3つの2列にする
-  const roster = row(p.x, p.y + 38, p.w, 32, 5, 4);
-  const t1 = row(p.x, p.y + 76, p.w, 30, 4, 4);
-  const t2 = row(p.x, p.y + 110, p.w, 30, 4, 4);
-  return { back, name, mute, roster, templates: [...t1, ...t2.slice(0, 3)], formations: t2[3]!, start: { x: p.x, y: p.y + 148, w: p.w, h: 38 } };
+  const cards = row(p.x, p.y + 36, p.w, 44, 4, 4);
+  const t1 = row(p.x, p.y + 84, p.w, 28, 4, 4);
+  const t2 = row(p.x, p.y + 116, p.w, 28, 4, 4);
+  // 下の行：左に遊軍の枠（幅 96）、右に「開戦」「完了」。遊軍の枠を出さない場面では、「開戦」「完了」を欄の幅いっぱいにする
+  const reserve = { x: p.x, y: p.y + 148, w: 96, h: 40 };
+  const start = { x: p.x + 100, y: p.y + 148, w: p.w - 100, h: 40 };
+  const startFull = { x: p.x, y: p.y + 148, w: p.w, h: 40 };
+  return { back, name, mute, cards, hand: span(cards), templates: [...t1, ...t2.slice(0, 3)], formations: t2[3]!, reserve, start, startFull };
 }
 
 /** 戦闘の画面の操作の欄 */
@@ -190,31 +213,14 @@ export function battlePanel(l: Layout): BattlePanel {
 }
 
 // ---- 遊軍（design §7.8）の置き場所 ----
-// 枠とボタンの位置は、ユーザーが実際の画面を見て決める（decisions §15）。動かすときは、この2つの関数だけを直す。
-// いまある表示物の位置は変えず、空いている所に置く：
+// 枠とボタンの位置は、ユーザーが実際の画面を見て決める（decisions §15）。動かすときは、deployPanel と battleReserveButtons だけを直す。
 //   配置・横長：操作の欄の「開戦」「完了」のすぐ上（ひな形の2列と、ヒント・陣形名の下が空いている）。
-//   配置・縦長・1人用：戦場の下の帯の「？」の右（ふだんは陣形名が右の端に出るだけで、まん中が空いている）。
-//   配置・縦長・対戦：見出しの行の、予算の残りと「音あり」のあいだ（縦長の操作の欄も帯も、ほかに空きがない）。
+//   配置・縦長：下の行の左（「開戦」「完了」の左。1人用・対戦とも。design §15.2）。
 //   戦闘・横長：視点のボタンの右に2つ。縦長：視点のボタンの下の行に2つ（右は狭く、文字が枠に触れるため）。
 
-/** 配置の画面の「遊軍」の枠。pvp は対戦の配置の画面か */
-export function deployReserveSlot(l: Layout, pvp: boolean): Rect {
-  const p = l.panel;
-  if (l.mode === 'landscape') {
-    const start = pvp ? pvpDeployPanel(l).start : deployPanel(l).start;
-    // ひな形2つぶんの幅（ひな形のボタンと同じ並びの左の2列にそろえる）
-    const [a, b] = row(p.x, 0, p.w, 0, 4, 4);
-    return { x: a!.x, y: start.y - 8 - 36, w: b!.x + b!.w - a!.x, h: 36 };
-  }
-  if (!pvp && l.strip) {
-    const s = l.strip;
-    // 「？」（幅 32）と、ヒントの文字の書き出し（s.x + 40）にそろえる
-    return { x: s.x + 40, y: s.y, w: 104, h: s.h };
-  }
-  const head = pvpDeployPanel(l);
-  // 予算の残り（「残り 24」で幅 60px ほど）の右から、「音あり」の手前 4px まで
-  const x = head.budget.x + 68;
-  return { x, y: head.back.y, w: head.mute.x - 4 - x, h: head.back.h };
+/** 配置の画面の「遊軍」の枠（公開の画面も、同じ場所に自分の遊軍を出す） */
+export function deployReserveSlot(l: Layout): Rect {
+  return deployPanel(l).reserve;
 }
 
 /** 戦闘の画面の「遊軍 左から」「遊軍 右から」（左・右の順） */
@@ -407,50 +413,6 @@ export function rulesDialogLayout(l: Layout): RulesDialogLayout {
   };
 }
 
-/** 対戦の配置の操作の欄（編成の足す・減らすが増える） */
-export interface PvpDeployPanel {
-  back: Rect;
-  /** 予算の残りを書く場所（左端と縦の中央） */
-  budget: { x: number; y: number };
-  mute: Rect;
-  roster: Rect[];
-  minus: Rect[];
-  plus: Rect[];
-  templates: Rect[];
-  /** 陣形の保存と呼び出し（ひな形と同じ並びの8つ目） */
-  formations: Rect;
-  start: Rect;
-}
-
-export function pvpDeployPanel(l: Layout): PvpDeployPanel {
-  const p = l.panel;
-  const land = l.mode === 'landscape';
-  const head = land ? 32 : 30;
-  const back = { x: p.x, y: p.y, w: BACK_W, h: head };
-  const mute = { x: p.x + p.w - MUTE_W, y: p.y, w: MUTE_W, h: head };
-  const budget = { x: p.x + BACK_W + 8, y: p.y + head / 2 };
-  const rosterY = land ? 42 : 34;
-  const rosterH = land ? 36 : 30;
-  const pmY = rosterY + rosterH + 4;
-  const pmH = land ? 28 : 24;
-  const roster = row(p.x, p.y + rosterY, p.w, rosterH, 5, 4);
-  // 足す・減らすは、兵種のボタンの下に2つ並べる
-  const minus: Rect[] = [];
-  const plus: Rect[] = [];
-  for (const r of roster) {
-    const half = Math.floor((r.w - 2) / 2);
-    minus.push({ x: r.x, y: p.y + pmY, w: half, h: pmH });
-    plus.push({ x: r.x + r.w - half, y: p.y + pmY, w: half, h: pmH });
-  }
-  const tY = pmY + pmH + (land ? 10 : 4);
-  const tH = land ? 32 : 28;
-  const t1 = row(p.x, p.y + tY, p.w, tH, 4, 4);
-  const t2all = row(p.x, p.y + tY + tH + 4, p.w, tH, 4, 4);
-  const t2 = t2all.slice(0, 3);
-  const start = land ? { x: p.x, y: p.y + p.h - 40, w: p.w, h: 40 } : { x: p.x, y: p.y + tY + 2 * tH + 8, w: p.w, h: 30 };
-  return { back, budget, mute, roster, minus, plus, templates: [...t1, ...t2], formations: t2all[3]!, start };
-}
-
 /**
  * 配置の画面で、ヒント・陣形名・対戦の知らせを出す場所。
  * 横長は操作の欄の空き（ひな形の下）に2行。縦長は戦場の下の帯に1行で、左に知らせ（またはヒントの「？」）、右に陣形名。
@@ -469,8 +431,8 @@ export function deployInfo(l: Layout, pvp: boolean): DeployInfoLayout {
   const s = l.strip;
   if (!s) {
     const p = l.panel;
-    // ひな形の下（1人用はひな形2列の下、対戦は −＋ とひな形2列の下）
-    const y = p.y + (pvp ? 214 : 172);
+    // ひな形2列の下（1人用・対戦とも）
+    const y = p.y + 176;
     return { mode: 'panel', info: { x: p.x, y, w: p.w }, formation: { x: p.x, y: y + 30, w: p.w }, hintButton: null };
   }
   const mid = s.y + s.h / 2;

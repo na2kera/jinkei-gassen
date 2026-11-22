@@ -117,7 +117,7 @@ export class RevealScene extends Phaser.Scene {
     // 自分の遊軍だけを、配置の画面と同じ場所の枠で見せる（相手の遊軍は届かないので出さない。design §7.8）
     const mine = reveal.myReserve;
     if (mine) {
-      const r = deployReserveSlot(getLayout(), true);
+      const r = deployReserveSlot(getLayout());
       drawBox(this.add.graphics(), r);
       addText(this, Math.round(r.x + r.w / 2), Math.round(r.y + r.h / 2), `${RESERVE_LABEL} ${KIND_LABEL[mine.kind]}`, 16, COLOR.cream).setOrigin(0.5, 0.5);
     }

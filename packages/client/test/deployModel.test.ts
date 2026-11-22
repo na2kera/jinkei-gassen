@@ -404,3 +404,39 @@ test('陣形の呼び出し（一人用）：手持ちの数を超える部隊�
   assert.deepEqual(b.reserve, { kind: 'infantry', stance: 'advance' });
   assert.equal(b.skipped, false);
 });
+
+// ---- 矩形（§15.2） ----
+
+test('配置の操作の欄：カード・ひな形・遊軍の枠・「開戦」「完了」が欄からはみ出さず、重ならない（縦長 3 つと横長）', async () => {
+  const { computeLayout, deployPanel, LANDSCAPE_H, LANDSCAPE_W } = await import('../src/layout.ts');
+  type R = { x: number; y: number; w: number; h: number };
+  const overlaps = (a: R, b: R): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const inside = (a: R, b: R): boolean => a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
+  for (const l of [computeLayout(390, 760), computeLayout(402, 713), computeLayout(375, 547), computeLayout(LANDSCAPE_W, LANDSCAPE_H)]) {
+    const d = deployPanel(l);
+    for (const withReserve of [true, false]) {
+      const rects: [string, R][] = [
+        ['back', d.back],
+        ['mute', d.mute],
+        ...d.cards.map((r, i): [string, R] => [`card${i}`, r]),
+        ...d.templates.map((r, i): [string, R] => [`tpl${i}`, r]),
+        ['formations', d.formations],
+        ...(withReserve ? ([['reserve', d.reserve], ['start', d.start]] as [string, R][]) : ([['start', d.startFull]] as [string, R][])),
+      ];
+      for (const [n, r] of rects) assert.ok(inside(r, l.panel), `${l.mode} ${l.height} ${n}`);
+      for (let i = 0; i < rects.length; i++) {
+        for (let j = i + 1; j < rects.length; j++) assert.ok(!overlaps(rects[i]![1], rects[j]![1]), `${l.mode} ${l.height} ${rects[i]![0]} ${rects[j]![0]}`);
+      }
+    }
+    assert.equal(d.cards.length, 4);
+    // 手札の欄は、カード 4 枚の場所を合わせた矩形
+    assert.deepEqual(d.hand, { x: d.cards[0]!.x, y: d.cards[0]!.y, w: d.cards[3]!.x + d.cards[3]!.w - d.cards[0]!.x, h: d.cards[0]!.h });
+    if (l.mode === 'portrait') {
+      assert.deepEqual(
+        d.cards.map((c) => [c.x - l.panel.x, c.y - l.panel.y, c.w, c.h]),
+        [0, 77, 154, 231].map((x) => [x, 36, 73, 44]),
+      );
+      assert.deepEqual([d.reserve.w, d.start.w, d.startFull.w], [96, 204, 304]);
+    }
+  }
+});

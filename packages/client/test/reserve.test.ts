@@ -5,16 +5,17 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { listTemplates, plainField, STAGES, STANDARD_HEIGHT, STANDARD_ROSTER, STANDARD_WIDTH, STANDARD_ZONE_WIDTH, validateStageArmy, type Placement, type ReserveView, type Roster } from '@jinkei/engine';
+import { defaultStance, listTemplates, plainField, stanceAllowed, STAGES, STANDARD_HEIGHT, STANDARD_WIDTH, STANDARD_ZONE_WIDTH, validateStageArmy, type Placement, type ReserveSetup, type ReserveView, type Roster } from '@jinkei/engine';
 import type { RoomMessage, SnapMessage } from '@jinkei/server/protocol';
 import { remainingShown, reserveNoticeAt, summonEnabled, summonShown } from '../src/battle/reserveUi.ts';
 import { BoardView } from '../src/battle/BoardView.ts';
 import { battleCam } from '../src/battle/camera.ts';
-import { battlePanel, battleReserveButtons, CELL, computeLayout, deployInfo, FIELD_COLS, FIELD_ROWS, LANDSCAPE_H, LANDSCAPE_W, deployPanel, deployReserveSlot, pvpDeployPanel, type Rect } from '../src/layout.ts';
+import { battlePanel, battleReserveButtons, CELL, computeLayout, deployInfo, FIELD_COLS, FIELD_ROWS, LANDSCAPE_H, LANDSCAPE_W, deployPanel, deployReserveSlot, type Rect } from '../src/layout.ts';
 import { draftMessage, readyMessage, reserveAllowed, roomReserve, summonMessage } from '../src/net/reserveMessages.ts';
 import { snapReserve, viewOfSnap } from '../src/net/snapView.ts';
 import { cleanReserve, copyFormation, emptySave, sanitizeSave } from '../src/saveFormat.ts';
-import { canPutReserve, newReserve, recallReserve, remainingOf, shrinkKind, templateWithReserve } from '../src/scenes/reserveSlot.ts';
+import { remainingOf } from '../src/scenes/reserveSlot.ts';
+import { dropResult, placeable, recallPlan, templatePlacements, templateRoster, type DropContext } from '../src/scenes/deployModel.ts';
 import { RESERVE_FROM_LABEL, RESERVE_LABEL } from '../src/ui/labels.ts';
 
 // ---- 保存 ----
@@ -90,46 +91,62 @@ test('手持ちの残りは、戦場と遊軍の枠の両方を引いて数え�
   assert.equal(remainingOf(roster, list, { kind: 'infantry', stance: 'advance' }, 'cavalry'), 1);
 });
 
-test('枠に入れられるのは、本陣以外で手持ちが残っていて、枠が空のときだけ', () => {
-  assert.equal(canPutReserve('cavalry', roster, list, null), true);
-  assert.equal(canPutReserve('hq', { hq: 2 }, [], null), false);
-  assert.equal(canPutReserve(null, roster, list, null), false);
-  assert.equal(canPutReserve('cavalry', roster, list, { kind: 'infantry', stance: 'advance' }), false);
-  assert.equal(canPutReserve('archer', roster, list, null), false);
-  // 方針は兵種の初期設定から
-  assert.deepEqual(newReserve('cavalry'), { kind: 'cavalry', stance: 'flank' });
+// 1人用の面の検査（手持ちの数を超えたら over_roster）を通して、枠への出し入れを調べる（design §15.4）
+const STAGE_ROSTER: Roster = roster;
+const stageCtx = (l: Placement[], r: ReserveSetup | null): DropContext => ({
+  list: l,
+  reserve: r,
+  reserveShown: true,
+  canPlace: (c) => placeable(plainField(), ZONE, c),
+  stanceOk: (k, st) => stanceAllowed(k, st),
+  check: (pl, rv) => {
+    const counts: Partial<Record<string, number>> = {};
+    for (const p of pl) counts[p.kind] = (counts[p.kind] ?? 0) + 1;
+    if (rv) counts[rv.kind] = (counts[rv.kind] ?? 0) + 1;
+    return Object.entries(counts).some(([k, n]) => (n ?? 0) > (STAGE_ROSTER[k as keyof Roster] ?? 0)) ? [{ code: 'over_roster', message: '' }] : [];
+  },
 });
 
-test('ひな形を当てると枠は空になり、手持ちを二重に数えない（7つのひな形すべて）', () => {
+// 置き換え：もとは canPutReserve（選んだ兵種を枠に入れられるか）。カードを枠へ離す・選んで枠を押す、の結果で同じことを確かめる
+test('枠に入れられるのは、本陣以外で手持ちが残っているときだけ（方針は兵種の初期設定から）', () => {
+  const put = (kind: Placement['kind'], r: ReserveSetup | null = null) => dropResult({ type: 'card', kind }, { type: 'reserve' }, stageCtx(list, r));
+  const a = put('cavalry');
+  assert.equal(a.type, 'apply');
+  if (a.type === 'apply') assert.deepEqual(a.reserve, { kind: 'cavalry', stance: defaultStance('cavalry') });
+  assert.equal(put('hq').type, 'none');
+  // 手持ちにない兵種
+  assert.equal(put('archer').type, 'none');
+  // 枠に部隊がいれば入れ替わる（前の遊軍は手持ちに戻る）。手持ちが足りなければ入らない
+  assert.equal(put('cavalry', { kind: 'infantry', stance: 'advance' }).type, 'apply');
+  assert.equal(put('infantry', { kind: 'cavalry', stance: 'flank' }).type, 'apply');
+  const two: Placement[] = [...list, { kind: 'infantry', col: MID + 1, row: ZONE.row, stance: 'hold' }];
+  assert.equal(dropResult({ type: 'card', kind: 'infantry' }, { type: 'reserve' }, stageCtx(two, null)).type, 'none');
+});
+
+// 置き換え：もとは「ひな形を当てると枠は空になる」。ひな形はいま置いている部隊を並べ替えるだけになり、枠は空に戻さない（design §15.6）
+test('ひな形は置いている部隊を並べ替えるだけで、枠はそのまま。手持ちを二重に数えない（7つのひな形すべて）', () => {
   const zone = plainField().zones[0];
-  const r: Roster = { ...STANDARD_ROSTER };
+  const reserve: ReserveSetup = { kind: 'cavalry', stance: 'flank' };
   for (const t of listTemplates()) {
-    const out = templateWithReserve(t.id, r, zone);
-    assert.equal(out.reserve, null, t.id);
-    // ひな形は手持ちの全部隊を並べる。枠に残っていたら手持ちを超える
-    for (const k of ['infantry', 'shield', 'cavalry', 'archer'] as const) assert.equal(remainingOf(r, out.placements, out.reserve, k), 0, `${t.id} ${k}`);
+    const out = templatePlacements(t.id, templateRoster(list, { hq: 1 }), zone);
+    assert.equal(out.length, list.length, t.id);
+    for (const k of ['hq', 'infantry', 'shield', 'cavalry', 'archer'] as const) {
+      assert.equal(out.filter((p) => p.kind === k).length, list.filter((p) => p.kind === k).length, `${t.id} ${k}`);
+      assert.ok(remainingOf(roster, out, reserve, k) >= 0, `${t.id} ${k}`);
+    }
   }
 });
 
+// 置き換え：もとは recallReserve。陣形の呼び出し（recallPlan）の遊軍で同じことを確かめる
 test('陣形を呼び出したとき、手持ちが残っていれば遊軍を枠に入れ、足りなければ入れない。選べない方針は初期設定に直す', () => {
+  const units = list.map((p) => ({ ...p, col: p.col - ZONE.col, row: p.row - ZONE.row }));
+  const base = { units, field: plainField(), zone: ZONE, reserveShown: true, currentHq: list[0]!, roster, check: () => [] };
   const ok = (): boolean => true;
-  assert.deepEqual(recallReserve({ kind: 'cavalry', stance: 'advance' }, roster, list, ok), { kind: 'cavalry', stance: 'advance' });
-  assert.equal(recallReserve({ kind: 'archer', stance: 'hold' }, roster, list, ok), null);
-  assert.equal(recallReserve({ kind: 'hq', stance: 'hold' }, { hq: 2 }, [], ok), null);
-  assert.equal(recallReserve(undefined, roster, list, ok), null);
-  assert.deepEqual(recallReserve({ kind: 'cavalry', stance: 'advance' }, roster, list, () => false), { kind: 'cavalry', stance: 'flank' });
-});
-
-test('対戦で兵種の数を減らすと、戦場の最後のその兵種から外し、戦場になければ枠を空にする', () => {
-  const two: Placement[] = [...list, { kind: 'infantry', col: MID + 1, row: ZONE.row, stance: 'hold' }];
-  const a = shrinkKind(two, { kind: 'infantry', stance: 'advance' }, 'infantry', 2);
-  assert.equal(a.list.filter((p) => p.kind === 'infantry').length, 1);
-  assert.deepEqual(a.reserve, { kind: 'infantry', stance: 'advance' });
-  const b = shrinkKind(list, { kind: 'cavalry', stance: 'flank' }, 'cavalry', 0);
-  assert.equal(b.reserve, null);
-  assert.equal(b.list.length, list.length);
-  const c = shrinkKind(list, { kind: 'cavalry', stance: 'flank' }, 'cavalry', 1);
-  assert.deepEqual(c.reserve, { kind: 'cavalry', stance: 'flank' });
+  assert.deepEqual(recallPlan({ ...base, reserve: { kind: 'cavalry', stance: 'advance' }, stanceOk: ok }).reserve, { kind: 'cavalry', stance: 'advance' });
+  assert.equal(recallPlan({ ...base, reserve: { kind: 'archer', stance: 'hold' }, stanceOk: ok }).reserve, null);
+  assert.equal(recallPlan({ ...base, reserve: { kind: 'hq', stance: 'hold' }, stanceOk: ok }).reserve, null);
+  assert.equal(recallPlan({ ...base, reserve: undefined, stanceOk: ok }).reserve, null);
+  assert.deepEqual(recallPlan({ ...base, reserve: { kind: 'cavalry', stance: 'advance' }, stanceOk: () => false }).reserve, { kind: 'cavalry', stance: 'flank' });
 });
 
 test('面の検査：遊軍は手持ちに数え、手持ちを超えたら over_roster（engine の validateStageArmy をそのまま使う）', () => {
@@ -138,11 +155,11 @@ test('面の検査：遊軍は手持ちに数え、手持ちを超えたら over
   const sol = stage.solution.map((p) => ({ ...p }));
   // 見本は手持ちを全部置くので、遊軍を足すと手持ちを超える
   const kind = sol.find((p) => p.kind !== 'hq')!.kind;
-  assert.ok(validateStageArmy(stage, sol, { kind, stance: newReserve(kind).stance }).some((e) => e.code === 'over_roster'));
+  assert.ok(validateStageArmy(stage, sol, { kind, stance: defaultStance(kind) }).some((e) => e.code === 'over_roster'));
   // 1部隊を戦場から外して枠に回せば通る
   const i = sol.map((p) => p.kind).lastIndexOf(kind);
   const less = sol.filter((_, j) => j !== i);
-  assert.deepEqual(validateStageArmy(stage, less, newReserve(kind)), []);
+  assert.deepEqual(validateStageArmy(stage, less, { kind, stance: defaultStance(kind) }), []);
 });
 
 // ---- 戦闘のボタン ----
@@ -248,19 +265,15 @@ test('配置の画面の「遊軍」の枠は、画面の中にあり、いま�
   for (const l of LAYOUTS) {
     const screen = { x: 0, y: 0, w: l.width, h: l.height };
     for (const pvp of [false, true]) {
-      const slot = deployReserveSlot(l, pvp);
+      // 1人用と対戦は同じ並び（design §15.2）
+      const slot = deployReserveSlot(l);
       assert.ok(inside(slot, screen), `${l.mode} ${pvp}`);
       assert.ok(!overlaps(slot, l.field), `${l.mode} ${pvp} 戦場`);
       const rects: Rect[] = [];
-      if (pvp) {
-        const p = pvpDeployPanel(l);
-        rects.push(p.back, p.mute, ...p.roster, ...p.minus, ...p.plus, ...p.templates, p.formations, p.start);
-      } else {
-        const p = deployPanel(l);
-        rects.push(p.back, p.mute, ...p.roster, ...p.templates, p.formations, p.start);
-        const info = deployInfo(l, false);
-        if (info.hintButton) rects.push(info.hintButton);
-      }
+      const p = deployPanel(l);
+      rects.push(p.back, p.mute, ...p.cards, p.hand, ...p.templates, p.formations, p.start);
+      const info = deployInfo(l, pvp);
+      if (info.hintButton) rects.push(info.hintButton);
       for (const r of rects) assert.ok(!overlaps(slot, r), `${l.mode} ${pvp} ${JSON.stringify(r)}`);
     }
   }
