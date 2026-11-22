@@ -319,10 +319,12 @@ export const STAGES: Stage[] = [
     name: '天下分け目',
     hint: '霧の奥と、三度の突撃に備えよ',
     // 行 5 が川（端から端まで）。自軍の前の中央4列（列 3〜6 × 行 8・9）が丘、左の3列（列 0〜2 × 行 7〜10）が森、右の端の行 8 の列 7・8 が柵。
-    // 敵の右奥（自軍から見て右の奥、列 7〜9 × 行 0〜2）が霧で、その中に迂回の騎兵2（見えている敵に騎兵はいない）。敵は 10・25・45 秒に全軍突撃
+    // 敵の右奥（自軍から見て右の奥、列 7〜9 × 行 0〜2）が霧で、その中に迂回の騎兵2（見えている敵に騎兵はいない）。敵は 10・25・45 秒に全軍突撃。
+    // 敵の盾兵2は右の前（列 7・8、行 3。霧の外）で、突撃のたびに右の端の柵へ正面から当たる。歩兵4は行 2 の中央（2026-11-22 に合わせ直した。
+    // 置き直したままの、盾兵が歩兵の後ろの中央にいる形では、横陣が 20 勝し、見本は 3 勝だった）
     field: terrainField(10, [['river', span(0, 9), [5]], ['hill', span(3, 6), [8, 9]], ['forest', [0, 1, 2], span(7, 10)], ['fence', [7, 8], [8]]]),
     roster: { hq: 1, infantry: 4, shield: 2, cavalry: 2, archer: 2 },
-    enemy: [hq(4, 0), ...at('infantry', 'advance', [3, 4, 5, 6], 2), ...at('shield', 'advance', [3, 4], 1), ...at('archer', 'advance', [3, 5], 0), ...at('cavalry', 'flank', [7, 8], 0)],
+    enemy: [hq(4, 0), ...at('infantry', 'advance', [3, 4, 5, 6], 2), ...at('shield', 'advance', [7, 8], 3), ...at('archer', 'advance', [3, 5], 0), ...at('cavalry', 'flank', [7, 8], 1)],
     enemyOrders: [
       { atSec: 10, target: 'all', kind: 'charge' },
       { atSec: 25, target: 'all', kind: 'charge' },
@@ -330,19 +332,22 @@ export const STAGES: Stage[] = [
     ],
     fog: cells(span(7, 9), span(0, 2)),
     win: { type: 'defeat' },
-    // 丘に守備で並び、弓兵は丘の上から撃つ。霧の騎兵が下りてくる右の端は、柵の盾兵とその後ろの歩兵で受ける。騎兵2は左の森の側から回り込む。
-    // 敵の最初の突撃の直前（9秒）に全軍に堅守、28秒に全軍突撃で押し返す
+    // 丘に守備で並び（歩兵2・盾兵1）、弓兵2は丘の上から撃つ。右の端は、柵の2マス（列 7・8）に歩兵と盾兵を守備で置き、盾兵の後ろ（列 8、行 9）に歩兵。
+    // 霧の騎兵は通り道を下りてきて、まず柵の後ろの歩兵に当たる。敵の右の盾兵は、柵の正面に当たる。騎兵2は左の森の側から回り込む。
+    // 敵の最初の突撃の直前（9秒）に中央に堅守、10秒に右翼に堅守、20秒に中央の突撃で押し返す
     solution: [
+      ...at('shield', 'hold', [8], 8),
+      ...at('infantry', 'hold', [8], 9),
+      ...at('shield', 'hold', [6], 8),
       hq(4, 11),
-      ...at('infantry', 'hold', [6, 3, 5], 8),
-      ...at('shield', 'hold', [4, 7], 8),
-      ...at('infantry', 'hold', [7], 9),
-      ...at('archer', 'hold', [3, 4], 9),
+      ...at('infantry', 'hold', [3, 4, 7], 8),
+      ...at('archer', 'hold', [4, 5], 9),
       ...at('cavalry', 'flank', [1, 2], 9),
     ],
     solutionOrders: [
-      { atSec: 9, target: 'all', kind: 'brace' },
-      { atSec: 28, target: 'all', kind: 'charge' },
+      { atSec: 9, target: 'center', kind: 'brace' },
+      { atSec: 10, target: 'right', kind: 'brace' },
+      { atSec: 20, target: 'center', kind: 'charge' },
     ],
   },
 ];

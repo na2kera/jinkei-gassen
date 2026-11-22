@@ -1,19 +1,17 @@
 // 第2章・第3章の10面（design §3.8「第2章・第3章の面」、§3.10）
 import { describe, expect, it } from 'vitest';
-import { createBattle, KIND_STATS, MAX_UNITS, STAGES, stageEnemyVisible, stageLineArmy, stageSetup, starsFor, summarize, validateStageArmy, type Placement, type Stage } from '../src/index.ts';
+import { createBattle, KIND_STATS, MAX_UNITS, STAGES, stageEnemyVisible, stageLineArmy, stageSetup, stageSetupWith, starsFor, step, summarize, terrainAt, validateStageArmy, type Placement, type Stage, type Terrain } from '../src/index.ts';
 import { STAR3_FOUND } from './fixtures/star3.ts';
 import { lineStats, ORDER_PERMS, runStage, solutionStats, STAGE_SEEDS, stageStats, templateWins } from '../sim/stagelib.ts';
 import { DIFFICULTY_LATER, STAR3_LATER, STAR3_PENDING_CH23 } from './helpers.ts';
 
 // 置き直した面（decisions §25）で、いまは通らない面。難しさを合わせたら外す
 /** 見本が18勝・星の平均2に届かない */
-const SOLUTION_LATER = new Set(['2-3', '2-5', '3-1', '3-5']); // 2-5・3-1 は 20 勝するが、星の平均が 1
+const SOLUTION_LATER = new Set(['2-3', '2-5', '3-1']); // 2-5・3-1 は 20 勝するが、星の平均が 1
 /** 横陣のままで11勝以上する */
-const LINE_LATER = new Set(['2-1', '2-2', '2-4', '3-2', '3-4', '3-5']);
+const LINE_LATER = new Set(['2-1', '2-2', '2-4', '3-2', '3-4']);
 /** そのまま置いて11勝以上するひな形が3つ以上 */
 const TEMPLATES_LATER = new Set(['3-2']);
-/** 見本を並べ替えると18勝に届かない（全15面） */
-const PERMS_LATER = new Set(['3-5']);
 
 const LATER = STAGES.filter((s) => s.chapter !== 1);
 const byId = (id: string): Stage => STAGES.find((s) => s.id === id)!;
@@ -153,11 +151,74 @@ describe('第2章・第3章の面の手ごたえ', () => {
   }, 300_000);
 });
 
+/**
+ * 見本の配置と号令を固定して流す（design §13.5「地形の学びが、新しい盤で成り立つこと」）。
+ * 星に使う残りの割合の平均と、陣営1の騎兵の突入のうち守る側が terrain のマスにいたものの数、
+ * 陣営1の騎兵が最初に近接した陣営0の部隊の、開戦のときのマス（"列,行"）ごとの数を返す
+ */
+function lessonRun(s: Stage, terrain: Terrain): { rem: number; impacts: number; impactsOnTerrain: number; firstContact: Map<string, number> } {
+  let rem = 0;
+  let impacts = 0;
+  let impactsOnTerrain = 0;
+  const firstContact = new Map<string, number>();
+  for (const seed of STAGE_SEEDS) {
+    const r = createBattle(stageSetupWith(s, s.solution, seed, s.solutionOrders ?? []));
+    if (!r.ok) throw new Error(r.error.message);
+    const st = r.value;
+    const start = new Map(st.units.map((u) => [u.id, `${Math.floor(u.x)},${Math.floor(u.y)}`]));
+    const seen = new Set<number>();
+    while (!st.outcome) {
+      for (const e of step(st, [])) {
+        if (e.type !== 'impact') continue;
+        const a = st.units[e.attacker]!;
+        const d = st.units[e.defender]!;
+        if (a.side !== 1 || a.kind !== 'cavalry') continue;
+        impacts++;
+        if (terrainAt(st.field, d.x, d.y) === terrain) impactsOnTerrain++;
+      }
+      for (const u of st.units) {
+        if (u.side !== 1 || u.kind !== 'cavalry' || u.attacking === null || seen.has(u.id)) continue;
+        seen.add(u.id);
+        const d = st.units[u.attacking]!;
+        if (d.side !== 0) continue;
+        const k = start.get(d.id)!;
+        firstContact.set(k, (firstContact.get(k) ?? 0) + 1);
+      }
+    }
+    rem += summarize(st).remainingForStars[0];
+  }
+  return { rem: rem / STAGE_SEEDS.length, impacts, impactsOnTerrain, firstContact };
+}
+
+/** 面の terrain のマスを平地に替えた面 */
+const withoutTerrain = (s: Stage, terrain: Terrain): Stage => ({ ...s, field: { ...s.field, terrain: s.field.terrain.map((t) => (t === terrain ? 'plain' : t)) } });
+
+describe('地形の学びが、新しい盤で成り立つ（地形だけを外した面と比べる。design §13.5）', () => {
+  it('3-5：右の端の柵を平地に替えると、見本の残りの割合の平均が 0.02 以上下がる。霧の騎兵が最初に当たるのは、柵の盾兵かその後ろの歩兵', () => {
+    // 実測（2026-11-22）：柵あり 0.602、柵なし 0.572（差 0.030。別の種 20 個でも 0.606 と 0.576）。
+    // 霧の騎兵2の最初の相手は、40 回とも柵の盾兵（列 8、行 8）の後ろの歩兵（列 8、行 9）
+    const s = byId('3-5');
+    const on = lessonRun(s, 'fence');
+    const off = lessonRun(withoutTerrain(s, 'fence'), 'fence');
+    expect(on.rem - off.rem, `柵あり ${on.rem} 柵なし ${off.rem}`).toBeGreaterThanOrEqual(0.02);
+    const fenceCells = s.solution.filter((p) => terrainAt(s.field, p.col + 0.5, p.row + 0.5) === 'fence');
+    const guard = fenceCells.filter((p) => p.kind === 'shield');
+    expect(guard.length).toBeGreaterThan(0);
+    // 柵の盾兵と、その真後ろの部隊
+    const ok = new Set(guard.flatMap((p) => [`${p.col},${p.row}`, `${p.col},${p.row + 1}`]));
+    const total = [...on.firstContact.values()].reduce((a, b) => a + b, 0);
+    const hit = [...on.firstContact].filter(([k]) => ok.has(k)).reduce((a, [, n]) => a + n, 0);
+    expect(total, JSON.stringify([...on.firstContact])).toBe(STAGE_SEEDS.length * s.enemy.filter((p) => p.kind === 'cavalry').length);
+    expect(hit, JSON.stringify([...on.firstContact])).toBeGreaterThanOrEqual(Math.ceil(total * 0.9));
+    const behind = s.solution.find((p) => ok.has(`${p.col},${p.row}`) && p.kind !== 'shield');
+    if (behind) expect(['infantry', 'shield']).toContain(behind.kind);
+  }, 300_000);
+});
+
 describe('置く順だけを変えても、勝ち負けが変わらない（全15面）', () => {
   // 画面は置いた順に id を振る。同点を id で割る決まりがあるので、見本が置く順に頼って勝っていないことを確かめる
   for (const s of STAGES) {
-    it(`${s.id}：見本を並べ替えても（${ORDER_PERMS.map((p) => p.name).join('・')}）、種20個のうち18個以上で勝つ`, (ctx) => {
-      ctx.skip(PERMS_LATER.has(s.id), DIFFICULTY_LATER);
+    it(`${s.id}：見本を並べ替えても（${ORDER_PERMS.map((p) => p.name).join('・')}）、種20個のうち18個以上で勝つ`, () => {
       for (const p of ORDER_PERMS) expect(stageStats(s, p.apply(s.solution), STAGE_SEEDS, s.solutionOrders ?? []).wins, p.name).toBeGreaterThanOrEqual(18);
     }, 300_000);
   }
