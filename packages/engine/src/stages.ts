@@ -198,10 +198,11 @@ export const STAGES: Stage[] = [
     index: 4,
     name: '谷の狭い道',
     hint: '狭い道なら、数の差は？',
-    // 幅 5 の谷（通り道なし）。敵は歩兵10で、自軍の 1.46 倍（敵は11部隊が上限なので、いまの面の 1.88 倍は保てない。decisions §22）
+    // 幅 5 の谷（通り道なし）。敵は盾兵5（行 3、本陣狙い）と歩兵5（行 2、前進）で、自軍の 1.46 倍（敵は11部隊が上限なので、いまの面の 1.88 倍は保てない。decisions §22）。
+    // 歩兵10（置き直したまま）では、横陣（盾兵が前進）がそのまま 20 勝した。本陣狙いの盾兵は、盾兵の列にすき間ができると本陣へ抜けてくる（2026-11-22）
     field: plainField(5),
     roster: { hq: 1, shield: 5, archer: 2 },
-    enemy: [hq(2, 0), ...at('infantry', 'advance', [0, 2, 1, 3, 4], 2), ...at('infantry', 'advance', [4, 0, 2, 1, 3], 1)],
+    enemy: [hq(2, 0), ...at('shield', 'hunt', span(0, 4), 3), ...at('infantry', 'advance', span(0, 4), 2)],
     win: { type: 'defeat' },
     // 盾兵5つで谷の幅いっぱいをふさぎ（守備）、その後ろから弓兵が撃つ。盾の正面からしか当たれないので、数の差が消える
     solution: [hq(2, 11), ...at('shield', 'hold', span(0, 4), 8), ...at('archer', 'hold', [2, 1], 9)],

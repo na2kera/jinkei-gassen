@@ -9,7 +9,7 @@ import { DIFFICULTY_LATER, STAR3_LATER, STAR3_PENDING_CH23 } from './helpers.ts'
 /** 見本が18勝・星の平均2に届かない */
 const SOLUTION_LATER = new Set([]); // 2-5・3-1 は 20 勝するが、星の平均が 1
 /** 横陣のままで11勝以上する */
-const LINE_LATER = new Set(['2-1', '2-2', '2-4', '3-2', '3-4']);
+const LINE_LATER = new Set(['2-1', '2-2', '3-2', '3-4']);
 /** そのまま置いて11勝以上するひな形が3つ以上 */
 const TEMPLATES_LATER = new Set(['3-2']);
 
