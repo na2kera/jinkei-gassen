@@ -1049,8 +1049,11 @@ export class BattleScene extends Phaser.Scene {
   }
 }
 
-/** 視点のボタンの文字（案の文字がボタンに収まらない幅なら、短い案） */
-export const USE_SHORT_VIEW_LABEL = false;
+/**
+ * 視点のボタンの文字。案（「視点：右斜め」）は、ボタン（104px）の枠の内側に収まらず、字が枠に触れたので（画像で確かめた）、
+ * 短い案（「視点：右」など）にする（design §14.11）。文言はユーザーに確かめる
+ */
+export const USE_SHORT_VIEW_LABEL = true;
 function viewLabel(m: ViewMode): string {
   return USE_SHORT_VIEW_LABEL ? VIEW_LABEL_SHORT[m] : VIEW_LABEL[m];
 }

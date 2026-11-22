@@ -33,6 +33,9 @@ export interface GateLook {
 
 let serial = 0;
 
+/** いま作ってある地面の絵の、画素 1 枚ぶんの量の合計（バイト。開発用の口に出す） */
+export const groundStats = { bytes: 0 };
+
 interface Layer {
   z: number;
   outer: Phaser.GameObjects.Container;
@@ -140,6 +143,7 @@ export class Ground {
     // 下地は 0 層目（いちばん下）
     this.addLayer(0, this.baseKey, -w / 2, -h / 2, groundLayer, true);
     this.bytes = bytes;
+    groundStats.bytes += bytes;
     // 霧の入れ物（地面と同じ変換。兵の層の上に置く）
     this.fogOuter = scene.add.container(0, 0);
     this.fogInner = scene.add.container(0, 0);
@@ -264,7 +268,9 @@ export class Ground {
   }
 
   destroy(): void {
+    if (this.layers.length > 0) groundStats.bytes -= this.bytes;
     for (const L of this.layers) L.outer.destroy();
+    this.layers.length = 0;
     this.fogOuter.destroy();
     for (const k of this.keys) if (this.scene.textures.exists(k)) this.scene.textures.remove(k);
   }

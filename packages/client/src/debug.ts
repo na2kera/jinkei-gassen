@@ -28,6 +28,7 @@ import type Phaser from 'phaser';
 import { effectCounts } from './art/effects.ts';
 import type { SetId } from './art/stack/jobs.ts';
 import { stackTextures } from './art/stack/stackTextures.ts';
+import { groundStats } from './art/stack/ground.ts';
 import { LocalBattleSource } from './battle/LocalBattleSource.ts';
 import { unitReach } from './art/formation.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
@@ -208,6 +209,20 @@ export function installDebug(game: Phaser.Game): void {
     /** 兵種ごとの、部隊の絵が中心から届く距離（px）。14.4（0.9 マスの半分）未満なら、隣の部隊と重ならない */
     get reach(): Record<string, number> {
       return Object.fromEntries(KINDS.map((k) => [k, Math.round(unitReach(k) * 100) / 100]));
+    },
+    /** ゲーム（確かめ用。1 コマの処理時間を計るため） */
+    get game(): Phaser.Game {
+      return game;
+    },
+    /**
+     * 立体の絵で載る量（MB）。兵と木は揃いごとの量 × 載る場所の数（addUint8Array なら 2）、地面は Canvas の絵なので
+     * WebGL なら 3 か所（design §14.3 の数え方）
+     */
+    get memory(): { stackMb: number; groundMb: number; totalMb: number } {
+      const st = stackTextures.status() as { loadedMb: number };
+      const places = game.renderer.type === 2 ? 3 : 2;
+      const groundMb = Math.round((groundStats.bytes * places) / 1e5) / 10;
+      return { stackMb: st.loadedMb, groundMb, totalMb: Math.round((st.loadedMb + groundMb) * 10) / 10 };
     },
     cellScreen(col: number, row: number): { x: number; y: number } | null {
       return debug.cellScreen ? debug.cellScreen(col, row) : null;
