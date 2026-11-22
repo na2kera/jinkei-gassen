@@ -90,5 +90,9 @@ export function blockedCounter(): { onTick: (s: BattleState) => void; maxTicks: 
 export const DIFFICULTY_LATER = '難しさは公開のあとに合わせる（decisions §25）';
 /** 古い盤（12×16）の手持ちで探した星3つの配置。置き直した面の手持ちと合わないので、探し直すまで止める */
 export const STAR3_LATER = '星3つの配置は古い盤のもの。公開のあとに探し直す（decisions §25）';
-/** 星3つの配置を、まだ新しい盤で探し直していない面（第2章・第3章。test/fixtures/star3.ts の記録）。探し直したら外す */
+/**
+ * 星3つの配置を、まだ新しい盤で探し直していない面（第2章・第3章。test/fixtures/star3.ts の記録）。探し直したら外す。
+ * ここに入れた面は、stages-ch23.test.ts の星3つのテストに加えて、stalemate.test.ts の K8（星3つの配置も膠着で終わらない）の対象からも外れる
+ * （いまは 3-2 を外し、K8 は 10 面のうち 9 面で確かめている）
+ */
 export const STAR3_PENDING_CH23 = new Set(['3-2']);
