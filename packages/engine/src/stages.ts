@@ -144,10 +144,12 @@ export const STAGES: Stage[] = [
     index: 1,
     name: '丘の上',
     hint: '高い所で待つと、どうなる？',
-    // 幅 6（通り道なし）。自軍の配置エリアの前の2行（行 8・9）が、端から端まで丘。兵数で勝る敵（1.29 倍）が前進してくる
+    // 幅 6（通り道なし）。自軍の配置エリアの前の2行（行 8・9）が、端から端まで丘。兵数で勝る敵（1.29 倍）が来る。
+    // 前の行（行 3）の歩兵6は本陣狙い、後ろの行（行 2）の歩兵2・盾兵2は前進。全部前進で1行奥（置き直したまま）では、
+    // 横陣（丘を下りて前進する形）が 20 勝した（2026-11-22）
     field: terrainField(6, [['hill', span(0, 5), [8, 9]]]),
     roster: { hq: 1, infantry: 4, shield: 2, archer: 2 },
-    enemy: [hq(2, 0), ...at('infantry', 'advance', span(0, 5), 2), ...at('infantry', 'advance', [1, 4], 1), ...at('shield', 'advance', [2, 3], 1)],
+    enemy: [hq(2, 0), ...at('infantry', 'hunt', span(0, 5), 3), ...at('infantry', 'advance', [1, 4], 2), ...at('shield', 'advance', [2, 3], 2)],
     win: { type: 'defeat' },
     // 丘の前の行に横一列で守備（盾兵は中央）。弓兵は丘の後ろの行で守備（丘の上なので、届く距離が伸びる）。丘を下りて戦うと押し負ける
     solution: [hq(2, 10), ...at('infantry', 'hold', [0, 1, 4, 5], 8), ...at('shield', 'hold', [2, 3], 8), ...at('archer', 'hold', [1, 4], 9)],

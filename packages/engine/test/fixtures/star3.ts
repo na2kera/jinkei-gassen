@@ -5,8 +5,8 @@ import type { Placement } from '../../src/index.ts';
 export type Row = [Placement['kind'], number, number, Placement['stance']];
 export type Ord = { atSec: number; target: 'all' | 'left' | 'center' | 'right'; kind: 'charge' | 'brace' | 'retreat' };
 export const STAR3_FOUND: Record<string, { ps: Row[]; orders: Ord[] }> = {
-  // 探索
-  '2-1': { ps: [['hq', 6, 10, 'hold'], ['infantry', 7, 10, 'hold'], ['infantry', 1, 10, 'hold'], ['infantry', 2, 10, 'hold'], ['infantry', 4, 10, 'hold'], ['infantry', 2, 15, 'hunt'], ['infantry', 0, 10, 'hold'], ['shield', 3, 10, 'hold'], ['shield', 5, 10, 'hold'], ['archer', 1, 12, 'hold'], ['archer', 5, 11, 'hold']], orders: [{ atSec: 24, target: 'all', kind: 'brace' }, { atSec: 30, target: 'right', kind: 'charge' }, { atSec: 37, target: 'all', kind: 'brace' }] },
+  // 10×12 の盤（幅 6）で探し直した（sim star 2-1 --rand 1。2026-11-22）。丘の前の行に横一列で守備、堅守のあと突撃。置く順を変えても星3つ
+  '2-1': { ps: [['hq', 4, 10, 'hold'], ['infantry', 0, 8, 'hold'], ['infantry', 3, 8, 'hold'], ['infantry', 5, 8, 'hold'], ['infantry', 4, 8, 'hold'], ['shield', 2, 8, 'hold'], ['shield', 1, 8, 'hold'], ['archer', 1, 9, 'hunt'], ['archer', 5, 10, 'hold']], orders: [{ atSec: 5, target: 'all', kind: 'brace' }, { atSec: 22, target: 'all', kind: 'charge' }, { atSec: 27, target: 'left', kind: 'charge' }] },
   // 探索
   '2-2': { ps: [['hq', 5, 15, 'hold'], ['infantry', 6, 10, 'hold'], ['infantry', 1, 11, 'hold'], ['infantry', 5, 10, 'hold'], ['infantry', 10, 10, 'hold'], ['infantry', 4, 10, 'hold'], ['infantry', 8, 10, 'hunt'], ['shield', 11, 13, 'hold'], ['shield', 0, 13, 'hold'], ['shield', 3, 10, 'hold'], ['archer', 4, 11, 'hold'], ['archer', 6, 11, 'advance'], ['archer', 5, 11, 'advance']], orders: [{ atSec: 10, target: 'left', kind: 'brace' }, { atSec: 23, target: 'all', kind: 'brace' }, { atSec: 26, target: 'right', kind: 'charge' }] },
   // 10×12 の盤で（2026-11-22）：見本の配置に、10 秒の全軍堅守と 30 秒の全軍突撃を足したもの
