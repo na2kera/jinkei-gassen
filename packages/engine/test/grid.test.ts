@@ -148,28 +148,40 @@ describe('翼', () => {
 });
 
 describe('騎兵の迂回', () => {
-  it('配置エリアの端から迂回した騎兵は、通り道の列（x が 0〜1 か 9〜10）を走る', () => {
-    for (const [col, lane] of [[1, 0], [8, 9]] as const) {
-      const r = createBattle({
-        field: plainField(),
-        armies: [
-          [p('hq', 4, 11, 'hold'), p('cavalry', col, 8, 'flank')],
-          [p('hq', 4, 0, 'hold'), ...[2, 3, 4, 5, 6, 7].map((c) => p('infantry', c, 3, 'hold'))],
-        ],
-        seed: 1,
-        maxTicks: 600,
-        timeout: 'compare',
-      });
-      expect(r.ok).toBe(true);
-      if (!r.ok) return;
-      const s = r.value;
-      let inLane = false;
-      for (let i = 0; i < 300 && !s.outcome; i++) {
-        step(s, []);
-        const cav = s.units[1]!;
-        if (Math.floor(cav.x) === lane && cav.y < rowsOf(0).front) inLane = true;
+  it('配置エリアの端から迂回した騎兵は、通り道の列（x が 0〜1 か 9〜10）を走り、端に沿って走るあいだ（迂回の②）は x が 0.5 か 9.5。陣営0・陣営1とも', () => {
+    for (const side of [0, 1] as const) {
+      // 陣営1は、陣営0の場面を 180° 回したもの（列 1 → 8、行 8 → 3）
+      for (const [col0, lane0] of [[1, 0], [8, 9]] as const) {
+        const col = side === 0 ? col0 : STANDARD_WIDTH - 1 - col0;
+        const lane = side === 0 ? lane0 : STANDARD_WIDTH - 1 - lane0;
+        const flip = (c: number, r: number): [number, number] => (side === 0 ? [c, r] : [STANDARD_WIDTH - 1 - c, STANDARD_HEIGHT - 1 - r]);
+        const me = [p('hq', ...flip(4, 11), 'hold'), p('cavalry', ...flip(col0, 8), 'flank')];
+        const foe = [p('hq', ...flip(4, 0), 'hold'), ...[2, 3, 4, 5, 6, 7].map((c) => p('infantry', ...flip(c, 3), 'hold'))];
+        const r = createBattle({ field: plainField(), armies: side === 0 ? [me, foe] : [foe, me], seed: 1, maxTicks: 600, timeout: 'compare' });
+        expect(r.ok).toBe(true);
+        if (!r.ok) return;
+        const s = r.value;
+        const cav = s.units[side === 0 ? 1 : foe.length + 1]!;
+        expect(cav.kind).toBe('cavalry');
+        expect(Math.floor(cav.x)).toBe(col);
+        const edgeX = lane + 0.5;
+        const msg = `陣営 ${side} 列 ${col}`;
+        expect(cav.flankEdgeX, msg).toBe(edgeX);
+        const enemyFront = rowsOf((1 - side) as Side).front;
+        let inLane = false;
+        let phase2Ticks = 0;
+        for (let i = 0; i < 300 && !s.outcome; i++) {
+          step(s, []);
+          if (cav.flankPhase === 2) {
+            phase2Ticks++;
+            expect(Math.abs(cav.x - edgeX), `${msg} 刻み ${s.tick} の x`).toBeLessThan(1e-9);
+          }
+          const passed = side === 0 ? cav.y < enemyFront + 1 : cav.y > enemyFront;
+          if (Math.floor(cav.x) === lane && passed) inLane = true;
+        }
+        expect(phase2Ticks, msg).toBeGreaterThan(10);
+        expect(inLane, msg).toBe(true);
       }
-      expect(inLane).toBe(true);
     }
   });
 });

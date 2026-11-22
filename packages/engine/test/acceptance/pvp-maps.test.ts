@@ -45,7 +45,7 @@ describe('対戦用の戦場', () => {
           }
         }, 300_000);
       }
-      it('ばらつきをなくすと、7つのひな形すべてで、最後の刻みまで両軍が完全に鏡写し（配列の順も逆にして）', () => {
+      it('ばらつきをなくすと、7つのひな形すべてで、最後の刻みまで両軍が完全に鏡写し（位置・向き・兵数・士気・状態・狙い。配列の順も逆にして）', () => {
         const mutable = T as { randomMin: number; randomMax: number };
         const saved = [mutable.randomMin, mutable.randomMax] as const;
         mutable.randomMin = 1;
@@ -57,14 +57,18 @@ describe('対戦用の戦場', () => {
               if (!r.ok) throw new Error(r.error.message);
               const s = r.value;
               const n = s.units.length / 2;
+              // 陣営0の i 番目と、陣営1の i 番目が鏡写しの組。狙いの id も n だけずれて対応する
+              const mirrorId = (id2: number | null): number | null => (id2 === null ? null : (id2 + n) % (2 * n));
               const check = (): void => {
                 for (let i = 0; i < n; i++) {
                   const u = s.units[i]!;
                   const v = s.units[i + n]!;
                   const msg = `${m.id} ${id} ${reverse ? '逆順' : ''} 刻み ${s.tick} 部隊 ${i}`;
                   expect(Math.abs(u.x - (field.width - v.x)) + Math.abs(u.y - (field.height - v.y)), msg).toBeLessThan(1e-6);
+                  expect(Math.abs(u.fx + v.fx) + Math.abs(u.fy + v.fy), msg).toBeLessThan(1e-6);
                   expect(Math.abs(u.men - v.men) + Math.abs(u.morale - v.morale), msg).toBeLessThan(1e-6);
                   expect(u.status, msg).toBe(v.status);
+                  expect(mirrorId(u.target), msg).toBe(v.target);
                 }
               };
               check();
