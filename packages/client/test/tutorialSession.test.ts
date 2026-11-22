@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Placement } from '@jinkei/engine';
+import { plainField, type Placement } from '@jinkei/engine';
 
 /** localStorage の代わり。書いた回数も数える */
 class MemoryStorage {
@@ -62,7 +62,9 @@ test('U6 実物の save.ts：古い保存の読み方・markTutorialDone のあ�
 // ---- U7：面の一覧を見る関数と、チュートリアルのあいだの保存 ----
 
 test('U7 チュートリアルの前・あいだ・あとで、面の一覧を見る関数の答えが同じ。保存の配置・星・視点は変わらない。終える処理は1度だけ', async () => {
-  const before1_1: Placement[] = [{ kind: 'hq', col: 5, row: 14, stance: 'hold' }];
+  // 保存してある面の配置（標準の盤の配置エリアの奥の行。座標は配置エリアから作る）
+  const z = plainField().zones[0];
+  const before1_1: Placement[] = [{ kind: 'hq', col: z.col + Math.floor(z.width / 2), row: z.row + z.height - 1, stance: 'hold' }];
   mem.map.set(
     KEY,
     JSON.stringify({ v: 2, stars: { '1-1': 2, '1-2': 1 }, placements: { '1-1': before1_1 }, muted: true, view: 'side', tutorialDone: false }),
@@ -71,7 +73,7 @@ test('U7 チュートリアルの前・あいだ・あとで、面の一覧を�
   const save = await import('../src/save.ts');
   const ses = await import('../src/session.ts');
   const run = await import('../src/tutorial/run.ts');
-  const { STAGES, TUTORIAL_ARMY } = await import('@jinkei/engine');
+  const { STAGES, TUTORIAL_ARMY, TUTORIAL_STANCE } = await import('@jinkei/engine');
 
   const answers = (): unknown => ({
     ordered: ses.orderedStages().map((s) => s.id),
@@ -97,15 +99,17 @@ test('U7 チュートリアルの前・あいだ・あとで、面の一覧を�
   // 配置の画面と同じく、手順を進めながら配置を session に置く
   run.startTutorial('list');
   assert.equal(ses.session.stageId, 'tutorial');
+  // 正しい操作の座標は TUTORIAL_ARMY から作る（design §13.14）
+  const hqAt = TUTORIAL_ARMY.find((p) => p.kind === 'hq')!;
+  const infs = TUTORIAL_ARMY.filter((p) => p.kind === 'infantry');
+  const hunt = TUTORIAL_ARMY[TUTORIAL_STANCE.index]!;
   const acts = [
     { type: 'pickKind', kind: 'hq' },
-    { type: 'cell', col: 5, row: 14 },
+    { type: 'cell', col: hqAt.col, row: hqAt.row },
     { type: 'pickKind', kind: 'infantry' },
-    { type: 'cell', col: 4, row: 10 },
-    { type: 'cell', col: 5, row: 10 },
-    { type: 'cell', col: 6, row: 10 },
-    { type: 'unit', col: 5, row: 10 },
-    { type: 'stance', stance: 'hunt' },
+    ...infs.map((p) => ({ type: 'cell', col: p.col, row: p.row }) as const),
+    { type: 'unit', col: hunt.col, row: hunt.row },
+    { type: 'stance', stance: TUTORIAL_STANCE.stance },
   ] as const;
   for (const a of acts) {
     assert.equal(run.tutorialAct(a), true, JSON.stringify(a));

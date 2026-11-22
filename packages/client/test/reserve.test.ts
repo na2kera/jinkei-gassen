@@ -5,11 +5,11 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { listTemplates, plainField, STAGES, STANDARD_ROSTER, validateStageArmy, type Placement, type ReserveView, type Roster } from '@jinkei/engine';
+import { listTemplates, plainField, STAGES, STANDARD_HEIGHT, STANDARD_ROSTER, STANDARD_WIDTH, STANDARD_ZONE_WIDTH, validateStageArmy, type Placement, type ReserveView, type Roster } from '@jinkei/engine';
 import type { RoomMessage, SnapMessage } from '@jinkei/server/protocol';
 import { remainingShown, reserveNoticeAt, summonEnabled, summonShown } from '../src/battle/reserveUi.ts';
 import { centeredFieldView } from '../src/battle/FieldView.ts';
-import { battlePanel, battleReserveButtons, computeLayout, deployInfo, deployPanel, deployReserveSlot, pvpDeployPanel, type Rect } from '../src/layout.ts';
+import { battlePanel, battleReserveButtons, CELL, computeLayout, deployInfo, FIELD_COLS, FIELD_ROWS, LANDSCAPE_H, LANDSCAPE_W, deployPanel, deployReserveSlot, pvpDeployPanel, type Rect } from '../src/layout.ts';
 import { draftMessage, readyMessage, reserveAllowed, roomReserve, summonMessage } from '../src/net/reserveMessages.ts';
 import { snapReserve, viewOfSnap } from '../src/net/snapView.ts';
 import { cleanReserve, copyFormation, emptySave, sanitizeSave } from '../src/saveFormat.ts';
@@ -18,17 +18,23 @@ import { RESERVE_FROM_LABEL, RESERVE_LABEL } from '../src/ui/labels.ts';
 
 // ---- 保存 ----
 
+/** 陣営0の配置エリア（標準の盤。通り道の列を含まない）。保存の例の座標は、ここから作る（design §13.14） */
+const ZONE = plainField().zones[0];
+const BACK = ZONE.row + ZONE.height - 1;
+const MID = ZONE.col + Math.floor(ZONE.width / 2);
+
 test('遊軍の項目（reserves・pvpReserve・陣形の reserve）がない保存は、そのまま読めて、遊軍は空', () => {
   const old = {
     v: 2,
     stars: { '1-1': 2 },
-    placements: { '1-1': [{ kind: 'hq', col: 5, row: 14, stance: 'hold' }] },
+    placements: { '1-1': [{ kind: 'hq', col: MID, row: BACK, stance: 'hold' }] },
     muted: true,
     pid: null,
     name: 'a',
     roomCode: null,
-    pvpArmy: [{ kind: 'infantry', col: 3, row: 12, stance: 'advance' }],
-    formations: [{ name: '鶴', width: 12, units: [{ kind: 'hq', col: 5, row: 4, stance: 'hold' }] }],
+    pvpArmy: [{ kind: 'infantry', col: ZONE.col + 2, row: ZONE.row, stance: 'advance' }],
+    // 保存した陣形は、配置エリアの左上が原点
+    formations: [{ name: '鶴', width: STANDARD_ZONE_WIDTH, units: [{ kind: 'hq', col: MID - ZONE.col, row: BACK - ZONE.row, stance: 'hold' }] }],
     view: 'side',
   };
   const d = sanitizeSave(old);
@@ -46,7 +52,7 @@ test('遊軍を保存して読み戻せる（面ごと・対戦・陣形）。JS
   const d = emptySave();
   d.reserves['2-1'] = { kind: 'cavalry', stance: 'flank' };
   d.pvpReserve = { kind: 'archer', stance: 'hold' };
-  d.formations.push(copyFormation({ name: 'x', width: 12, units: [], reserve: { kind: 'shield', stance: 'advance' } }));
+  d.formations.push(copyFormation({ name: 'x', width: STANDARD_ZONE_WIDTH, units: [], reserve: { kind: 'shield', stance: 'advance' } }));
   const back = sanitizeSave(JSON.parse(JSON.stringify(d)));
   assert.deepEqual(back.reserves, { '2-1': { kind: 'cavalry', stance: 'flank' } });
   assert.deepEqual(back.pvpReserve, { kind: 'archer', stance: 'hold' });
@@ -58,7 +64,7 @@ test('壊れた遊軍の値は、その遊軍だけを捨てる（本陣・知�
     v: 2,
     reserves: { a: { kind: 'hq', stance: 'hold' }, b: { kind: 'infantry', stance: 'zzz' }, c: 'x', d: { kind: 'archer', stance: 'hold', extra: 1 } },
     pvpReserve: { kind: 'hq', stance: 'hold' },
-    formations: [{ name: 'y', width: 12, units: [{ kind: 'hq', col: 1, row: 1, stance: 'hold' }], reserve: { kind: 'nope', stance: 'hold' } }],
+    formations: [{ name: 'y', width: STANDARD_ZONE_WIDTH, units: [{ kind: 'hq', col: 1, row: 1, stance: 'hold' }], reserve: { kind: 'nope', stance: 'hold' } }],
   });
   // 余計な項目は写さない（決まった項目だけを残す）
   assert.deepEqual(d.reserves, { d: { kind: 'archer', stance: 'hold' } });
@@ -73,8 +79,8 @@ test('壊れた遊軍の値は、その遊軍だけを捨てる（本陣・知�
 
 const roster: Roster = { hq: 1, infantry: 2, cavalry: 1 };
 const list: Placement[] = [
-  { kind: 'hq', col: 5, row: 14, stance: 'hold' },
-  { kind: 'infantry', col: 4, row: 12, stance: 'advance' },
+  { kind: 'hq', col: MID, row: BACK, stance: 'hold' },
+  { kind: 'infantry', col: MID - 1, row: ZONE.row, stance: 'advance' },
 ];
 
 test('手持ちの残りは、戦場と遊軍の枠の両方を引いて数える', () => {
@@ -114,7 +120,7 @@ test('陣形を呼び出したとき、手持ちが残っていれば遊軍を�
 });
 
 test('対戦で兵種の数を減らすと、戦場の最後のその兵種から外し、戦場になければ枠を空にする', () => {
-  const two: Placement[] = [...list, { kind: 'infantry', col: 6, row: 12, stance: 'hold' }];
+  const two: Placement[] = [...list, { kind: 'infantry', col: MID + 1, row: ZONE.row, stance: 'hold' }];
   const a = shrinkKind(two, { kind: 'infantry', stance: 'advance' }, 'infantry', 2);
   assert.equal(a.list.filter((p) => p.kind === 'infantry').length, 1);
   assert.deepEqual(a.reserve, { kind: 'infantry', stance: 'advance' });
@@ -209,13 +215,14 @@ test('snap の遊軍は自分の側に入れ、相手の側は null。遊軍が�
 
 // ---- 「遊軍」の知らせの位置 ----
 
-const AREA: Rect = { x: 8, y: 8, w: 288, h: 384 };
+/** 描き場所（標準の戦場 10 列 × 12 行ぶん = 320 × 384） */
+const AREA: Rect = { x: 8, y: 8, w: FIELD_COLS * CELL, h: FIELD_ROWS * CELL };
 
 test('「遊軍」の知らせは、兵数と士気の箱と同じく部隊の上に出す（真上・斜め・横から）', () => {
   for (const mode of ['top', 'oblique', 'side'] as const) {
-    const fv = centeredFieldView(AREA, { width: 12, height: 16 }, false, mode);
+    const fv = centeredFieldView(AREA, { width: STANDARD_WIDTH, height: STANDARD_HEIGHT }, false, mode);
     const x = 0.5;
-    const y = 8.5;
+    const y = STANDARD_HEIGHT / 2 + 0.5;
     const at = reserveNoticeAt(fv, AREA, x, y, 48, 32);
     const p = fv.toScreen(x, y);
     // 箱は部隊の足もとより上
@@ -233,7 +240,7 @@ function inside(a: Rect, b: Rect): boolean {
   return a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h;
 }
 
-const LAYOUTS = [computeLayout(640, 400), computeLayout(320, 620), computeLayout(390, 844), computeLayout(320, 720)];
+const LAYOUTS = [computeLayout(LANDSCAPE_W, LANDSCAPE_H), computeLayout(320, 620), computeLayout(390, 844), computeLayout(320, 720)];
 
 test('配置の画面の「遊軍」の枠は、画面の中にあり、いまあるボタン・戦場に重ならない（横長・縦長、1人用・対戦）', () => {
   for (const l of LAYOUTS) {

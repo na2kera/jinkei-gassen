@@ -12,7 +12,10 @@ import {
   STANCES,
   step,
   summarize,
+  STANDARD_HEIGHT,
+  STANDARD_WIDTH,
   TUTORIAL_ARMY,
+  TUTORIAL_STANCE,
   TUTORIAL_ORDER,
   TUTORIAL_ORDER_TICK,
   tutorialSetup,
@@ -37,12 +40,14 @@ import {
 
 // ---- 手順（U3） ----
 
-const HQ = { col: 5, row: 14 };
-const INF = [
-  { col: 4, row: 10 },
-  { col: 5, row: 10 },
-  { col: 6, row: 10 },
-];
+// 正しい操作の座標は engine の TUTORIAL_ARMY から作る（盤の大きさや座標を書かない。design §13.14）
+const cellOf = (p: { col: number; row: number }): { col: number; row: number } => ({ col: p.col, row: p.row });
+const HQ = cellOf(TUTORIAL_ARMY.find((p) => p.kind === 'hq')!);
+const INF = TUTORIAL_ARMY.filter((p) => p.kind === 'infantry').map(cellOf);
+/** 方針を変える歩兵（本陣狙いにする部隊） */
+const HUNT = cellOf(TUTORIAL_ARMY[TUTORIAL_STANCE.index]!);
+/** 方針を変えない歩兵の1つ */
+const OTHER = INF.find((c) => c.col !== HUNT.col || c.row !== HUNT.row)!;
 
 /** 当てはめて、受け付けたことを確かめる */
 function ok(run: TutorialRun, a: TutorialAction): TutorialRun {
@@ -62,8 +67,8 @@ function ng(run: TutorialRun, a: TutorialAction): void {
 function everyAction(): TutorialAction[] {
   const out: TutorialAction[] = [];
   for (const kind of KINDS) out.push({ type: 'pickKind', kind });
-  for (let row = 0; row < 16; row++) {
-    for (let col = 0; col < 12; col++) {
+  for (let row = 0; row < STANDARD_HEIGHT; row++) {
+    for (let col = 0; col < STANDARD_WIDTH; col++) {
       out.push({ type: 'cell', col, row });
       out.push({ type: 'unit', col, row });
     }
@@ -93,7 +98,7 @@ function walk(order: number[]): Record<string, TutorialRun> {
   at.placeInfPicked = r;
   for (const i of order) r = ok(r, { type: 'cell', ...INF[i]! });
   at.tapUnit = r;
-  r = ok(r, { type: 'unit', col: 5, row: 10 });
+  r = ok(r, { type: 'unit', ...HUNT });
   at.pickStance = r;
   r = ok(r, { type: 'stance', stance: 'hunt' });
   at.start = r;
@@ -142,7 +147,7 @@ test('手順は表の順に進み、各手順で受け付ける操作は表の�
     placeHqPicked: [{ type: 'pickKind', kind: 'hq' }, { type: 'cell', ...HQ }],
     placeInf: [{ type: 'pickKind', kind: 'infantry' }],
     placeInfPicked: [{ type: 'pickKind', kind: 'infantry' }, ...INF.map((c) => ({ type: 'cell' as const, ...c }))],
-    tapUnit: [{ type: 'unit', col: 5, row: 10 }],
+    tapUnit: [{ type: 'unit', ...HUNT }],
     pickStance: [{ type: 'stance', stance: 'hunt' }, { type: 'dismissStance' }],
     start: [{ type: 'start' }],
     march: [{ type: 'paused' }],
@@ -164,9 +169,9 @@ test('表にない操作（別の兵種・別のマス・別の部隊・別の�
   // いくつかを名指しで
   ng(at.placeHq!, { type: 'cell', ...HQ }); // 兵種を選ぶ前に置く
   ng(at.placeHq!, { type: 'pickKind', kind: 'infantry' });
-  ng(at.placeHqPicked!, { type: 'cell', col: 5, row: 13 });
+  ng(at.placeHqPicked!, { type: 'cell', col: HQ.col, row: HQ.row - 1 });
   ng(at.placeInfPicked!, { type: 'cell', ...HQ });
-  ng(at.tapUnit!, { type: 'unit', col: 4, row: 10 });
+  ng(at.tapUnit!, { type: 'unit', ...OTHER });
   ng(at.tapUnit!, { type: 'unit', ...HQ });
   ng(at.pickStance!, { type: 'stance', stance: 'advance' });
   ng(at.tapUnit!, { type: 'start' });
@@ -192,7 +197,7 @@ test('方針の箱を閉じる：pickStance → dismissStance → tapUnit → �
   const at = walk([0, 1, 2]);
   let r = ok(at.pickStance!, { type: 'dismissStance' });
   assert.equal(r.step, 'tapUnit');
-  r = ok(r, { type: 'unit', col: 5, row: 10 });
+  r = ok(r, { type: 'unit', ...HUNT });
   assert.equal(r.step, 'pickStance');
   r = ok(r, { type: 'stance', stance: 'hunt' });
   assert.equal(r.step, 'start');
@@ -212,8 +217,8 @@ test('歩兵を置く順の 6 通りすべてで、armyOf が TUTORIAL_ARMY と�
       order.map((i) => INF[i]!.col),
     );
     // 方針を選ぶ前は、置いた部隊の方針は兵種の初期設定
-    assert.equal(at.tapUnit!.placed.find((p) => p.col === 5 && p.row === 10)?.stance, 'advance');
-    assert.equal(at.start!.placed.find((p) => p.col === 5 && p.row === 10)?.stance, 'hunt');
+    assert.equal(at.tapUnit!.placed.find((p) => p.col === HUNT.col && p.row === HUNT.row)?.stance, 'advance');
+    assert.equal(at.start!.placed.find((p) => p.col === HUNT.col && p.row === HUNT.row)?.stance, TUTORIAL_STANCE.stance);
   }
   // 置き終えていなければ、戦いに渡せない
   assert.equal(armyReady(walk([0, 1, 2]).placeInfPicked!), false);
@@ -226,7 +231,7 @@ test('目立たせるもの', () => {
   assert.deepEqual(lit(at.placeHqPicked!), { ...none, cells: [HQ] });
   assert.deepEqual(lit(at.placeInf!), { ...none, kinds: ['infantry'] });
   assert.deepEqual(lit(at.placeInfPicked!), { ...none, cells: INF });
-  assert.deepEqual(lit(at.tapUnit!), { ...none, cells: [{ col: 5, row: 10 }] });
+  assert.deepEqual(lit(at.tapUnit!), { ...none, cells: [HUNT] });
   assert.deepEqual(lit(at.pickStance!), { ...none, stances: ['hunt'] });
   assert.deepEqual(lit(at.start!), { ...none, start: true });
   assert.deepEqual(lit(at.march!), none);

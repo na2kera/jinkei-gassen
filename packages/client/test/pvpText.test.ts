@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { remainingShown } from '../src/battle/reserveUi.ts';
+import { LANDSCAPE_W } from '../src/layout.ts';
 import { failureText } from '../src/net/RoomClient.ts';
 import { foldAtPeriod, lobbyStatusLine, opponentMark, pvpRemainingText } from '../src/net/pvpText.ts';
 
@@ -65,7 +66,7 @@ test('幅に収まらない知らせは、句点の所で 2 行に折る（decis
   assert.equal(folded, '新しい版があります。\nページを読み込み直してください');
   for (const row of folded.split('\n')) assert.ok(row.length * 16 <= 304, row);
   // 横持ち（幅が足りる）では折らない
-  assert.equal(foldAtPeriod(outdated, 640 - 16), outdated);
+  assert.equal(foldAtPeriod(outdated, LANDSCAPE_W - 16), outdated);
   // 収まる文、句点のない文、句点が最後だけの文は、そのまま
   assert.equal(foldAtPeriod('部屋が満員です', 304), '部屋が満員です');
   assert.equal(foldAtPeriod('あ'.repeat(30), 304), 'あ'.repeat(30));

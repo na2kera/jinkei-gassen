@@ -6,27 +6,32 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { dirOf, slotsOf, soldierPoint, unitLift } from '../src/art/formation.ts';
-import { groundTerrain, placeTall, placeTallCell, tallArt } from '../src/art/tallArt.ts';
-import { sideArtColors, sideArtRows } from '../src/art/textures.ts';
+import { groundTerrain, placeTall, placeTallCell, tallArt, tallScale } from '../src/art/tallArt.ts';
+import { STANDARD_HEIGHT, STANDARD_WIDTH } from '@jinkei/engine';
+import { SIDE_ART_W, sideArtColors, sideArtRows, TALL_ART_W } from '../src/art/textures.ts';
 import { centeredFieldView, type FieldView, type PickTarget, type Point } from '../src/battle/FieldView.ts';
 import { followInspect } from '../src/battle/inspect.ts';
 import { nextView, parseView, VIEW_CYCLE, type ViewMode } from '../src/battle/viewMode.ts';
-import { CELL, type Rect } from '../src/layout.ts';
+import { CELL, FIELD_COLS, FIELD_ROWS, type Rect } from '../src/layout.ts';
 import { VIEW_LABEL } from '../src/ui/labels.ts';
 
-/** 描き場所（12列×16行ぶん）。左上が奇数の所も試す */
+/** 標準の戦場の幅と高さ（10 × 12。design §13.2） */
+const W = STANDARD_WIDTH;
+const H = STANDARD_HEIGHT;
+/** 描き場所（標準の戦場 10 列 × 12 行ぶん = 320 × 384。design §13.7）。左上が奇数の所も試す */
 const AREAS: Rect[] = [
-  { x: 16, y: 40, w: 288, h: 384 },
-  { x: 7, y: 13, w: 288, h: 384 },
+  { x: 16, y: 40, w: FIELD_COLS * CELL, h: FIELD_ROWS * CELL },
+  { x: 7, y: 13, w: FIELD_COLS * CELL, h: FIELD_ROWS * CELL },
 ];
-const WIDTHS = [12, 8, 7, 6];
+/** 標準・奇数の幅・狭い面（6・5） */
+const WIDTHS = [W, 7, 6, 5];
 
 /** V1 と V9 の表 */
 const MODE_TABLE: { mode: ViewMode; skip?: string }[] = [{ mode: 'top' }, { mode: 'oblique' }, { mode: 'side' }];
 
 function views(mode: ViewMode, widths = WIDTHS): FieldView[] {
   const out: FieldView[] = [];
-  for (const area of AREAS) for (const w of widths) for (const flipped of [false, true]) out.push(centeredFieldView(area, { width: w, height: 16 }, flipped, mode));
+  for (const area of AREAS) for (const w of widths) for (const flipped of [false, true]) out.push(centeredFieldView(area, { width: w, height: H }, flipped, mode));
   return out;
 }
 
@@ -96,13 +101,13 @@ class OldView {
 }
 
 function oldView(area: Rect, width: number, flipped: boolean, oblique: boolean): OldView {
-  return new OldView(oldRect(area, { width, height: 16 }, oblique), width, 16, flipped, oblique);
+  return new OldView(oldRect(area, { width, height: H }, oblique), width, H, flipped, oblique);
 }
 
 // ---- V1 ----
 
 for (const { mode, skip } of MODE_TABLE) {
-  test(`V1 ${mode}：toField(toScreen(p)) が p に戻る（返す/返さない、幅 12・8・7・6）`, skip ? { skip } : {}, () => {
+  test(`V1 ${mode}：toField(toScreen(p)) が p に戻る（返す/返さない、幅 10・7・6・5）`, skip ? { skip } : {}, () => {
     for (const fv of views(mode)) {
       for (const p of samplePoints(fv)) {
         const s = fv.toScreen(p.x, p.y);
@@ -140,10 +145,10 @@ test('V2 真上と斜め：toScreen・cellRect・rect・toField が変更前と�
     for (const w of WIDTHS) {
       for (const flipped of [false, true]) {
         for (const oblique of [false, true]) {
-          const fv = centeredFieldView(area, { width: w, height: 16 }, flipped, oblique ? 'oblique' : 'top');
+          const fv = centeredFieldView(area, { width: w, height: H }, flipped, oblique ? 'oblique' : 'top');
           const old = oldView(area, w, flipped, oblique);
           assert.deepEqual(fv.rect, old.rect);
-          for (let r = 0; r < 16; r++) {
+          for (let r = 0; r < H; r++) {
             for (let c = 0; c < w; c++) {
               assert.deepEqual(fv.cellRect(c, r), old.cellRect(c, r));
               for (const [x, y] of [
@@ -197,11 +202,12 @@ const OLD_SLOTS: Record<'hq' | 'infantry' | 'shield' | 'archer' | 'cavalry', { l
   ],
 };
 
-test('兵の並びと向きの選び方が、変更前と同じ（等号の境目を含む）', () => {
+test('兵の並びは、変更前と同じ順で、間隔を 1マス 32px に合わせて約 4/3 倍にした整数。向きの選び方は変更前と同じ（等号の境目を含む）', () => {
+  // design §13.8：±5・±4 → ±7・±5、騎兵の ±3・±4 → ±4・±5（24px のマスから 32px のマスへ）
   for (const kind of ['hq', 'infantry', 'shield', 'archer', 'cavalry'] as const) {
     assert.deepEqual(
       slotsOf(kind).map((s) => ({ lx: s.lx, ly: s.ly })),
-      OLD_SLOTS[kind],
+      OLD_SLOTS[kind].map((o) => ({ lx: Math.round((o.lx * 4) / 3), ly: Math.round((o.ly * 4) / 3) })),
       kind,
     );
   }
@@ -273,17 +279,17 @@ test('真上と斜め：兵の絵の位置（整数の px）と4方向の絵が�
     return seed / 2147483648;
   };
   for (const area of AREAS) {
-    for (const w of [12, 7]) {
+    for (const w of [W, 5]) {
       for (const flipped of [false, true]) {
         for (const oblique of [false, true]) {
-          const fv = centeredFieldView(area, { width: w, height: 16 }, flipped, oblique ? 'oblique' : 'top');
+          const fv = centeredFieldView(area, { width: w, height: H }, flipped, oblique ? 'oblique' : 'top');
           const old = oldView(area, w, flipped, oblique);
           const positions: Point[] = [
             { x: 0.5, y: 0.5 },
-            { x: w / 2 + 0.5, y: 8.5 },
-            { x: w - 0.5, y: 15.5 },
+            { x: w / 2 + 0.5, y: H / 2 + 0.5 },
+            { x: w - 0.5, y: H - 0.5 },
           ];
-          for (let i = 0; i < 20; i++) positions.push({ x: rand() * w, y: rand() * 16 });
+          for (let i = 0; i < 20; i++) positions.push({ x: rand() * w, y: rand() * H });
           const facings = [...FACINGS];
           for (let i = 0; i < 10; i++) {
             const a = rand() * Math.PI * 2;
@@ -295,7 +301,8 @@ test('真上と斜め：兵の絵の位置（整数の px）と4方向の絵が�
                 // 敗走中の広がり（1 + 1.2 × 進み具合）。1.6 と 3:4 の向きでは、兵のずれの2つの項がちょうど打ち消し合い、
                 // 絵の左上がちょうど半 px に来る。足す順まで変更前と同じでないと 1px 変わるので、その場合も試す
                 for (const spread of [1, 1.6, 1 + 1.2 * 0.37]) {
-                  for (const s of OLD_SLOTS[kind]) {
+                  // 変更前の並びの px と、いまの並びの px（間隔を広げたもの）の両方で、投影の計算が変更前と同じかを見る
+                  for (const s of [...OLD_SLOTS[kind], ...slotsOf(kind)]) {
                     // 敗走で散らばるときと、近接で前へ 1px 突くときも試す
                     const lx = s.lx * spread;
                     const ly = s.ly * spread - (s.ly < 0 ? 1 : 0);
@@ -320,8 +327,8 @@ test('真上と斜め：兵の絵の位置（整数の px）と4方向の絵が�
 });
 
 test('真上と斜め：数字の箱の持ち上げと、旗・枠を立てるかが変更前と同じ', () => {
-  const top = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, false, 'top');
-  const obl = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, false, 'oblique');
+  const top = centeredFieldView(AREAS[0]!, { width: W, height: H }, false, 'top');
+  const obl = centeredFieldView(AREAS[0]!, { width: W, height: H }, false, 'oblique');
   assert.equal(unitLift(top, 3, 3), 20);
   assert.equal(unitLift(obl, 3, 3), 34);
   assert.equal(top.standing, false);
@@ -336,25 +343,35 @@ test('真上と斜め：数字の箱の持ち上げと、旗・枠を立てる�
 
 test('真上と斜め：高さのある絵の置き方と並べる値が、変更前と同じ', () => {
   for (const flipped of [false, true]) {
-    const obl = centeredFieldView(AREAS[1]!, { width: 12, height: 16 }, flipped, 'oblique');
-    for (let row = 0; row < 16; row++) {
-      for (let col = 0; col < 12; col++) {
+    const obl = centeredFieldView(AREAS[1]!, { width: W, height: H }, flipped, 'oblique');
+    for (let row = 0; row < H; row++) {
+      for (let col = 0; col < W; col++) {
         const r = obl.cellRect(col, row);
         const bottom = r.y + r.h;
-        const tree = placeTall(tallArt('oblique', 'tree', { alt: (col + row) % 2 !== 0 })!, r);
-        assert.deepEqual(tree, { x: r.x + ((col + row) % 2 === 0 ? 6 : 18), y: bottom - 2, depth: bottom - 2 });
+        assert.equal(r.w, CELL);
+        const treeArt = tallArt('oblique', 'tree', { alt: (col + row) % 2 !== 0 })!;
+        const tree = placeTall(treeArt, r);
+        // 木はマスの横の 1/4 と 3/4 の所（32px のマスで 8px と 24px）。伸ばさない
+        assert.deepEqual(tree, { x: r.x + ((col + row) % 2 === 0 ? CELL / 4 : (CELL * 3) / 4), y: bottom - 2, depth: bottom - 2 });
+        assert.deepEqual(tallScale(treeArt, r), { sx: 1, sy: 1 });
+        // 柵・城壁・門は、横だけをマスの幅に合わせて伸ばす（原画の幅 24px → 32px。design §13.8）
+        for (const kind of ['fence', 'wall', 'gate'] as const) {
+          assert.deepEqual(tallScale(tallArt('oblique', kind, { stage: 1 })!, r), { sx: r.w / TALL_ART_W, sy: 1 }, kind);
+        }
         assert.deepEqual(placeTall(tallArt('oblique', 'fence')!, r), { x: r.x, y: bottom, depth: bottom - 1 });
         assert.deepEqual(placeTall(tallArt('oblique', 'wall')!, r), { x: r.x, y: bottom, depth: bottom });
         assert.deepEqual(placeTall(tallArt('oblique', 'gate', { stage: 2 })!, r), { x: r.x, y: r.y + r.h, depth: r.y + r.h });
       }
     }
   }
-  const top = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, false, 'top');
+  const top = centeredFieldView(AREAS[0]!, { width: W, height: H }, false, 'top');
   const r = top.cellRect(5, 5);
   const g = tallArt('flat', 'gate', { stage: 1 })!;
   assert.equal(g.key, 'gate-1');
   assert.deepEqual([g.originX, g.originY], [0, 0]);
   assert.deepEqual(placeTall(g, r), { x: r.x, y: r.y, depth: r.y });
+  // 真上の門は地面のタイルと同じ大きさで描いてあるので、伸ばさない
+  assert.deepEqual(tallScale(g, r), { sx: 1, sy: 1 });
   assert.equal(tallArt('flat', 'wall'), null);
   assert.equal(tallArt('oblique', 'wall')!.key, 'tall-wall');
   assert.equal(tallArt('oblique', 'gate', { stage: 1 })!.key, 'tall-gate-1');
@@ -366,10 +383,11 @@ test('真上と斜め：高さのある絵の置き方と並べる値が、変�
 
 test('V3 横から：自軍の本陣が左、敵の本陣が右。自軍の左翼が上、右翼が下。rect の幅が 288px', () => {
   for (const fv of views('side')) {
+    // 12 行 × 32px × 0.75 = 288（design §13.7 の表）
     assert.equal(fv.rect.w, 288);
     // 返したときは、自軍（陣営1）は戦場の座標の上の端にいる
-    const ownY = fv.flipped ? 0.5 : 15.5;
-    const enemyY = fv.flipped ? 15.5 : 0.5;
+    const ownY = fv.flipped ? 0.5 : H - 0.5;
+    const enemyY = fv.flipped ? H - 0.5 : 0.5;
     const mid = fv.cols / 2;
     const own = fv.toScreen(mid, ownY);
     const enemy = fv.toScreen(mid, enemyY);
@@ -380,11 +398,13 @@ test('V3 横から：自軍の本陣が左、敵の本陣が右。自軍の左�
     const rightX = fv.flipped ? 0.5 : fv.cols - 0.5;
     assert.ok(fv.toScreen(leftX, ownY).y < fv.toScreen(rightX, ownY).y);
     // rect は描き場所の中に収まる
-    assert.ok(fv.rect.x >= AREAS[0]!.x - 20 && fv.rect.h <= 173);
+    // 縦は幅 10 で 10 × 32 × 0.6 = 192（いちばん高い）
+    assert.ok(fv.rect.x >= AREAS[0]!.x && fv.rect.h <= 192);
   }
   const area = AREAS[0]!;
-  const fv = centeredFieldView(area, { width: 12, height: 16 }, false, 'side');
-  assert.deepEqual(fv.rect, { x: area.x, y: area.y + 106, w: 288, h: 173 });
+  const fv = centeredFieldView(area, { width: W, height: H }, false, 'side');
+  // 描き場所 320 × 384 の中央：横は (320 − 288) / 2 = 16、縦は (384 − 192) / 2 = 96
+  assert.deepEqual(fv.rect, { x: area.x + 16, y: area.y + 96, w: 288, h: 192 });
   assert.deepEqual(fv.uiBounds(area), area);
   assert.equal(fv.standing, true);
   assert.equal(fv.depthSorted, true);
@@ -402,8 +422,9 @@ test('V4 横から：隣り合うマスの cellRect に隙間も重なりもな�
     // 囲む矩形の中の、どの px もちょうど1つのマスに入る
     const cover = new Uint8Array((x1 - x0) * (y1 - y0));
     for (const q of all) {
-      assert.equal(q.w, 18);
-      assert.ok(q.h === 14 || q.h === 15);
+      // 1マスは 24 × 19.2px（design §13.7）。縦は丸めで 19 と 20 が交じる
+      assert.equal(q.w, CELL * 0.75);
+      assert.ok(q.h === 19 || q.h === 20);
       for (let y = q.y; y < q.y + q.h; y++) for (let x = q.x; x < q.x + q.w; x++) cover[(y - y0) * (x1 - x0) + (x - x0)]!++;
     }
     assert.ok(cover.every((v) => v === 1), `${fv.cols} ${fv.flipped}`);
@@ -416,7 +437,7 @@ test('V4 横から：隣り合うマスの cellRect に隙間も重なりもな�
 
 test('V5 depthOf：画面で手前（下）にあるものほど大きい（横から・斜め）', () => {
   for (const mode of ['side', 'oblique'] as const) {
-    for (const fv of views(mode, [12, 6])) {
+    for (const fv of views(mode, [W, 6])) {
       const pts = samplePoints(fv);
       for (let i = 0; i < pts.length; i += 3) {
         for (let j = 1; j < pts.length; j += 5) {
@@ -432,7 +453,7 @@ test('V5 depthOf：画面で手前（下）にあるものほど大きい（横�
 });
 
 test('横から：高さのある絵と、柵のマスの下地', () => {
-  const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, false, 'side');
+  const fv = centeredFieldView(AREAS[0]!, { width: W, height: H }, false, 'side');
   assert.equal(groundTerrain(fv.art, 'fence'), 'plain');
   assert.equal(groundTerrain(fv.art, 'wall'), 'wall');
   const r = fv.cellRect(5, 5);
@@ -442,16 +463,18 @@ test('横から：高さのある絵と、柵のマスの下地', () => {
     const p = placeTall(a, r);
     // 下の端をマスの手前の端に合わせる
     assert.deepEqual([p.x, p.y], [r.x, r.y + r.h]);
+    // 横からの柵・城壁・門は、全体を縦横同じ倍率（マスの幅 ÷ 原画の幅 18）で伸ばす（design §13.8）
+    assert.deepEqual(tallScale(a, r), { sx: r.w / SIDE_ART_W, sy: r.w / SIDE_ART_W }, kind);
   }
   // 木は、マスの中で隣のマスと互い違い
   const t0 = placeTall(tallArt('side', 'tree', { alt: false })!, r);
   const t1 = placeTall(tallArt('side', 'tree', { alt: true })!, r);
   assert.ok(t0.x >= r.x && t1.x <= r.x + r.w && t0.x < t1.x);
-  // 絵の並びは矩形で、知らない文字がない。幅はマスと同じ 18px、城壁と門の上の面は 15 行以上
+  // 絵の並びは矩形で、知らない文字がない。原画の幅は 18px（置くときにマスの幅 24px へ伸ばす）
   const colors = sideArtColors();
   for (const [key, rows] of Object.entries(sideArtRows())) {
     for (const line of rows) {
-      assert.equal(line.length, 18, key);
+      assert.equal(line.length, SIDE_ART_W, key);
       for (const ch of line) assert.ok(ch === '.' || colors[ch] !== undefined, `${key} ${ch}`);
     }
   }
@@ -487,7 +510,7 @@ const DIR_VEC: Record<number, Point> = { 0: { x: 0, y: -1 }, 1: { x: 1, y: 0 }, 
 for (const { mode, skip } of MODE_TABLE) {
   test(`V9 ${mode}：兵の並びと向き（前の列が向きの側、右手が右、4方向の絵が画面の向きと合う）`, skip ? { skip } : {}, () => {
     for (const flipped of [false, true]) {
-      const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, flipped, mode);
+      const fv = centeredFieldView(AREAS[0]!, { width: W, height: H }, flipped, mode);
       for (const [fx, fy] of FACINGS.slice(0, 8)) {
         const at = { x: 6.3, y: 8.7 };
         const h = fv.vecToScreen(at.x, at.y, fx, fy);
@@ -520,7 +543,7 @@ for (const { mode, skip } of MODE_TABLE) {
 
 test('V9 横から：敵へ向かう自軍は右向き、自軍へ向かう敵は左向き', () => {
   for (const flipped of [false, true]) {
-    const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, flipped, 'side');
+    const fv = centeredFieldView(AREAS[0]!, { width: W, height: H }, flipped, 'side');
     // 自軍は、返さないときは上（y が小さい側）へ、返したときは下へ進む
     const own = fv.facingOnScreen(6, 8, 0, flipped ? 1 : -1);
     const enemy = fv.facingOnScreen(6, 8, 0, flipped ? -1 : 1);
@@ -544,15 +567,15 @@ function oldPick(old: OldView, units: PickTarget[], sx: number, sy: number): num
 
 /** 決まった場面：隣り合う部隊、重なりかけた部隊、同じ位置の部隊、端の部隊 */
 const SCENE: PickTarget[] = [
-  { id: 1, x: 5.5, y: 14.5 },
-  { id: 2, x: 6.4, y: 14.5 },
-  { id: 3, x: 3.2, y: 9.1 },
-  { id: 4, x: 3.7, y: 9.4 },
-  { id: 5, x: 8.5, y: 8.5 },
-  { id: 6, x: 8.5, y: 8.5 },
+  { id: 1, x: 4.5, y: 10.5 },
+  { id: 2, x: 5.4, y: 10.5 },
+  { id: 3, x: 2.2, y: 7.1 },
+  { id: 4, x: 2.7, y: 7.4 },
+  { id: 5, x: 7.5, y: 6.5 },
+  { id: 6, x: 7.5, y: 6.5 },
   { id: 7, x: 0.3, y: 0.2 },
-  { id: 8, x: 11.8, y: 15.9 },
-  { id: 9, x: 6.05, y: 4.33 },
+  { id: 8, x: W - 0.2, y: H - 0.1 },
+  { id: 9, x: 5.05, y: 3.33 },
 ];
 
 test('V10 真上と斜め：変更の前後で、押した位置から選ばれる部隊が同じ', () => {
@@ -560,8 +583,8 @@ test('V10 真上と斜め：変更の前後で、押した位置から選ばれ�
   for (const area of AREAS) {
     for (const flipped of [false, true]) {
       for (const oblique of [false, true]) {
-        const fv = centeredFieldView(area, { width: 12, height: 16 }, flipped, oblique ? 'oblique' : 'top');
-        const old = oldView(area, 12, flipped, oblique);
+        const fv = centeredFieldView(area, { width: W, height: H }, flipped, oblique ? 'oblique' : 'top');
+        const old = oldView(area, W, flipped, oblique);
         for (let sy = area.y; sy < area.y + area.h; sy += 1.5) {
           for (let sx = area.x; sx < area.x + area.w; sx += 1.5) {
             const want = oldPick(old, SCENE, sx, sy);
@@ -577,7 +600,7 @@ test('V10 真上と斜め：変更の前後で、押した位置から選ばれ�
 
 test('V10 横から：体のまん中を押すとその部隊、重なる2部隊のあいだを押すと手前の部隊', () => {
   for (const flipped of [false, true]) {
-    const fv = centeredFieldView(AREAS[0]!, { width: 12, height: 16 }, flipped, 'side');
+    const fv = centeredFieldView(AREAS[0]!, { width: W, height: H }, flipped, 'side');
     for (const u of SCENE) {
       if (u.id === 5 || u.id === 6) continue;
       const c = fv.pickPoint(u.x, u.y);
@@ -591,7 +614,7 @@ test('V10 横から：体のまん中を押すとその部隊、重なる2部隊
       });
       if (!nearer) assert.equal(fv.pick(others.concat([u]), c.x, c.y), u.id);
     }
-    // 隣の列の2部隊（画面の縦に 14.4px 離れて重なる）のあいだを押すと、手前（画面の下）の部隊
+    // 隣の列の2部隊（画面の縦に 19.2px 離れて重なる）のあいだを押すと、手前（画面の下）の部隊
     const back = { id: 1, x: 5.5, y: 8.5 };
     const front = { id: 2, x: 6.5, y: 8.5 };
     const a = fv.pickPoint(back.x, back.y);
@@ -609,14 +632,14 @@ test('V10 横から：体のまん中を押すとその部隊、重なる2部隊
 
 test('真上・斜め・横から：placeTallCell は、マスの矩形での placeTall と同じ位置', () => {
   for (const mode of ['top', 'oblique', 'side'] as const) {
-    for (const fv of views(mode, [12, 6])) {
+    for (const fv of views(mode, [W, 6])) {
       for (const kind of ['tree', 'fence', 'wall', 'gate'] as const) {
         const a = tallArt(fv.art, kind, { alt: true, stage: 1 });
         if (!a) continue;
         for (const [c, r] of [
           [0, 0],
           [3, 7],
-          [fv.cols - 1, 15],
+          [fv.cols - 1, H - 1],
         ] as const) {
           assert.deepEqual(placeTallCell(a, fv, c, r), placeTall(a, fv.cellRect(c, r)));
         }
@@ -626,7 +649,7 @@ test('真上・斜め・横から：placeTallCell は、マスの矩形での pl
 });
 
 test('押している部隊の数字の箱：描いている部隊なら、どこにいても出す。全滅して描いていない部隊は、押している状態を残して箱を出さない', () => {
-  const u = { id: 3, x: 0.2, y: 15.8 };
+  const u = { id: 3, x: 0.2, y: H - 0.2 };
   const other = { id: 8, x: 5, y: 10 };
   const r = followInspect({ pointerId: 1, unit: 3 }, [other, u]);
   assert.equal(r.shown, u);
@@ -635,4 +658,28 @@ test('押している部隊の数字の箱：描いている部隊なら、ど�
   assert.equal(gone.inspect, held);
   assert.equal(gone.shown, null);
   assert.deepEqual(followInspect(null, [u]), { inspect: null, shown: null });
+});
+
+test('視点ごとの盤の大きさが design §13.7 の表のとおりで、どれも描き場所 320 × 384 に縮めずに入る', () => {
+  const area = AREAS[0]!;
+  assert.deepEqual([area.w, area.h], [320, 384]);
+  const table: [number, ViewMode, number, number][] = [
+    [W, 'top', 320, 384],
+    [W, 'oblique', 320, 230],
+    [W, 'side', 288, 192],
+    [6, 'top', 192, 384],
+    [6, 'oblique', 192, 230],
+    [6, 'side', 288, 115],
+    [5, 'top', 160, 384],
+    [5, 'oblique', 160, 230],
+    [5, 'side', 288, 96],
+  ];
+  for (const [width, mode, w, h] of table) {
+    const fv = centeredFieldView(area, { width, height: H }, false, mode);
+    assert.deepEqual([fv.rect.w, fv.rect.h], [w, h], `${width} ${mode}`);
+    assert.ok(fv.rect.x >= area.x && fv.rect.y >= area.y, `${width} ${mode}`);
+    assert.ok(fv.rect.x + fv.rect.w <= area.x + area.w && fv.rect.y + fv.rect.h <= area.y + area.h, `${width} ${mode}`);
+  }
+  // 幅 5 の面は、盤の左端が描き場所の x 80（半マスずらして 2px 単位に揃える）
+  assert.equal(centeredFieldView({ x: 0, y: 0, w: 320, h: 384 }, { width: 5, height: H }).rect.x, 80);
 });
