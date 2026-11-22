@@ -7,7 +7,7 @@ import { DIFFICULTY_LATER, STAR3_LATER, STAR3_PENDING_CH23 } from './helpers.ts'
 
 // 置き直した面（decisions §25）で、いまは通らない面。難しさを合わせたら外す
 /** 見本が18勝・星の平均2に届かない */
-const SOLUTION_LATER = new Set(['2-5']); // 2-5・3-1 は 20 勝するが、星の平均が 1
+const SOLUTION_LATER = new Set([]); // 2-5・3-1 は 20 勝するが、星の平均が 1
 /** 横陣のままで11勝以上する */
 const LINE_LATER = new Set(['2-1', '2-2', '2-4', '3-2', '3-4']);
 /** そのまま置いて11勝以上するひな形が3つ以上 */
@@ -71,9 +71,7 @@ describe('第2章・第3章の面の作り', () => {
     }
     expect(byId('3-4').solution.length).toBe(6);
   });
-  // 2-5 は、勝てる面にするために敵の歩兵を2つ外し、いまは 1.21 倍（stages.ts の 2-5 のコメント）。難しさを合わせるときに戻す
-  it('兵数の比：2-5 は 1.5 倍以上', (ctx) => {
-    ctx.skip(DIFFICULTY_LATER);
+  it('兵数の比：2-5 は 1.5 倍以上', () => {
     expect(menOf(byId('2-5').enemy) / menOf(byId('2-5').solution)).toBeGreaterThanOrEqual(1.5);
   });
   it('3-1・3-4 は survive（120 秒・90 秒）、3-2 は gate、ほかは defeat', () => {

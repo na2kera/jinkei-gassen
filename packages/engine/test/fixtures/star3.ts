@@ -13,8 +13,8 @@ export const STAR3_FOUND: Record<string, { ps: Row[]; orders: Ord[] }> = {
   '2-3': { ps: [['hq', 4, 10, 'hold'], ['infantry', 3, 8, 'hold'], ['infantry', 4, 8, 'hold'], ['infantry', 5, 8, 'hold'], ['infantry', 6, 8, 'hold'], ['shield', 1, 8, 'hold'], ['shield', 8, 8, 'hold'], ['archer', 3, 9, 'hold'], ['archer', 6, 9, 'hold']], orders: [{ atSec: 10, target: 'all', kind: 'brace' }, { atSec: 30, target: 'all', kind: 'charge' }] },
   // 盾兵6で谷をふさぎ、弓兵2を1行あけた後ろ（行 12）の列 1・4 に散らす
   '2-4': { ps: [['hq', 2, 14, 'hold'], ['shield', 0, 10, 'hold'], ['shield', 1, 10, 'hold'], ['shield', 2, 10, 'hold'], ['shield', 3, 10, 'hold'], ['shield', 4, 10, 'hold'], ['shield', 5, 10, 'hold'], ['archer', 1, 12, 'hold'], ['archer', 4, 12, 'hold']], orders: [] },
-  // 探索
-  '2-5': { ps: [['hq', 8, 10, 'hold'], ['infantry', 7, 10, 'hold'], ['infantry', 11, 10, 'hold'], ['infantry', 4, 11, 'flank'], ['infantry', 0, 10, 'hold'], ['shield', 5, 10, 'hold'], ['shield', 6, 10, 'hold'], ['archer', 3, 12, 'hunt'], ['archer', 4, 13, 'hold'], ['cavalry', 8, 13, 'flank'], ['cavalry', 4, 10, 'hold']], orders: [{ atSec: 10, target: 'all', kind: 'brace' }, { atSec: 16, target: 'center', kind: 'brace' }, { atSec: 23, target: 'all', kind: 'charge' }] },
+  // 10×12 の盤で（2026-11-22）：見本の配置で、号令を 10 秒の全軍堅守と 20 秒の全軍突撃にしたもの
+  '2-5': { ps: [['hq', 4, 11, 'hold'], ['infantry', 3, 8, 'hold'], ['infantry', 4, 8, 'hold'], ['shield', 5, 8, 'hold'], ['archer', 3, 9, 'advance'], ['archer', 5, 9, 'hold'], ['cavalry', 1, 9, 'hold'], ['cavalry', 8, 10, 'hold']], orders: [{ atSec: 10, target: 'all', kind: 'brace' }, { atSec: 20, target: 'all', kind: 'charge' }] },
   // 10×12 の盤で探し直した（sim star 3-1 --rand 2。2026-11-22）。本陣を右の後ろに置いて右の端を受ける。置く順を変えても星3つ
   '3-1': { ps: [['hq', 8, 9, 'hold'], ['infantry', 4, 8, 'hold'], ['infantry', 3, 11, 'hold'], ['infantry', 3, 8, 'hold'], ['shield', 5, 8, 'hold'], ['shield', 2, 8, 'hold'], ['shield', 6, 8, 'hold'], ['archer', 3, 9, 'hold'], ['archer', 6, 9, 'flank']], orders: [{ atSec: 5, target: 'all', kind: 'brace' }, { atSec: 27, target: 'all', kind: 'brace' }, { atSec: 49, target: 'all', kind: 'brace' }] },
   // 探索（敵の弓兵を5にしたあと。置く順を変えても星3つ）

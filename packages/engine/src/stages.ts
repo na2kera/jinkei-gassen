@@ -213,20 +213,19 @@ export const STAGES: Stage[] = [
     name: '寡兵の戦',
     hint: '敵の突撃を、どこで、どう受ける？',
     // 行 6・7 が川（端から端まで）、その奥（自軍の前の2行）の列 2〜7 が丘、両脇（列 0・1 と列 8・9 × 行 8〜11）が森。
-    // 敵は 1.21 倍で、12秒と30秒に全軍突撃してくる。
-    // 計画表の数（歩兵8、1.52 倍）では、見本・横陣・ひな形7つのどれも1回も勝てず、次の面が開かなかったので、
-    // 正面の歩兵の両端の2つ（列 1・8）を外した（2026-11-22。勝てる面にする最小の直し。難しさは公開のあとに合わせる。decisions §25）
+    // 敵は歩兵8・迂回の騎兵2（1.52 倍）で、12秒と30秒に全軍突撃してくる。歩兵6が行 2（列 2〜7）、残りの歩兵2は行 1 の中央、
+    // 騎兵は行 1 の両端（列 1・8）。公開のときは歩兵を6に減らしていた（1.21 倍）が、見本を作り直して計画表の数に戻した（2026-11-22）
     field: terrainField(10, [['river', span(0, 9), [6, 7]], ['hill', span(2, 7), [8, 9]], ['forest', [0, 1], span(8, 11)], ['forest', [8, 9], span(8, 11)]]),
     roster: { hq: 1, infantry: 2, shield: 1, cavalry: 2, archer: 2 },
-    enemy: [hq(4, 0), ...at('infantry', 'advance', span(2, 7), 2), ...at('cavalry', 'flank', [2, 7], 1)],
+    enemy: [hq(4, 0), ...at('infantry', 'advance', span(2, 7), 2), ...at('cavalry', 'flank', [1, 8], 1), ...at('infantry', 'advance', [4, 5], 1)],
     enemyOrders: [
       { atSec: 12, target: 'all', kind: 'charge' },
       { atSec: 30, target: 'all', kind: 'charge' },
     ],
     win: { type: 'defeat' },
-    // 岸の上の丘に守備で並び（川から上がってくる敵を、丘の上から打つ）、騎兵は両脇の森で守備。
-    // 敵の最初の突撃（12秒）に堅守を合わせて受け止め、24秒に全軍突撃で押し返す
-    solution: [hq(4, 11), ...at('infantry', 'hold', [3, 5], 8), ...at('shield', 'hold', [4], 8), ...at('archer', 'hold', [4, 5], 9), ...at('cavalry', 'hold', [1, 8], 9)],
+    // 岸の上の丘に守備で並び（川から上がってくる敵を、丘の上から打つ）、騎兵は両脇の森で守備（迂回の騎兵を森で受ける）。
+    // 敵の最初の突撃（12秒）に堅守を合わせて受け止め、24秒に全軍突撃で押し返す。号令なしでは星 1
+    solution: [hq(4, 11), ...at('infantry', 'hold', [3, 4], 8), ...at('shield', 'hold', [5], 8), ...at('archer', 'advance', [3], 9), ...at('archer', 'hold', [5], 9), ...at('cavalry', 'hold', [1], 9), ...at('cavalry', 'hold', [8], 10)],
     solutionOrders: [
       { atSec: 12, target: 'all', kind: 'brace' },
       { atSec: 24, target: 'all', kind: 'charge' },
