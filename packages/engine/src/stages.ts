@@ -118,26 +118,34 @@ export const STAGES: Stage[] = [
     hint: '鶴の真ん中は薄い。突撃はどう受ける？',
     field: plainField(),
     roster: { hq: 1, infantry: 4, shield: 2, cavalry: 2, archer: 2 },
-    // 敵は鶴翼（10部隊）。10秒と30秒に全軍突撃してくる。
+    // 敵は鶴翼（11部隊。本陣・歩兵5・盾兵2・騎兵2・弓兵1）。10秒と30秒に全軍突撃してくる。
     // 鶴翼のひな形で並べ、弓兵の方針だけ前進にする（2026-11-17 にひな形の弓兵を守備に替える前と同じ並び・同じ方針。design §3.6.6）。
-    // 敵の弓兵が守備だと、盾兵と弓兵が動かず、こちらの攻め手が尽きたあと時間切れまで何も起きない
-    enemy: applyTemplate('crane', { hq: 1, infantry: 4, shield: 2, cavalry: 2, archer: 1 }, plainField().zones[1], 1).map((p) => (p.kind === 'archer' ? { ...p, stance: 'advance' as const } : p)),
+    // 敵の弓兵が守備だと、盾兵と弓兵が動かず、こちらの攻め手が尽きたあと時間切れまで何も起きない。
+    // 2026-11-22 に、敵の歩兵を4から5に増やした（比 0.92 → 1.02）。歩兵4のままでは、横陣がそのまま 20 勝した
+    enemy: applyTemplate('crane', { hq: 1, infantry: 5, shield: 2, cavalry: 2, archer: 1 }, plainField().zones[1], 1).map((p) => (p.kind === 'archer' ? { ...p, stance: 'advance' as const } : p)),
     enemyOrders: [
       { atSec: 10, target: 'all', kind: 'charge' },
       { atSec: 30, target: 'all', kind: 'charge' },
     ],
     win: { type: 'defeat' },
-    // 歩兵を楔にして鶴翼の薄い中央へ向け、盾兵で楔の両脇を固め、弓兵はその後ろで守備。騎兵2つは左の端からまとめて回り込む。
-    // 敵の最初の突撃（10秒）に合わせて全軍に堅守をかけ、受け止めてから押し返す
+    // 歩兵2を前（列 4・5、行 8）に出し、盾兵2をその後ろの両脇（列 3・5、行 9）、弓兵2を中央の後ろで守備。騎兵2は左の後ろから回り込む。
+    // 歩兵2は後ろの両端（行 11）に残す。敵の最初の突撃（10秒）の前（7秒）に全軍に堅守をかけて受け止め、
+    // 28秒に中央の突撃で鶴翼の薄い中央を押し、58秒に左翼の突撃で押し切る（2026-11-22 に作り直した。号令なしでは残り 0.69 → 0.62）
     solution: [
-      hq(4, 11),
-      ...at('infantry', 'advance', [4, 5], 8),
-      ...at('infantry', 'advance', [3, 4], 9),
-      ...at('shield', 'advance', [2, 5], 9),
-      ...at('archer', 'hold', [4, 5], 10),
-      ...at('cavalry', 'flank', [1, 2], 10),
+      hq(2, 9),
+      ...at('infantry', 'advance', [3, 2], 11),
+      ...at('infantry', 'hold', [5], 8),
+      ...at('infantry', 'advance', [4], 8),
+      ...at('shield', 'advance', [5, 3], 9),
+      ...at('archer', 'hold', [4], 9),
+      ...at('archer', 'hold', [5], 10),
+      ...at('cavalry', 'flank', [2, 4], 10),
     ],
-    solutionOrders: [{ atSec: 10, target: 'all', kind: 'brace' }],
+    solutionOrders: [
+      { atSec: 7, target: 'all', kind: 'brace' },
+      { atSec: 28, target: 'center', kind: 'charge' },
+      { atSec: 58, target: 'left', kind: 'charge' },
+    ],
   },
   // ---------------------------------------------------------------- 第2章（地形）。方針・ひな形・号令は、すべて使える
   {

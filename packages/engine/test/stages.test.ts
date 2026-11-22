@@ -17,13 +17,6 @@ import {
   type Stage,
 } from '../src/index.ts';
 import { lineStats, ORDER_PERMS, runStage, solutionStats, STAGE_SEEDS, stageTemplateArmy, templateWins } from '../sim/stagelib.ts';
-import { DIFFICULTY_LATER, STAR3_LATER } from './helpers.ts';
-
-// 置き直した面（decisions §25）で、見本が勝ちきれない面・横陣のままでも勝てる面。難しさを合わせたら外す
-const SOLUTION_LATER = new Set(['1-5']);
-const LINE_LATER = new Set(['1-5']);
-/** 星3つの配置（FOUND）を、まだ新しい盤で探し直していない面 */
-const STAR3_PENDING = new Set(['1-5']);
 
 /** 第1章の5面（第2章・第3章は stages-ch23.test.ts） */
 const CH1 = STAGES.filter((s) => s.chapter === 1);
@@ -55,8 +48,7 @@ describe('第1章の5面', () => {
     }
   });
   for (const s of CH1) {
-    it(`${s.id} ${s.name}：見本が種20個のうち18個以上で勝ち、星の平均が2以上`, (ctx) => {
-      ctx.skip(SOLUTION_LATER.has(s.id), DIFFICULTY_LATER);
+    it(`${s.id} ${s.name}：見本が種20個のうち18個以上で勝ち、星の平均が2以上`, () => {
       const r = solutionStats(s);
       expect(r.wins).toBeGreaterThanOrEqual(18);
       expect(r.starsMean).toBeGreaterThanOrEqual(2);
@@ -66,8 +58,7 @@ describe('第1章の5面', () => {
         expect(lineStats(s).wins).toBeGreaterThanOrEqual(16);
       }, 120_000);
     } else {
-      it(`${s.id}：横陣のひな形をそのまま置いただけ（方針を出さない面では初期設定の方針）では、10個以下しか勝てない`, (ctx) => {
-        ctx.skip(LINE_LATER.has(s.id), DIFFICULTY_LATER);
+      it(`${s.id}：横陣のひな形をそのまま置いただけ（方針を出さない面では初期設定の方針）では、10個以下しか勝てない`, () => {
         expect(lineStats(s).wins).toBeLessThanOrEqual(10);
       }, 120_000);
     }
@@ -188,15 +179,11 @@ describe('星3つは取れる（1-2〜1-5）', () => {
     // 10×12 の盤で探し直した（sim star 1-4 --rand 3。見本から。2026-11-22）。正面は守備、騎兵3は右の端から回り込み、歩兵1つも迂回。
     // 置く順の4通りすべてで 20/20
     '1-4': { ps: [['hq', 4, 11, 'advance'], ['shield', 2, 9, 'hold'], ['shield', 3, 9, 'hold'], ['infantry', 1, 9, 'hold'], ['infantry', 5, 9, 'flank'], ['infantry', 4, 9, 'hold'], ['archer', 6, 11, 'advance'], ['archer', 5, 10, 'hold'], ['cavalry', 7, 8, 'flank'], ['cavalry', 8, 8, 'flank'], ['cavalry', 7, 9, 'flank']], orders: [] },
-    // 楔の先の歩兵を迂回にして中央の外側へ、盾兵を前へ出し、騎兵は左の端と後ろから回す。5秒に全軍堅守、21秒に右翼突撃、36秒に全軍突撃
-    '1-5': {
-      ps: [['hq', 4, 13, 'hold'], ['infantry', 3, 11, 'hold'], ['infantry', 6, 10, 'flank'], ['infantry', 2, 11, 'advance'], ['infantry', 8, 12, 'advance'], ['infantry', 2, 14, 'advance'], ['shield', 2, 10, 'advance'], ['shield', 8, 11, 'advance'], ['shield', 6, 11, 'advance'], ['archer', 6, 13, 'advance'], ['archer', 5, 12, 'hunt'], ['archer', 7, 13, 'advance'], ['cavalry', 0, 12, 'flank'], ['cavalry', 0, 13, 'flank'], ['cavalry', 7, 15, 'flank']],
-      orders: [{ atSec: 5, target: 'all', kind: 'brace' }, { atSec: 21, target: 'right', kind: 'charge' }, { atSec: 36, target: 'all', kind: 'charge' }],
-    },
+    // 10×12 の盤で探し直した（見本を山登りで探した中の1つ。2026-11-22）。歩兵3を横に並べて中央へ、8秒に全軍堅守、27秒に左翼突撃、35秒に全軍後退
+    '1-5': { ps: [['hq', 8, 11, 'hold'], ['infantry', 2, 11, 'flank'], ['infantry', 3, 9, 'advance'], ['infantry', 4, 9, 'advance'], ['infantry', 5, 9, 'advance'], ['shield', 2, 9, 'advance'], ['shield', 5, 8, 'advance'], ['archer', 5, 10, 'hold'], ['archer', 4, 10, 'advance'], ['cavalry', 2, 10, 'advance'], ['cavalry', 4, 8, 'flank']], orders: [{ atSec: 8, target: 'all', kind: 'brace' }, { atSec: 27, target: 'left', kind: 'charge' }, { atSec: 35, target: 'all', kind: 'retreat' }] },
   };
   for (const [id, f] of Object.entries(FOUND)) {
-    it(`${id}：見つけた配置で、種20個のうち10個以上で星3つ`, (ctx) => {
-      ctx.skip(STAR3_PENDING.has(id), STAR3_LATER);
+    it(`${id}：見つけた配置で、種20個のうち10個以上で星3つ`, () => {
       const s = STAGES.find((x) => x.id === id)!;
       const ps: Placement[] = f.ps.map(([kind, col, row, stance]) => ({ kind, col, row, stance }));
       expect(validateStageArmy(s, ps)).toEqual([]);
