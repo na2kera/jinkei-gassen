@@ -240,15 +240,21 @@ export const STAGES: Stage[] = [
     name: '柵の守り',
     hint: '柵の外側を回ってくる敵は？',
     // 自軍の配置エリアのいちばん前の行（行 8）の中央4列（列 3〜6）が柵。敵は正面に盾兵と歩兵、両端に迂回の騎兵2。120秒守り切れば勝ち。
-    // 置き直したままの数（敵11部隊）では、見本が10勝で横陣・ひな形は全部0勝だったので、正面の右端の歩兵（列 6、行 2）を外した
-    // （2026-11-22。勝てる面にする最小の直し。難しさは公開のあとに合わせる。decisions §25）
+    // 公開のときに外した正面の右端の歩兵（列 6、行 2）を、見本を作り直して戻した（敵11部隊、比 1.19。2026-11-22）
     field: terrainField(10, [['fence', span(3, 6), [8]]]),
     roster: { hq: 1, shield: 3, infantry: 3, archer: 2 },
-    enemy: [hq(4, 0), ...at('infantry', 'advance', [2], 2), ...at('shield', 'advance', [3, 4, 5], 2), ...at('infantry', 'advance', [3, 4, 5], 1), ...at('cavalry', 'flank', [2, 7], 1)],
+    enemy: [hq(4, 0), ...at('infantry', 'advance', [2, 6], 2), ...at('shield', 'advance', [3, 4, 5], 2), ...at('infantry', 'advance', [3, 4, 5], 1), ...at('cavalry', 'flank', [2, 7], 1)],
     win: { type: 'survive' },
     seconds: 120,
-    // 柵のマスに歩兵と盾兵を守備で並べ、柵の外の両脇（列 2・7）に盾兵を守備で置いて、端を回ってくる騎兵を正面で受ける
-    solution: [hq(4, 10), ...at('infantry', 'hold', [6, 3, 5], 8), ...at('shield', 'hold', [4], 8), ...at('shield', 'hold', [2, 7], 9), ...at('archer', 'hold', [4, 5], 9)],
+    // 柵の4マスに歩兵2と盾兵2を守備で並べ、柵の外の左（列 2、行 8）に盾兵、右の後ろ（列 7、行 9）に予備の歩兵を置いて、
+    // 端を回ってくる騎兵を受ける。約 22 秒おきに全軍に堅守（5・27・49 秒）。号令なしでは勝てない。
+    // 柵を平地に替えると、20 勝 → 14 勝（残り 0.66 → 0.31）
+    solution: [hq(4, 10), ...at('infantry', 'hold', [4], 8), ...at('infantry', 'hold', [7], 9), ...at('infantry', 'hold', [3], 8), ...at('shield', 'hold', [5, 2, 6], 8), ...at('archer', 'hold', [3, 6], 9)],
+    solutionOrders: [
+      { atSec: 5, target: 'all', kind: 'brace' },
+      { atSec: 27, target: 'all', kind: 'brace' },
+      { atSec: 49, target: 'all', kind: 'brace' },
+    ],
   },
   {
     id: '3-2',
