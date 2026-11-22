@@ -346,7 +346,8 @@ export class Forest {
         t.img.setVisible(false);
         continue;
       }
-      const key = `${ref.key}|${ref.frame}`;
+      // 取り込み直した絵（同じ鍵の新しいテクスチャ）にも切り替わるよう、取り込んだ時刻も見る
+      const key = `${ref.key}|${ref.frame}|${ref.sheet.readyAt}`;
       if (key !== t.key) {
         t.img.setTexture(ref.key, treeFrameName(t.tree, a)).setOrigin(ref.sheet.g.ax / ref.sheet.g.fw, ref.sheet.g.ay / ref.sheet.g.fh);
         t.key = key;

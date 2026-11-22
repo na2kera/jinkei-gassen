@@ -200,6 +200,7 @@ export function installDebug(game: Phaser.Game): void {
       request: (set: SetId): void => stackTextures.request(set),
       release: (set: SetId): void => stackTextures.release(set),
       failWorker: (): boolean => stackTextures.simulateWorkerError(),
+      releaseHold: (set: SetId | null = null): void => stackTextures.releaseHold(set),
     },
     /** 起動時に作った絵（兵やタイル）の canvas。拡大して見比べるため */
     texture(key: string): HTMLCanvasElement | null {

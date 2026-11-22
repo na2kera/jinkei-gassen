@@ -27,6 +27,8 @@ export interface SheetSpec {
   /** 兵の絵なら、その型 */
   readonly model?: ModelId;
   readonly frames: readonly FrameSpec[];
+  /** 頼んだときの揃いの世代（sheetBook.ts）。焼いた絵にそのまま付けて返す */
+  readonly gen?: number;
 }
 
 /** 列に入れる仕事（ワーカーへ送れる、ただのデータ） */
@@ -51,6 +53,8 @@ export interface BakedSheet {
   readonly g: Geom;
   readonly frames: readonly BakedFrame[];
   readonly rgba: ArrayBuffer;
+  /** 頼んだときの揃いの世代（SheetSpec.gen） */
+  readonly gen?: number;
   /** この 1 枚に使った時間（ミリ秒。途中で要った削り出しを含む） */
   readonly ms: number;
   /** 焼いた枚数（形を計算した回数）と、敵軍の写しの枚数 */
@@ -400,6 +404,7 @@ export class BakeQueue {
       g,
       frames,
       rgba,
+      ...(spec.gen !== undefined ? { gen: spec.gen } : {}),
       ms,
       baked,
       copied,

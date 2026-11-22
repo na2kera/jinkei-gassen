@@ -84,7 +84,11 @@ export class WalkTracker {
       return this.dist;
     }
     const d = Math.hypot(wx - prev.x, wy - prev.y);
-    if (d > JUMP_CELLS) return this.dist;
+    // 飛んだ（1 度に 2 マスを超えて動いた）ときは、足さずに 0 に戻す（位置だけ覚える。design §14.8）
+    if (d > JUMP_CELLS) {
+      this.dist = 0;
+      return this.dist;
+    }
     this.dist += d * 32;
     if (fighting) this.dist += (FIGHT_SPEED * Math.max(0, dtMs)) / 1000;
     return this.dist;

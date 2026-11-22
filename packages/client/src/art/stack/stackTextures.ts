@@ -9,6 +9,7 @@ import { ANGLES, type Geom } from './bake.ts';
 import type { FromWorker, ToWorker } from './bakeWorker.ts';
 import { BakeQueue, BATTLE_SCALE, SET_IDS, setSheets, soldierFrameName, startupTasks, treeFrameName, treeSheetKey, soldierSheetKey, wrapAngle, type BakedFrame, type BakedSheet, type SetId, type SheetSpec, type TaskSpec } from './jobs.ts';
 import type { ModelId, TreeId } from './parts.ts';
+import { SheetBook } from './sheetBook.ts';
 
 /** 主スレッドの列が 1 コマに進める時間（ミリ秒） */
 const MAIN_BUDGET_MS = 4;
@@ -60,18 +61,26 @@ export interface StartOptions {
   readonly worker?: boolean;
   /** canvas なら、WebGL でも addCanvas で取り込む（確かめ用） */
   readonly path?: 'auto' | 'canvas';
+  /** 確かめ用：届いた絵を、このミリ秒だけ取り込まずに待たせる（絵が遅れて届くときを作る） */
+  readonly delayMs?: number;
+  /** 確かめ用：この揃いの絵は、releaseHold を呼ぶまで取り込まない */
+  readonly hold?: readonly SetId[];
 }
 
 type Listener = (s: SheetInfo) => void;
 
 class StackTextures {
   private game: Phaser.Game | null = null;
-  private opts: Required<StartOptions> = { worker: true, path: 'auto' };
+  private opts: { worker: boolean; path: 'auto' | 'canvas'; delayMs: number } = { worker: true, path: 'auto', delayMs: 0 };
+  /** 確かめ用に取り込みを止めている揃い */
+  private held = new Set<SetId>();
   /** 要る絵（先に要るものが前） */
   private wanted: SheetSpec[] = [];
   private readonly ready = new Map<string, SheetInfo>();
-  private inbox: { sheet: BakedSheet; by: 'worker' | 'main' }[] = [];
+  private inbox: { sheet: BakedSheet; by: 'worker' | 'main'; at: number }[] = [];
   private readonly released = new Set<SetId>();
+  /** 揃いの頼みの世代（古い応答を捨てる） */
+  private readonly book = new SheetBook();
   private readonly listeners = new Set<Listener>();
   private worker: Worker | null = null;
   private workerState: WorkerState = 'off';
@@ -93,7 +102,8 @@ class StackTextures {
   start(game: Phaser.Game, opts: StartOptions = {}): void {
     if (this.game) return;
     this.game = game;
-    this.opts = { worker: opts.worker ?? true, path: opts.path ?? 'auto' };
+    this.opts = { worker: opts.worker ?? true, path: opts.path ?? 'auto', delayMs: opts.delayMs ?? 0 };
+    this.held = new Set(opts.hold ?? []);
     this.startedAt = performance.now();
     if (!this.stepHooked) {
       game.events.on(Phaser.Core.Events.STEP, () => this.onStep());
@@ -107,7 +117,7 @@ class StackTextures {
   /** 揃いを頼む（できていない分を、列の先頭に入れる） */
   request(set: SetId): void {
     this.released.delete(set);
-    const specs = setSheets(set).filter((s) => !this.ready.has(s.key) && !this.inbox.some((x) => x.sheet.key === s.key));
+    const specs = this.book.stamp(setSheets(set).filter((s) => !this.ready.has(s.key) && !this.inbox.some((x) => x.sheet.key === s.key)));
     if (specs.length === 0) return;
     const keys = new Set(specs.map((s) => s.key));
     this.wanted = [...specs, ...this.wanted.filter((s) => !keys.has(s.key))];
@@ -120,12 +130,25 @@ class StackTextures {
   /** 揃いを捨てる（テクスチャを消す。まだ焼いていない分は作らない） */
   release(set: SetId): void {
     this.released.add(set);
+    this.book.release(set);
     this.wanted = this.wanted.filter((s) => s.set !== set);
     this.inbox = this.inbox.filter((x) => x.sheet.set !== set);
+    const gone = new Set<string>();
     for (const [key, s] of [...this.ready]) {
       if (s.set !== set) continue;
       this.ready.delete(key);
-      if (this.game?.textures.exists(key)) this.game.textures.remove(key);
+      gone.add(key);
+    }
+    // 消すテクスチャを使っている絵が残らないように、先に何もない絵へ切り替えて隠す（次の apply で代わりの絵になる）
+    if (gone.size > 0 && this.game) {
+      const sweep = (list: Phaser.GameObjects.GameObject[]): void => {
+        for (const o of list) {
+          if (o instanceof Phaser.GameObjects.Container) sweep(o.list);
+          else if (o instanceof Phaser.GameObjects.Image && gone.has(o.texture.key)) o.setTexture('__DEFAULT').setVisible(false);
+        }
+      };
+      for (const scene of this.game.scene.getScenes(false)) if (scene.children) sweep(scene.children.list);
+      for (const key of gone) if (this.game.textures.exists(key)) this.game.textures.remove(key);
     }
     if (this.worker && this.workerState === 'running') this.post({ t: 'cancel', set });
     this.mainQ?.cancel(set);
@@ -217,6 +240,12 @@ class StackTextures {
     };
   }
 
+  /** 確かめ用：止めていた揃いの取り込みを始める（null なら全部） */
+  releaseHold(set: SetId | null = null): void {
+    if (set) this.held.delete(set);
+    else this.held.clear();
+  }
+
   /** 確かめ用：ワーカーが誤りで止まったことにする（起動のあとの error と同じ道筋） */
   simulateWorkerError(): boolean {
     if (!this.worker) return false;
@@ -287,11 +316,17 @@ class StackTextures {
 
   /** 届いた絵を取り込み待ちに入れる（捨てた揃いの絵は捨てる） */
   private accept(sheet: BakedSheet, by: 'worker' | 'main'): void {
-    if (this.released.has(sheet.set) || !this.wanted.some((s) => s.key === sheet.key)) {
+    const ok = this.book.accepts(
+      sheet,
+      (k) => this.wanted.some((s) => s.key === k),
+      (k) => this.ready.has(k),
+      (k) => this.inbox.some((x) => x.sheet.key === k),
+    );
+    if (this.released.has(sheet.set) || !ok) {
       this.stats.dropped++;
       return;
     }
-    this.inbox.push({ sheet, by });
+    this.inbox.push({ sheet, by, at: performance.now() });
   }
 
   /** できた・取り込み待ちの絵 */
@@ -322,8 +357,12 @@ class StackTextures {
         if (rest.length > 0) this.runOnMain(rest.map((spec): TaskSpec => ({ t: 'sheet', spec })));
       }
     }
-    const next = this.inbox.shift();
-    if (next) this.importSheet(next.sheet, next.by);
+    // 確かめ用の待たせ（ふだんは delayMs 0・hold なしで、届いた順に取り込む）
+    const now = performance.now();
+    const i = this.inbox.findIndex((x) => now - x.at >= this.opts.delayMs && !this.held.has(x.sheet.set));
+    if (i < 0) return;
+    const next = this.inbox.splice(i, 1)[0]!;
+    this.importSheet(next.sheet, next.by);
   }
 
   private importSheet(s: BakedSheet, by: 'worker' | 'main'): void {
@@ -331,6 +370,11 @@ class StackTextures {
     if (!game) return;
     const t0 = performance.now();
     const tm = game.textures;
+    // 同じ鍵の絵がもう取り込んであれば、重ねない（使っている絵を消さない）
+    if (this.ready.has(s.key)) {
+      this.stats.dropped++;
+      return;
+    }
     if (tm.exists(s.key)) tm.remove(s.key);
     const webgl = game.renderer.type === Phaser.WEBGL;
     let path: TexturePath = webgl && this.opts.path !== 'canvas' ? 'uint8' : 'canvas';

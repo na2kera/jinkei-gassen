@@ -273,8 +273,11 @@ export class BattleScene extends Phaser.Scene {
 
     const onLayout = (): void => this.rebuild();
     this.game.events.on(LAYOUT_EVENT, onLayout);
+    // 木の絵が戦闘の途中で届いたら描き直す（兵は毎コマ apply するので、次のコマで替わる）。シーンの終わりでやめる
+    const offReady = stackTextures.onReady(() => this.forest?.update());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off(LAYOUT_EVENT, onLayout);
+      offReady();
       this.source?.dispose();
       this.source = null;
       debug.order = null;

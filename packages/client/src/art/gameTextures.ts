@@ -3,6 +3,7 @@
 // 古い兵の絵を作る buildTextures() は、ポスターと OGP の道具のために、中身を変えずに textures.ts に残してある。
 
 import type Phaser from 'phaser';
+import type { SetId } from './stack/jobs.ts';
 import { stackTextures, type StartOptions } from './stack/stackTextures.ts';
 import { buildGameTiles } from './textures.ts';
 
@@ -13,6 +14,9 @@ function devOptions(): StartOptions {
   return {
     ...(q.get('stackWorker') === '0' ? { worker: false } : {}),
     ...(q.get('stackTex') === 'canvas' ? { path: 'canvas' as const } : {}),
+    // 絵が遅れて届くときを作る：?stackDelay=ミリ秒 で全部の絵を待たせ、?stackHold=deploy,battle でその揃いを releaseHold まで止める
+    ...(q.get('stackDelay') ? { delayMs: Number(q.get('stackDelay')) } : {}),
+    ...(q.get('stackHold') ? { hold: q.get('stackHold')!.split(',') as SetId[] } : {}),
   };
 }
 

@@ -345,6 +345,11 @@ export class DeployScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off(LAYOUT_EVENT, onLayout);
       offReady();
+      // 対戦の公開の揃いは、公開へ進むときだけ残す（部屋を出る・待機に戻るときは捨てる。公開の画面が終わるときにも捨てる）
+      if (this.pvpMode) {
+        const phase = client.room?.phase;
+        if (phase !== 'reveal' && phase !== 'battle') stackTextures.release('reveal');
+      }
       // 地面の絵はテクスチャごと捨てる（作り直すたびに増えないように）
       this.ground?.destroy();
       this.ground = null;

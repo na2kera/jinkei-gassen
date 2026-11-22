@@ -194,10 +194,14 @@ test('W1 歩いた距離：戦場の座標の差で積む。カメラだけを�
   assert.equal(w.update(3, 4, 16, false), 0);
   assert.equal(w.update(3, 4, 16, false), 0);
   assert.equal(r3(w.update(3.1, 4, 16, false)), 3.2);
-  // 2 マスを超えて飛んだら足さない
-  assert.equal(r3(w.update(6, 4, 16, false)), 3.2);
+  // 2 マスを超えて飛んだら、足さずに 0 に戻す（design §14.8。Codex の再現：(0,0) → (1,0) → (4,0) で 0）
+  assert.equal(r3(w.update(6, 4, 16, false)), 0);
+  const j = new WalkTracker();
+  j.update(0, 0, 16, false);
+  assert.equal(r3(j.update(1, 0, 16, false)), 32);
+  assert.equal(j.update(4, 0, 16, false), 0);
   // 戦っている間は止まっていても 1 秒に 5.3px
-  assert.equal(r3(w.update(6, 4, 1000, true)), 8.5);
+  assert.equal(r3(w.update(6, 4, 1000, true)), 5.3);
   w.reset();
   assert.equal(w.update(6, 4, 16, false), 0);
   assert.equal(walkFrame(100, 0, 0, false), 0);
