@@ -251,9 +251,8 @@ export function a5(seeds = SEEDS_40): A5Result {
 //       盾兵は本陣に届かず、鋒矢は全滅する（40個すべて wipeout）。どちらの場合も、守備の味方にふさがれる部隊も時間切れもない。刻み 6〜15 秒で出しても 40 個すべて勝つ。
 //       前の場面（鶴翼 対 偃月）は、盾兵の後ろでふさがれていた弓兵を突撃が押し出していただけだったので、回り込みの決まりを足したときに替えた。
 //       T10 の記録の「A8 charge」は、前の場面の配置のまま残している（A8 のテストの場面とは別）。
-// 堅守：陣営0は鶴翼（R15）、陣営1は魚鱗（R15）。6秒に中央（4〜7列）へ堅守。
-//       中央の翼に入る、両翼の内側の歩兵が魚鱗の先と組み合っている。出さないと崩れて負ける（種1000：103秒で壊滅）。
-//       出すと、その場で踏みとどまって崩れず、勝ちに変わる（種1000：58秒で壊滅させて勝ち）。
+// 堅守：陣営0は魚鱗、陣営1は雁行（どちらも標準の手持ち）。6秒に中央へ堅守（8×4 の配置エリアに合わせて作り直した。下の A8_TEMPLATES）。
+//       （main の 12×16 の盤では 鶴翼 対 魚鱗 だった。その場面の中身の説明は、新しい場面では確かめていない）
 // 突撃・堅守の場面は、ひな形の組・翼（全軍・中央）・刻み（4・8・15秒）を総当たりして、前後の刻みでも結果が変わらない組を選んだ。
 // 後退：陣営0は歩兵3（4〜6列、前の行、前進）と弓兵4（1・2・9・10列、いちばん奥の行、守備）。陣営1は歩兵4（3〜6列、前の行、前進）。
 //       歩兵どうしがぶつかった頃（5秒）に全軍後退し、弓兵の届くところまで敵を引き込む。
@@ -261,7 +260,9 @@ export function a5(seeds = SEEDS_40): A5Result {
 export type A8Kind = 'charge' | 'brace' | 'retreat';
 
 export const A8_ORDER_TICK: Record<A8Kind, number> = { charge: 80, brace: 60, retreat: 50 };
-export const A8_TEMPLATES: Record<'charge' | 'brace', [TemplateId, TemplateId]> = { charge: ['crescent', 'arrow'], brace: ['crane', 'scale'] };
+// 堅守：鶴翼を作り直したら、鶴翼 対 魚鱗は号令なしでも勝つ（1.0/1.0）。実験の枝で 42 組を探し、号令あり 1.0・なし 0.0 になる組
+// （鋒矢 対 鶴翼・鋒矢 対 横陣・魚鱗 対 雁行）のうち、横陣の弓兵の並べ方を直す前とあとの両方で通った 魚鱗 対 雁行 にした（実験の記録 §24）
+export const A8_TEMPLATES: Record<'charge' | 'brace', [TemplateId, TemplateId]> = { charge: ['crescent', 'arrow'], brace: ['scale', 'echelon'] };
 
 export function a8Setup(kind: A8Kind, seed: number): BattleSetup {
   if (kind === 'charge' || kind === 'brace') {
@@ -294,13 +295,23 @@ export function a8(kind: A8Kind, seeds = SEEDS_40): { withOrder: number; without
 }
 
 // ------------------------------------------------------------ A11
-// 同じ予算（36）の2軍。守る側：本陣・盾兵4・弓兵4・歩兵6 を横陣に並べ、全部隊を守備。
-// 攻める側：本陣・歩兵6・盾兵2・騎兵3・弓兵2 を横陣のひな形どおり。守る側を陣営0にした40戦と陣営1にした40戦。
+// 守る側を横陣に並べ、全部隊を守備。攻める側は横陣のひな形どおり（編成は下の A11_DEFENSE・A11_OFFENSES）。
+// 攻める側の編成ごとに、守る側を陣営0にした40戦と陣営1にした40戦。
 // 全部隊が守備の軍どうしは、守る側の編成を両軍に使う。
 
-// 予算 24 の版（実験の枝 exp/grid-tuning で置き直したもの。守る側 盾3・弓3・歩3、攻める側 歩5・盾1・騎2・弓1。元の 36 の編成を約 3分の2 に）
+// 予算 24 の版（実験の枝 exp/grid-tuning で置き直したもの。守る側 盾3・弓3・歩3。元の 36 の編成を約 3分の2 に）。
+// 1つの攻める編成との勝ち負けは、どの組でも 0 か 1 になる（実験の枝で予算 24 の組を 80 通り。種を変えてもほぼ同じ）。
+// そこで攻める側を予算 23〜24 の4つの編成にして平均する（守る側が2つに勝ち、2つに負ける。実験の記録 §24）。
+// 4つの平均なので、値は「守りが勝つ相手と負ける相手がある」ことを示すだけで、1つの編成どうしの釣り合いを示すものではない。
 export const A11_DEFENSE = { hq: 1, shield: 3, archer: 3, infantry: 3 } as const;
+/** 攻める側の1つ目（もとの1対1の場面の攻める側） */
 export const A11_OFFENSE = { hq: 1, infantry: 5, shield: 1, cavalry: 2, archer: 1 } as const;
+export const A11_OFFENSES: readonly Readonly<Record<string, number>>[] = [
+  A11_OFFENSE,
+  { hq: 1, infantry: 3, shield: 1, cavalry: 2, archer: 2 },
+  { hq: 1, infantry: 5, shield: 2, cavalry: 1, archer: 1 },
+  { hq: 1, infantry: 4, shield: 2, cavalry: 1, archer: 2 },
+];
 
 export function allHold(p: Placement[]): Placement[] {
   return p.map((x) => ({ ...x, stance: 'hold' }));
@@ -315,12 +326,14 @@ export function a11(seeds = SEEDS_40): { defenderScore: number; holdVsHoldAllDra
   const pts: number[] = [];
   let allDraw = true;
   for (const seed of seeds) {
-    for (const side of [0, 1] as const) {
-      const def = allHold(lineOf(A11_DEFENSE, side));
-      const atk = lineOf(A11_OFFENSE, side === 0 ? 1 : 0);
-      const armies: [Placement[], Placement[]] = side === 0 ? [def, atk] : [atk, def];
-      const { state } = runSetup({ field: plainField(), armies, seed, maxTicks: 1800, timeout: 'compare' });
-      pts.push(scoreFor(state, side));
+    for (const off of A11_OFFENSES) {
+      for (const side of [0, 1] as const) {
+        const def = allHold(lineOf(A11_DEFENSE, side));
+        const atk = lineOf(off, side === 0 ? 1 : 0);
+        const armies: [Placement[], Placement[]] = side === 0 ? [def, atk] : [atk, def];
+        const { state } = runSetup({ field: plainField(), armies, seed, maxTicks: 1800, timeout: 'compare' });
+        pts.push(scoreFor(state, side));
+      }
     }
     const hh = runSetup({
       field: plainField(),
