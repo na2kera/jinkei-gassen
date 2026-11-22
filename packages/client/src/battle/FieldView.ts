@@ -73,8 +73,8 @@ export class FieldView {
   }
 
   /**
-   * 旗と号令の印を、実際に描く矩形（旗のはためく 1px を含む）が uiBounds に収まるよう寄せるか。
-   * 真上と斜めは false（§5.8 の前の判定のまま。旗が 1px はみ出すことがあるのも、そのまま残す）
+   * 号令の印を、uiBounds に収まるよう寄せるか（横からだけ）。真上と斜めは false（§5.8 の前の置き方のまま）。
+   * 旗を左右どちらに出すかは、どの視点でも実際に描く旗の右端（はためく 1px を含む）で決める（art/UnitSprite.ts。design §13.14）
    */
   get fitMarks(): boolean {
     return this.mode !== 'top' && this.mode !== 'oblique';
