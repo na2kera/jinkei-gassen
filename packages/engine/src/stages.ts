@@ -208,10 +208,12 @@ export const STAGES: Stage[] = [
     name: '寡兵の戦',
     hint: '敵の突撃を、どこで、どう受ける？',
     // 行 6・7 が川（端から端まで）、その奥（自軍の前の2行）の列 2〜7 が丘、両脇（列 0・1 と列 8・9 × 行 8〜11）が森。
-    // 敵は 1.52 倍で、12秒と30秒に全軍突撃してくる
+    // 敵は 1.21 倍で、12秒と30秒に全軍突撃してくる。
+    // 計画表の数（歩兵8、1.52 倍）では、見本・横陣・ひな形7つのどれも1回も勝てず、次の面が開かなかったので、
+    // 正面の歩兵の両端の2つ（列 1・8）を外した（2026-11-22。勝てる面にする最小の直し。難しさは公開のあとに合わせる。decisions §25）
     field: terrainField(10, [['river', span(0, 9), [6, 7]], ['hill', span(2, 7), [8, 9]], ['forest', [0, 1], span(8, 11)], ['forest', [8, 9], span(8, 11)]]),
     roster: { hq: 1, infantry: 2, shield: 1, cavalry: 2, archer: 2 },
-    enemy: [hq(4, 0), ...at('infantry', 'advance', span(1, 8), 2), ...at('cavalry', 'flank', [2, 7], 1)],
+    enemy: [hq(4, 0), ...at('infantry', 'advance', span(2, 7), 2), ...at('cavalry', 'flank', [2, 7], 1)],
     enemyOrders: [
       { atSec: 12, target: 'all', kind: 'charge' },
       { atSec: 30, target: 'all', kind: 'charge' },
@@ -232,10 +234,12 @@ export const STAGES: Stage[] = [
     index: 1,
     name: '柵の守り',
     hint: '柵の外側を回ってくる敵は？',
-    // 自軍の配置エリアのいちばん前の行（行 8）の中央4列（列 3〜6）が柵。敵は正面に盾兵と歩兵、両端に迂回の騎兵2。120秒守り切れば勝ち
+    // 自軍の配置エリアのいちばん前の行（行 8）の中央4列（列 3〜6）が柵。敵は正面に盾兵と歩兵、両端に迂回の騎兵2。120秒守り切れば勝ち。
+    // 置き直したままの数（敵11部隊）では、見本が10勝で横陣・ひな形は全部0勝だったので、正面の右端の歩兵（列 6、行 2）を外した
+    // （2026-11-22。勝てる面にする最小の直し。難しさは公開のあとに合わせる。decisions §25）
     field: terrainField(10, [['fence', span(3, 6), [8]]]),
     roster: { hq: 1, shield: 3, infantry: 3, archer: 2 },
-    enemy: [hq(4, 0), ...at('infantry', 'advance', [2, 6], 2), ...at('shield', 'advance', [3, 4, 5], 2), ...at('infantry', 'advance', [3, 4, 5], 1), ...at('cavalry', 'flank', [2, 7], 1)],
+    enemy: [hq(4, 0), ...at('infantry', 'advance', [2], 2), ...at('shield', 'advance', [3, 4, 5], 2), ...at('infantry', 'advance', [3, 4, 5], 1), ...at('cavalry', 'flank', [2, 7], 1)],
     win: { type: 'survive' },
     seconds: 120,
     // 柵のマスに歩兵と盾兵を守備で並べ、柵の外の両脇（列 2・7）に盾兵を守備で置いて、端を回ってくる騎兵を正面で受ける
