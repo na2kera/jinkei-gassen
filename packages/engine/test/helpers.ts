@@ -91,4 +91,4 @@ export const DIFFICULTY_LATER = '難しさは公開のあとに合わせる（de
 /** 古い盤（12×16）の手持ちで探した星3つの配置。置き直した面の手持ちと合わないので、探し直すまで止める */
 export const STAR3_LATER = '星3つの配置は古い盤のもの。公開のあとに探し直す（decisions §25）';
 /** 星3つの配置を、まだ新しい盤で探し直していない面（第2章・第3章。test/fixtures/star3.ts の記録）。探し直したら外す */
-export const STAR3_PENDING_CH23 = new Set(['2-1', '2-2', '3-2', '3-4']);
+export const STAR3_PENDING_CH23 = new Set(['2-1', '2-2', '3-2']);

@@ -307,7 +307,9 @@ export const STAGES: Stage[] = [
     // 手持ちは6部隊（柵の幅と同じ盾兵5と本陣）で、敵は 1.86 倍（いまの面の 2.03 倍は、敵の11部隊の上限で保てない。decisions §22）。90秒守り切れば勝ち
     field: terrainField(5, [['fence', span(0, 4), [8]], ['hill', span(0, 4), [10, 11]]]),
     roster: { hq: 1, shield: 5 },
-    enemy: [hq(2, 0), ...at('infantry', 'advance', span(0, 4), 2), ...at('infantry', 'advance', span(0, 4), 1)],
+    // 前の行（行 2）の歩兵5は本陣狙い、後ろの行（行 1）の歩兵5は前進。全部前進（置き直したまま）では、横陣（盾兵が前進）が
+    // そのまま守り切った。本陣狙いの歩兵は、柵の盾兵の列にすき間ができると本陣へ抜けてくる（2026-11-22）
+    enemy: [hq(2, 0), ...at('infantry', 'hunt', span(0, 4), 2), ...at('infantry', 'advance', span(0, 4), 1)],
     win: { type: 'survive' },
     seconds: 90,
     // 柵の5マスを、盾兵5の守備ですき間なく埋め（盾の正面と柵の両方が効く）、15秒ごとに堅守をかけ直して持ちこたえる。
