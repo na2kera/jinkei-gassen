@@ -53,3 +53,31 @@ export const ART = {
 export function css(color: number): string {
   return `#${color.toString(16).padStart(6, '0')}`;
 }
+
+/**
+ * 地形の色。新しい色ではなく、地形の絵（art/textures.ts の丘・森・川・柵・城壁・門・瓦礫）ですでに使っている値に名前を付けたもの。
+ * 立体の絵（art/stack。design §14.2）はここから読む。textures.ts は、道具（ポスターと OGP）の絵を変えないために、
+ * 中身を変えずに値を直に書いたまま残している。値が同じことは test/stackArt.test.ts で確かめる。
+ */
+export const TERRAIN = {
+  hill: 0x7d9a40,
+  hillHi: 0x9cb456,
+  hillLo: 0x5a7430,
+  leafLo: 0x2a4418,
+  leaf: 0x3a5a22,
+  leafHi: 0x4e7430,
+  water: 0x4a92ac,
+  waterHi: 0x9ccfdc,
+  stake: 0x3a2a14,
+  stakeTop: 0xb07a3a,
+  stoneTop: 0x8a867c,
+  stone: 0x77736a,
+  stoneFace: 0x4a4640,
+  stoneLine: 0x6a6660,
+  gateDark: 0x2a1c0e,
+  gateWood: 0x8a5a2a,
+  gateWoodLo: 0x6e4620,
+  gateIron: 0x45464e,
+  gateStud: 0xdcdcd2,
+  dirt: 0x6e6450,
+} as const;
