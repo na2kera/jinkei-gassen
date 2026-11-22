@@ -275,6 +275,9 @@ export class BattleScene extends Phaser.Scene {
     this.game.events.on(LAYOUT_EVENT, onLayout);
     // 木の絵が戦闘の途中で届いたら描き直す（兵は毎コマ apply するので、次のコマで替わる）。シーンの終わりでやめる
     const offReady = stackTextures.onReady(() => this.forest?.update());
+    // 公開の揃いは戦闘では使わない。公開の画面を通らずに戦闘へ進んだとき（タブを裏に回して公開の 3 秒が過ぎた、など）も残さない
+    // （公開の画面を通ったときは、その終わりで捨ててある。何度捨てても困らない）
+    stackTextures.release('reveal');
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off(LAYOUT_EVENT, onLayout);
       offReady();
