@@ -7,8 +7,9 @@
 import Phaser from 'phaser';
 import { ANGLES, type Geom } from './bake.ts';
 import type { FromWorker, ToWorker } from './bakeWorker.ts';
-import { BakeQueue, BATTLE_SCALE, SET_IDS, setSheets, soldierFrameName, startupTasks, treeFrameName, treeSheetKey, soldierSheetKey, wrapAngle, type BakedFrame, type BakedSheet, type SetId, type SheetSpec, type TaskSpec } from './jobs.ts';
+import { BakeQueue, BATTLE_SCALE, SET_IDS, setSheets, soldierFrameName, startupTasks, terrainAngles, terrainFrameName, terrainSheetKey, treeFrameName, treeSheetKey, soldierSheetKey, wrapAngle, type BakedFrame, type BakedSheet, type SetId, type SheetSpec, type TaskSpec } from './jobs.ts';
 import type { ModelId, TreeId } from './parts.ts';
+import type { PropId, TerrainGroup } from './props.ts';
 import { SheetBook } from './sheetBook.ts';
 
 /** 主スレッドの列が 1 コマに進める時間（ミリ秒） */
@@ -117,10 +118,11 @@ class StackTextures {
     this.dispatch(tasks);
   }
 
-  /** 揃いを頼む（できていない分を、列の先頭に入れる） */
-  request(set: SetId): void {
+  /** 揃いを頼む（できていない分を、列の先頭に入れる）。地形は、要る向きの組 groups の分（design §16.4。省くと組 A） */
+  request(set: SetId, opts: { groups?: readonly TerrainGroup[] } = {}): void {
+    if (set === 'terrain' && opts.groups && opts.groups.length === 0) return;
     this.released.delete(set);
-    const specs = this.book.stamp(setSheets(set).filter((s) => !this.ready.has(s.key) && !this.inbox.some((x) => x.sheet.key === s.key)));
+    const specs = this.book.stamp(setSheets(set, ANGLES, opts.groups ?? ['A']).filter((s) => !this.ready.has(s.key) && !this.inbox.some((x) => x.sheet.key === s.key)));
     if (specs.length === 0) return;
     const keys = new Set(specs.map((s) => s.key));
     this.wanted = [...specs, ...this.wanted.filter((s) => !keys.has(s.key))];
@@ -170,12 +172,12 @@ class StackTextures {
 
   /** 揃いが全部できたか（model を渡せば、その型の 1 枚だけ） */
   isReady(set: SetId, model?: ModelId): boolean {
-    if (model && set !== 'tree') return this.ready.has(soldierSheetKey(set, model));
+    if (model && set !== 'tree' && set !== 'terrain') return this.ready.has(soldierSheetKey(set, model));
     return setSheets(set).every((s) => this.ready.has(s.key));
   }
 
   /** 揃いの兵の 1 コマ（なければ null） */
-  soldier(set: Exclude<SetId, 'tree'>, model: ModelId, team: 0 | 1, walk: number, angle: number): FrameRef | null {
+  soldier(set: Exclude<SetId, 'tree' | 'terrain'>, model: ModelId, team: 0 | 1, walk: number, angle: number): FrameRef | null {
     const sheet = this.ready.get(soldierSheetKey(set, model));
     if (!sheet) return null;
     const name = soldierFrameName(team, walk, wrapAngle(angle));
@@ -205,12 +207,32 @@ class StackTextures {
     return info ? { key: sheet.key, frame: name, sheet, info, display: 1, fallback: false } : null;
   }
 
+  /**
+   * 地形（柵・城壁・城門）の 1 コマ。angle は向きの番号（組 A か組 B の向き）、scale は焼いた大きさ。
+   * その大きさ・その向きの絵がなければ null（design §16.3）
+   */
+  prop(prop: PropId, angle: number, scale: number): FrameRef | null {
+    const a = wrapAngle(angle);
+    const inA = terrainAngles(scale).includes(a);
+    const inB = terrainAngles(scale).includes(wrapAngle(a - ANGLES / 2));
+    for (const group of [inA ? 'A' : null, inB ? 'B' : null] as const) {
+      if (!group) continue;
+      const sheet = this.ready.get(terrainSheetKey(prop, scale, group));
+      if (!sheet) continue;
+      const name = terrainFrameName(a);
+      const info = sheet.frames.get(name);
+      if (info) return { key: sheet.key, frame: name, sheet, info, display: 1, fallback: false };
+    }
+    return null;
+  }
+
   /** 開発用の口に出す、でき具合と時間と量 */
   status(): object {
     const sets: Record<string, { done: number; total: number; mb: number; loadedMb: number }> = {};
     for (const set of SET_IDS) {
       const specs = setSheets(set);
-      const got = specs.map((s) => this.ready.get(s.key)).filter((s): s is SheetInfo => !!s);
+      // 地形は組 B の絵も数える（total は組 A の枚数）
+      const got = set === 'terrain' ? [...this.ready.values()].filter((s) => s.set === set) : specs.map((s) => this.ready.get(s.key)).filter((s): s is SheetInfo => !!s);
       sets[set] = {
         done: got.length,
         total: specs.length,

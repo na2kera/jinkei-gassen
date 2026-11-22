@@ -45,8 +45,9 @@ import {
 import Phaser from 'phaser';
 import { drawFieldFrame, drawZone } from '../art/field.ts';
 import { COLOR, css } from '../art/palette.ts';
-import { Forest, Ground, strokeCell } from '../art/stack/ground.ts';
+import { Forest, Ground, Scenery, strokeCell } from '../art/stack/ground.ts';
 import { fieldHeight } from '../art/stack/height.ts';
+import { terrainGroups } from '../art/stack/props.ts';
 import { SquadSprite } from '../art/stack/SquadSprite.ts';
 import { stackTextures } from '../art/stack/stackTextures.ts';
 import { playFormation, playPlace, playRemove, playStance, playStart } from '../audio/sfx.ts';
@@ -169,6 +170,11 @@ export class DeployScene extends Phaser.Scene {
   private markLayer!: Phaser.GameObjects.Container;
   private ground: Ground | null = null;
   private forest: Forest | null = null;
+  /** 立った地形（柵・城壁・城門。design §16.5） */
+  private scenery: Scenery | null = null;
+  /** 地形の揃いを頼んだか。開戦が通った（戦闘が引き継ぐ）・作り直す（同じ画面のまま）なら、終わりで捨てない（design §16.4） */
+  private terrainRequested = false;
+  private terrainKeep = false;
   private enemySprites: SquadSprite[] = [];
   private popupLayer!: Phaser.GameObjects.Container;
   private dropMark!: Phaser.GameObjects.Graphics;
@@ -264,6 +270,9 @@ export class DeployScene extends Phaser.Scene {
     this.kindPointer = null;
     this.kindExpired = false;
     this.kindTimer = null;
+    // シーンは使い回されるので、地形の揃いの印は毎回戻す
+    this.terrainRequested = false;
+    this.terrainKeep = false;
 
     if (this.pvpMode) {
       pvp.arrived('Deploy');
@@ -321,6 +330,14 @@ export class DeployScene extends Phaser.Scene {
     this.ground = new Ground(this, this.fv, field, groundLayer, fogLayer, gate);
     if (!this.pvpMode) this.ground.addFog(this.stage.fog ?? []);
     this.forest = new Forest(this, this.fv, field, this.soldierLayer);
+    if (!this.pvpMode) {
+      // 柵・城壁・城門の揃いを頼む（柵か城壁のある面だけ。作り直しでは、もうあるので何も起きない）。配置の画面は回さないので返さない表示
+      const groups = terrainGroups(field, gate, false);
+      this.terrainRequested = groups.length > 0;
+      if (this.terrainRequested) stackTextures.request('terrain', { groups });
+      // 立った地形（門はいつも gate0）。前後の線を BoardView に登録する
+      this.scenery = new Scenery(this, this.fv, field, gate, this.soldierLayer);
+    }
     debug.cellScreen = (c, r) => this.fv.cellCenter(c, r);
     this.enemySprites = [];
     this.dropMark = this.add.graphics();
@@ -385,7 +402,11 @@ export class DeployScene extends Phaser.Scene {
     // 向きが変わったら作り直す。対戦では、画面の切り替えとぶつからないよう pvp.ts に頼む
     const onLayout = (): void => {
       if (this.pvpMode) pvp.requestRestart(this, { pvp: true });
-      else this.scene.restart();
+      else {
+        // 作り直しは同じ画面のまま：地形の揃いは捨てない
+        this.terrainKeep = true;
+        this.scene.restart();
+      }
     };
     this.game.events.on(LAYOUT_EVENT, onLayout);
     // 焼いた絵が届いたら描き直す（シーンが終わるときにやめる）
@@ -408,6 +429,10 @@ export class DeployScene extends Phaser.Scene {
       this.ground?.destroy();
       this.ground = null;
       this.forest = null;
+      this.scenery?.destroy();
+      this.scenery = null;
+      // 地形の揃い：戦闘へ進む（引き継ぐ）・作り直すときは残し、ほかの出方（戻る・面の一覧へ）では捨てる
+      if (this.terrainRequested && !this.terrainKeep) stackTextures.release('terrain');
       // 陣形の窓の名前の入力欄（HTML）を残さない
       this.dialog?.close();
       this.kindTimer?.remove();
@@ -613,6 +638,8 @@ export class DeployScene extends Phaser.Scene {
     playStart();
     // 押した流れの中で、画面を消さないように頼む（scene.start は予約なので、戦闘の画面が始まってからでは Safari が断る。design §9.9-7）
     holdWake('battle');
+    // 開戦が通った：地形の揃いは戦闘が引き継ぐ
+    this.terrainKeep = true;
     this.scene.start('Battle', data);
     return true;
   }
@@ -1005,6 +1032,8 @@ export class DeployScene extends Phaser.Scene {
     playStart();
     // 押した流れの中で、画面を消さないように頼む（design §9.9-7）
     holdWake('battle');
+    // 開戦が通った：地形の揃いは戦闘が引き継ぐ
+    this.terrainKeep = true;
     this.scene.start('Battle', data);
     return true;
   }
@@ -1614,6 +1643,7 @@ export class DeployScene extends Phaser.Scene {
   private onStackReady(): void {
     if (!this.fv) return;
     this.forest?.update();
+    this.scenery?.update();
     this.applyEnemies();
     this.applyOwn();
     this.ghost?.destroy();

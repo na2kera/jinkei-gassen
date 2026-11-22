@@ -4,20 +4,34 @@
 import { angleOf, ANGLES, bakeGeom, bakeOne, colorTable, copySwapped, extentOf, sheetLayout, slotPos, teamPixels, teamSwap, type Extent, type Geom } from './bake.ts';
 import { carvePart, emptyVox, makeModel, type Model } from './carve.ts';
 import { centerOf, dimsOf, MODEL_IDS, modelParts, TREE_DIMS, TREE_IDS, treeParts, WALK_FRAMES, type ModelId, type TreeId } from './parts.ts';
+import { familyIds, familyOf, PROP_H, PROP_IDS, propModel, type PropId, type TerrainGroup } from './props.ts';
 
-/** 揃い（配置・公開・戦闘・木） */
-export type SetId = 'deploy' | 'reveal' | 'battle' | 'tree';
-export const SET_IDS: readonly SetId[] = ['deploy', 'reveal', 'battle', 'tree'];
+/** 揃い（配置・公開・戦闘・木・地形（柵・城壁・城門。design §16.4）） */
+export type SetId = 'deploy' | 'reveal' | 'battle' | 'tree' | 'terrain';
+export const SET_IDS: readonly SetId[] = ['deploy', 'reveal', 'battle', 'tree', 'terrain'];
 
 /** 戦闘の兵の大きさ（どの向きでも 0.84。design §14.3） */
 export const BATTLE_SCALE = 0.84;
 /** 木を焼く大きさ（配置・公開の 1 と、止まった向きごとの盤の縮み。design §14.7） */
 export const TREE_SCALES = [1, 0.65, 0.79, 0.94] as const;
+/**
+ * 地形（柵・城壁・城門）を焼く大きさと、その大きさで焼く向き（組 A。組 B は N/2 を足す）。design §16.3。
+ * 大きさ 1 は −30°〜90° の全部、ほかは止まった向き（後ろ 0.94、右斜め・左斜め 0.65、横 0.79）だけ。縮みは木の揃いと同じ値
+ */
+export function terrainAngles(scale: number, n = ANGLES): number[] {
+  if (scale === 1) return revealAngles(n);
+  if (scale === 0.94) return [0];
+  if (scale === 0.65) return [n / 12, wrapAngle(-n / 12, n)];
+  if (scale === 0.79) return [n / 4];
+  return [];
+}
+export const TERRAIN_SCALES = [1, 0.94, 0.65, 0.79] as const;
 
 /** 1 コマの中身。soldier は 型 × 陣営 × 歩くコマ × 角度、tree は 木の種 × 角度 */
 export type FrameSpec =
   | { readonly t: 'soldier'; readonly model: ModelId; readonly team: 0 | 1; readonly walk: number; readonly angle: number }
-  | { readonly t: 'tree'; readonly tree: TreeId; readonly angle: number };
+  | { readonly t: 'tree'; readonly tree: TreeId; readonly angle: number }
+  | { readonly t: 'prop'; readonly prop: PropId; readonly angle: number };
 
 /** 1 枚の絵（テクスチャ 1 つ）の作り方 */
 export interface SheetSpec {
@@ -79,7 +93,17 @@ export function treeFrameName(tree: TreeId, angle: number): string {
   return `${tree}|${angle}`;
 }
 
-export function soldierSheetKey(set: Exclude<SetId, 'tree'>, model: ModelId): string {
+/** 地形のコマの名前（向きの番号） */
+export function terrainFrameName(angle: number): string {
+  return String(angle);
+}
+
+/** 地形の絵の鍵（型・大きさ・組。例：stk-terrain-wallEW-065-A） */
+export function terrainSheetKey(prop: PropId, scale: number, group: TerrainGroup): string {
+  return `stk-terrain-${prop}-${String(Math.round(scale * 100)).padStart(3, '0')}-${group}`;
+}
+
+export function soldierSheetKey(set: Exclude<SetId, 'tree' | 'terrain'>, model: ModelId): string {
   return `stk-${set}-${model}`;
 }
 
@@ -97,7 +121,7 @@ export function revealAngles(n = ANGLES): number[] {
 // ---- 揃いの中身 ----
 
 function frameName(f: FrameSpec): string {
-  return f.t === 'soldier' ? soldierFrameName(f.team, f.walk, f.angle) : treeFrameName(f.tree, f.angle);
+  return f.t === 'soldier' ? soldierFrameName(f.team, f.walk, f.angle) : f.t === 'tree' ? treeFrameName(f.tree, f.angle) : terrainFrameName(f.angle);
 }
 
 /** 配置の揃い（大きさ 1。自軍の上向き＝番号 0、敵軍の下向き＝番号 N/2。歩くコマ 0） */
@@ -135,8 +159,15 @@ function treeSpec(scale: number, n: number): SheetSpec {
   return { key: treeSheetKey(scale), set: 'tree', scale, frames };
 }
 
-/** 揃いの 1 枚 1 枚 */
-export function setSheets(set: SetId, n = ANGLES): SheetSpec[] {
+/** 地形の揃い（型 1 つ・大きさ 1 つ・組 1 つにつき 1 枚。design §16.4） */
+function terrainSpec(prop: PropId, scale: number, group: TerrainGroup, n: number): SheetSpec {
+  const add = group === 'B' ? n / 2 : 0;
+  const frames: FrameSpec[] = terrainAngles(scale, n).map((a) => ({ t: 'prop', prop, angle: wrapAngle(a + add, n) }));
+  return { key: terrainSheetKey(prop, scale, group), set: 'terrain', scale, frames };
+}
+
+/** 揃いの 1 枚 1 枚。地形は、要る向きの組 groups の分（省くと組 A だけ） */
+export function setSheets(set: SetId, n = ANGLES, groups: readonly TerrainGroup[] = ['A']): SheetSpec[] {
   switch (set) {
     case 'deploy':
       return MODEL_IDS.map((m) => deploySpec(m, n));
@@ -146,6 +177,8 @@ export function setSheets(set: SetId, n = ANGLES): SheetSpec[] {
       return MODEL_IDS.map((m) => battleSpec(m, n));
     case 'tree':
       return TREE_SCALES.map((s) => treeSpec(s, n));
+    case 'terrain':
+      return groups.flatMap((g) => PROP_IDS.flatMap((p) => TERRAIN_SCALES.map((s) => terrainSpec(p, s, g, n))));
   }
 }
 
@@ -170,6 +203,8 @@ export function startupTasks(n = ANGLES): TaskSpec[] {
 type ModelKey = string;
 const soldierModelKey = (m: ModelId, w: number): ModelKey => `${m}|${w}`;
 const treeModelKey = (t: TreeId): ModelKey => `tree|${t}`;
+const propModelKey = (p: PropId): ModelKey => `prop|${p}`;
+const propMaskKey = (p: PropId): ModelKey => `propmask|${p}`;
 
 interface Running {
   readonly task: TaskSpec;
@@ -222,7 +257,8 @@ export class BakeQueue {
 
   /** その揃いの、まだできていない仕事を捨てる（途中のものもやめる）。できた絵も「できていない」に戻す（捨てた揃いは、頼み直せば作り直す） */
   cancel(set: SetId): void {
-    for (const s of setSheets(set, this.n)) this.skip.delete(s.key);
+    // 地形は、組 A・B の両方の鍵を戻す
+    for (const s of setSheets(set, this.n, ['A', 'B'])) this.skip.delete(s.key);
     this.pending = this.pending.filter((t) => !(t.t === 'sheet' && t.spec.set === set));
     if (this.cur && this.cur.task.t === 'sheet' && this.cur.task.spec.set === set) this.cur = null;
   }
@@ -329,15 +365,83 @@ export class BakeQueue {
     return m;
   }
 
-  private *modelOf(f: FrameSpec): Generator<void, Model, void> {
+  /** 地形の型（本体と、輪郭を描かない所）。手続きで埋めるので、1 つの型で 1 区切り */
+  private *ensureProp(p: PropId): Generator<void, { m: Model; mask: Model | null }, void> {
+    const have = this.models.get(propModelKey(p));
+    if (have) return { m: have, mask: this.models.get(propMaskKey(p)) ?? null };
+    const t0 = this.now();
+    const pm = propModel(p);
+    this.stats.carveMs += this.now() - t0;
+    this.stats.carveParts++;
+    this.models.set(propModelKey(p), pm.m);
+    if (pm.mask) this.models.set(propMaskKey(p), pm.mask);
+    yield;
+    return pm;
+  }
+
+  private *modelOf(f: Exclude<FrameSpec, { t: 'prop' }>): Generator<void, Model, void> {
     return f.t === 'soldier' ? yield* this.ensureSoldier(f.model, f.walk) : yield* this.ensureTree(f.tree);
+  }
+
+  /** 地形の 1 枚を焼く（1 コマごとに区切る）。枠は、その型の系統（城壁・城門・柵）の全部の型と mask が入る大きさ（design §16.2・§16.4） */
+  private *bakePropSheet(spec: SheetSpec): Generator<void, void, void> {
+    const first = spec.frames[0]!;
+    const prop = first.t === 'prop' ? first.prop : null;
+    if (!prop) throw new Error(`地形の絵でない：${spec.key}`);
+    const fam = familyOf(prop);
+    let R = 0;
+    for (const id of familyIds(fam)) {
+      const pm = yield* this.ensureProp(id);
+      R = Math.max(R, pm.m.R, pm.mask ? pm.mask.R : 0);
+    }
+    const pm = yield* this.ensureProp(prop);
+    const g = bakeGeom(R, PROP_H[fam], spec.scale);
+    const layout = sheetLayout(g, spec.frames.length);
+    const rgba = new ArrayBuffer(layout.w * layout.h * 4);
+    const buf = new Uint32Array(rgba);
+    const vi = new Int32Array(g.fw * g.fh);
+    const mk = new Int32Array(g.fw * g.fh);
+    const cmap = colorTable(0);
+    const frames: BakedFrame[] = [];
+    for (let i = 0; i < spec.frames.length; i++) {
+      const f = spec.frames[i]!;
+      const pos = slotPos(layout, g, i);
+      bakeOne(buf, layout.w, pos[0], pos[1], g, pm.m, angleOf(f.angle, this.n), spec.scale, cmap, vi, pm.mask, mk);
+      frames.push({ name: frameName(f), x: pos[0], y: pos[1], ext: extentOf(buf, layout.w, pos[0], pos[1], g) });
+      if (i < spec.frames.length - 1) yield;
+    }
+    const ms = (this.cur?.ms ?? 0) + (this.now() - this.stepStart);
+    this.stats.baked += spec.frames.length;
+    this.stats.sheets++;
+    const out: BakedSheet = {
+      key: spec.key,
+      set: spec.set,
+      scale: spec.scale,
+      w: layout.w,
+      h: layout.h,
+      g,
+      frames,
+      rgba,
+      ...(spec.gen !== undefined ? { gen: spec.gen } : {}),
+      ms,
+      baked: spec.frames.length,
+      copied: 0,
+    };
+    this.skip.add(spec.key);
+    this.emit(out);
   }
 
   /** 1 枚の絵を焼く（1 コマごとに区切る） */
   private *bakeSheet(spec: SheetSpec): Generator<void, void, void> {
+    if (spec.set === 'terrain') {
+      yield* this.bakePropSheet(spec);
+      return;
+    }
     // 枠は、その絵の全部のコマの型が入る大きさ（試作の bakeSet と同じ）
+    // 地形のほか（兵と木）のコマ
+    const specFrames = spec.frames as readonly Exclude<FrameSpec, { t: 'prop' }>[];
     const used = new Map<string, Model>();
-    for (const f of spec.frames) {
+    for (const f of specFrames) {
       const k = f.t === 'soldier' ? soldierModelKey(f.model, f.walk) : treeModelKey(f.tree);
       if (!used.has(k)) used.set(k, yield* this.modelOf(f));
     }
@@ -366,7 +470,7 @@ export class BakeQueue {
     let baked = 0;
     let copied = 0;
     for (let i = 0; i < spec.frames.length; i++) {
-      const f = spec.frames[i]!;
+      const f = specFrames[i]!;
       const pos = slotPos(layout, g, i);
       const src = f.t === 'soldier' && f.team === 1 ? own.get(`${f.walk}|${f.angle}`) : undefined;
       if (src) {

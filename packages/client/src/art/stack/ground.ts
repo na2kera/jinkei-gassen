@@ -1,4 +1,5 @@
-// 立体の画面の地面（design §14.7）：下地（市松の草地・川・森の点・柵や城壁のタイル）と丘の層、森の木、門の描き直し、霧の入れ物。
+// 立体の画面の地面（design §14.7・§16.5）：下地（市松の草地・川・森の点・城壁と城門の土の帯）と丘の層、森の木、立った地形（柵・城壁・城門）、
+// 門が破れたあとの瓦礫、霧の入れ物。
 // 地面は盤と同じ大きさの絵を、盤と一緒に回して縦をつぶして置く（入れ物を 2 つ重ね、外側に位置と拡大、内側に回転）。
 // 地面の絵はシーンが終わるとき・作り直すときに捨てる（destroy でテクスチャごと消す）。試作（proto17v2/main.js）の paintBase・buildGround を写した。
 
@@ -6,12 +7,13 @@ import type { Field } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { BOARD_CELL, type BoardView } from '../../battle/BoardView.ts';
 import { COLOR, TERRAIN, css } from '../palette.ts';
-import { FOG_KEY, gateKey, RUBBLE_KEY, tileKey } from '../textures.ts';
+import { FOG_KEY, RUBBLE_KEY } from '../textures.ts';
 import { abgr, ANGLES } from './bake.ts';
 import { HILL_MAX } from './height.ts';
-import { treeFrameName, TREE_SCALES } from './jobs.ts';
+import { treeFrameName, TREE_SCALES, wrapAngle } from './jobs.ts';
 import { stackTextures } from './stackTextures.ts';
 import type { TreeId } from './parts.ts';
+import { propPlaces, type PropPlace } from './props.ts';
 
 /** 決まった乱数（試作と同じ） */
 export function rng(seed: number): () => number {
@@ -53,7 +55,6 @@ export class Ground {
   private readonly fogOuter: Phaser.GameObjects.Container;
   private readonly fogInner: Phaser.GameObjects.Container;
   private readonly gate: GateLook | null;
-  private gateStage: 0 | 1 | 2 = 0;
   private gateBroken = false;
   /** 画素 1 枚ぶんの量の合計（バイト。開発用の口に出す） */
   readonly bytes: number;
@@ -186,12 +187,15 @@ export class Ground {
     });
   }
 
-  /** 門の様子（傷み具合の段と、破れたか）。門のマスと両隣の城壁のマスだけを描き直す。戻り値は描き直したマス */
+  /**
+   * 門の様子。破れたら、門のマスと両隣の城壁のマスに瓦礫を描く。戻り値は描き直したマス（崩れる演出に使う）。
+   * 傷み具合の段は、地面には描かない（立った門の絵が受け持つ。design §16.6）
+   */
   setGate(stage: 0 | 1 | 2, broken: boolean): { col: number; row: number }[] {
+    void stage;
     const g = this.gate;
-    if (!g || (stage === this.gateStage && broken === this.gateBroken)) return [];
-    this.gateStage = stage;
-    this.gateBroken = broken;
+    if (!g || !broken || this.gateBroken) return [];
+    this.gateBroken = true;
     const tex = this.scene.textures.get(this.baseKey) as Phaser.Textures.CanvasTexture;
     const ctx = tex.getContext();
     const cells: { col: number; row: number }[] = [];
@@ -200,8 +204,7 @@ export class Ground {
       const t = this.field.terrain[g.row * this.field.width + c];
       // 門のマスと、両隣のうち城壁のマスだけ（field は開戦時のものなので、崩れる前の城壁が入っている）
       if (c !== g.col && t !== 'wall') continue;
-      const key = broken ? RUBBLE_KEY : c === g.col ? gateKey(stage) : tileKey('wall');
-      this.drawTile(ctx, key, c, g.row);
+      this.drawTile(ctx, RUBBLE_KEY, c, g.row);
       cells.push({ col: c, row: g.row });
     }
     tex.refresh();
@@ -214,7 +217,7 @@ export class Ground {
     ctx.drawImage(src, col * BOARD_CELL, row * BOARD_CELL, BOARD_CELL, BOARD_CELL);
   }
 
-  /** 平地・川・森の地面・柵や城壁や門のタイル・外枠（試作の paintBase と同じ。点の位置は決まった乱数（種 7）） */
+  /** 平地・川・森の地面・城壁と城門の土の帯・外枠（試作の paintBase と同じ。点の位置は決まった乱数（種 7）） */
   private paintBase(ctx: CanvasRenderingContext2D): void {
     const f = this.field;
     const C = BOARD_CELL;
@@ -240,6 +243,9 @@ export class Ground {
         const sp = (C - 6) / 2;
         for (let i = 0; i < 4; i++) fill(COLOR.grass3, x + 2 + Math.floor(R() * sp) * 2, y + 2 + Math.floor(R() * sp) * 2, 2, 2);
         if (t === 'forest') for (let i = 0; i < 6; i++) fill(TERRAIN.leafLo, x + 2 + Math.floor(R() * sp) * 2, y + 2 + Math.floor(R() * sp) * 2, 4, 2);
+        // 城壁と城門のマスは、まん中に土の帯（幅いっぱい × 16px）。柵のマスは草地のまま（立った絵は Scenery）
+        const isGate = !!this.gate && this.gate.col === c && this.gate.row === r;
+        if (t === 'wall' || isGate) fill(TERRAIN.dirt, x, y + C / 2 - 8, C, 16);
       }
     // 川の岸：川と陸の境に 2px の暗い縁
     for (let r = 0; r < f.height; r++)
@@ -253,13 +259,6 @@ export class Ground {
         if (land(c - 1, r)) fill(TERRAIN.hillLo, x, y, 2, C);
         if (land(c + 1, r)) fill(TERRAIN.hillLo, x + C - 2, y, 2, C);
       }
-    // 柵・城壁（あとに回すもの）：いまの 32px のタイルを、地面にそのまま描く
-    for (let r = 0; r < f.height; r++)
-      for (let c = 0; c < f.width; c++) {
-        const t = T(c, r);
-        if (t === 'fence' || t === 'wall') this.drawTile(ctx, tileKey(t), c, r);
-      }
-    if (this.gate) this.drawTile(ctx, gateKey(0), this.gate.col, this.gate.row);
     // 盤のまわりに、輪郭の色の線を 2px
     fill(COLOR.outline, 0, 0, w, 2);
     fill(COLOR.outline, 0, h - 2, w, 2);
@@ -360,6 +359,124 @@ export class Forest {
   destroy(): void {
     for (const t of this.trees) t.img.destroy();
     this.trees.length = 0;
+  }
+}
+
+// ---- 柵・城壁・城門（design §16.5・§16.6） ----
+
+/** 止まった向きの縮みで焼いた、地形の絵の大きさ（大きさ 1 のほか） */
+const PROP_STOP_SCALES = [0.94, 0.65, 0.79] as const;
+
+interface PropImg {
+  img: Phaser.GameObjects.Image;
+  key: string;
+}
+
+/**
+ * 立った地形（柵・城壁・城門）。マスごとに 1 枚の絵を、兵の層に入れ、depth の順に重ねる。
+ * 地形なので盤と一緒に回り、盤と同じ縮みで描く：止まった縮みで焼いた絵がその向きにあれば使い、なければ大きさ 1 の絵を k 倍。
+ * 城壁と城門の線を BoardView に登録し、兵の前後を直させる。門の様子（傷み具合・破れたか）は setGate で受け取る
+ */
+export class Scenery {
+  private readonly scene: Phaser.Scene;
+  private readonly bv: BoardView;
+  private readonly field: Field;
+  private readonly gate: GateLook | null;
+  private readonly layer: Phaser.GameObjects.Container;
+  private stage: 0 | 1 | 2 = 0;
+  private broken = false;
+  private places: PropPlace[] = [];
+  private readonly imgs = new Map<string, PropImg>();
+
+  constructor(scene: Phaser.Scene, bv: BoardView, field: Field, gate: GateLook | null, layer: Phaser.GameObjects.Container) {
+    this.scene = scene;
+    this.bv = bv;
+    this.field = field;
+    this.gate = gate;
+    this.layer = layer;
+    this.place();
+    this.update();
+  }
+
+  /** 立った地形の絵の数（見えていないものを含む） */
+  get count(): number {
+    return this.places.length;
+  }
+
+  /** 門の様子。段が変われば門の絵を替え、破れたら門と両隣の城壁の絵を消して、残った城壁を切り口の閉じた型に替える */
+  setGate(stage: 0 | 1 | 2, broken: boolean): void {
+    if (!this.gate || (stage === this.stage && broken === this.broken)) return;
+    this.stage = stage;
+    this.broken = broken;
+    this.place();
+    this.update();
+  }
+
+  /** 置き方を決め直す（いまの門の様子で）。要らなくなったマスの絵は消し、前後の線を登録し直す */
+  private place(): void {
+    this.places = propPlaces(this.field, this.gate, this.stage, this.broken);
+    const live = new Set<string>();
+    for (const p of this.places) {
+      const id = `${p.col},${p.row}`;
+      live.add(id);
+      if (!this.imgs.has(id)) {
+        const img = this.scene.add.image(0, 0, '__DEFAULT').setVisible(false);
+        this.layer.add(img);
+        this.imgs.set(id, { img, key: '' });
+      }
+    }
+    for (const [id, o] of [...this.imgs]) {
+      if (live.has(id)) continue;
+      o.img.destroy();
+      this.imgs.delete(id);
+    }
+    this.bv.setLines(this.places.flatMap((p) => (p.line ? [p.line] : [])));
+  }
+
+  /** カメラが変わったとき・絵が届いたときに呼ぶ */
+  update(): void {
+    if (this.places.length === 0) return;
+    const k = this.bv.cam.k;
+    const up = this.bv.angleIndex(0, -1);
+    for (const p of this.places) {
+      const o = this.imgs.get(`${p.col},${p.row}`)!;
+      const a = wrapAngle(up + p.rot);
+      let ref = null;
+      let display = k;
+      for (const s of PROP_STOP_SCALES) {
+        if (Math.abs(k - s) >= 0.006) continue;
+        ref = stackTextures.prop(p.id, a, s);
+        if (ref) display = k / s;
+        break;
+      }
+      // その縮みの絵がない（向きが違う・まだ届かない）ときは、大きさ 1 の絵を k 倍で
+      if (!ref) {
+        ref = stackTextures.prop(p.id, a, 1);
+        display = k;
+      }
+      if (!ref) {
+        o.img.setVisible(false);
+        continue;
+      }
+      // 取り込み直した絵（同じ鍵の新しいテクスチャ）にも切り替わるよう、取り込んだ時刻も見る
+      const key = `${ref.key}|${ref.frame}|${ref.sheet.readyAt}`;
+      if (key !== o.key) {
+        o.img.setTexture(ref.key, ref.frame).setOrigin(ref.sheet.g.ax / ref.sheet.g.fw, ref.sheet.g.ay / ref.sheet.g.fh);
+        o.key = key;
+      }
+      const cx = p.col + 0.5;
+      const cy = p.row + 0.5;
+      const pos = this.bv.project(cx, cy, this.bv.ground(cx, cy));
+      // depth：城壁・城門はマスのまん中、柵は柵の線の上の点（design §16.5）
+      o.img.setVisible(true).setPosition(Math.round(pos.x), Math.round(pos.y)).setScale(display).setDepth(this.bv.project(p.dx, p.dy).depth);
+    }
+  }
+
+  destroy(): void {
+    for (const o of this.imgs.values()) o.img.destroy();
+    this.imgs.clear();
+    this.places = [];
+    this.bv.setLines([]);
   }
 }
 

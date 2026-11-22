@@ -66,6 +66,12 @@ interface Body {
   x: number;
   y: number;
   depth: number;
+  /** 城壁・城門の線で直す前の depth と、足もとの戦場の座標（引っぱっている兵は null。design §16.5） */
+  raw: number;
+  /** 足もとの戦場の座標を持っているか（引っぱっている兵は false）。毎コマ物を作らないよう、数のまま持つ */
+  hasFoot: boolean;
+  footX: number;
+  footY: number;
   /** 兵の大きさ（焼いた大きさ × 表示の倍率） */
   size: number;
 }
@@ -107,7 +113,7 @@ export class SquadSprite {
     for (let i = 0; i < 3; i++) {
       const img = scene.add.image(0, 0, '__DEFAULT').setVisible(false);
       layer.add(img);
-      this.bodies.push({ img, key: '', left: 0, right: 0, up: 0, down: 0, x: 0, y: 0, depth: 0, size: 1 });
+      this.bodies.push({ img, key: '', left: 0, right: 0, up: 0, down: 0, x: 0, y: 0, depth: 0, raw: 0, hasFoot: false, footX: 0, footY: 0, size: 1 });
     }
     this.bar = scene.add.graphics().setVisible(false);
     layer.add(this.bar);
@@ -197,6 +203,11 @@ export class SquadSprite {
       let x: number;
       let y: number;
       let depth: number;
+      let raw: number;
+      let hasFoot = false;
+      let footX = 0;
+      let footY = 0;
+      const size = ref.sheet.scale * sc;
       if (drag) {
         // 引っぱっている部隊は、指の位置をまん中に、並びの間隔だけを写して描く
         const p0 = bv.project(0, 0);
@@ -204,13 +215,19 @@ export class SquadSprite {
         x = drag.x + (p1.x - p0.x);
         y = drag.y + (p1.y - p0.y);
         depth = y;
+        raw = y;
       } else {
         const fx = look.wx + du / 32;
         const fy = look.wy + dv / 32;
         const p = bv.project(fx, fy, bv.ground(fx, fy));
         x = p.x;
         y = p.y;
-        depth = p.depth;
+        raw = p.depth;
+        hasFoot = true;
+        footX = fx;
+        footY = fy;
+        // 城壁・城門のそばでは、線のどちら側にいるかで前後を直す（design §16.5。線がなければそのまま）
+        depth = bv.lineDepth(fx, fy, p.depth, size / k);
       }
       const ext = ref.info.ext;
       b.left = ext.left * sc;
@@ -220,7 +237,11 @@ export class SquadSprite {
       b.x = Math.round(x);
       b.y = Math.round(y);
       b.depth = depth;
-      b.size = ref.sheet.scale * sc;
+      b.raw = raw;
+      b.hasFoot = hasFoot;
+      b.footX = footX;
+      b.footY = footY;
+      b.size = size;
       b.img.setVisible(true).setPosition(b.x, b.y).setScale(sc).setDepth(depth);
     });
     this.missing = missing;
@@ -244,7 +265,10 @@ export class SquadSprite {
     // 兵の大きさ（焼いた大きさ × 表示の倍率）
     const { len, fill } = barLength(shown[0]!.size, r);
     const foot = Math.max(...shown.map((b) => b.y));
-    const front = Math.max(...shown.map((b) => b.depth));
+    // いちばん手前の兵（直す前の depth で選ぶ）の depth に足し、その兵の足もとで城壁・城門の線の直しを通す（兵と同じ側に収める。design §16.5）
+    const fb = shown.reduce((a, b) => (b.raw > a.raw ? b : a));
+    const barRaw = fb.raw + 1.4 * k * SQUASH + 0.01;
+    const barDepth = fb.hasFoot ? this.bv.lineDepth(fb.footX, fb.footY, barRaw, fb.size / k) : barRaw;
     const base = this.bv.project(look.wx, look.wy, 0);
     const x0 = Math.round(base.x - len / 2);
     g.clear();
@@ -253,7 +277,7 @@ export class SquadSprite {
     g.fillStyle(SIDE_COLOR[this.team].light, 1);
     g.fillRect(0, 0, fill, BAR_H);
     // 戦うときの前後の動きで、兵が棒より手前に来ないよう、その分だけ手前に
-    g.setVisible(true).setPosition(x0, foot + 2).setDepth(front + 1.4 * k * SQUASH + 0.01);
+    g.setVisible(true).setPosition(x0, foot + 2).setDepth(barDepth);
   }
 
   /** 号令の印・方針の印・号令の相手の枠（旗は UNIT_FLAG のときだけ。置き場所の決め方は art/marks.ts のまま） */

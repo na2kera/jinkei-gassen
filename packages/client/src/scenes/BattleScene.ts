@@ -22,8 +22,9 @@ import {
 import Phaser from 'phaser';
 import { arrowLife, Effects } from '../art/effects.ts';
 import { drawFieldFrame } from '../art/field.ts';
-import { Forest, Ground } from '../art/stack/ground.ts';
+import { Forest, Ground, Scenery } from '../art/stack/ground.ts';
 import { fieldHeight } from '../art/stack/height.ts';
+import { gateFromWalls, terrainGroups, type GateCell } from '../art/stack/props.ts';
 import { SquadSprite } from '../art/stack/SquadSprite.ts';
 import { stackTextures } from '../art/stack/stackTextures.ts';
 import { drawDrum, drawSurviveIcon } from '../art/icons.ts';
@@ -140,6 +141,10 @@ export class BattleScene extends Phaser.Scene {
   private lastCam: Cam | null = null;
   private ground: Ground | null = null;
   private forest: Forest | null = null;
+  /** 立った地形（柵・城壁・城門。design §16.5） */
+  private scenery: Scenery | null = null;
+  /** 地形の揃いを頼んだか（頼んだときだけ、終わりで捨てる。design §16.4） */
+  private terrainRequested = false;
   /** 門が破れたことを、もう地面に描いたか（作り直しでは演出を出さない） */
   private gateBroken = false;
   private soldierLayer!: Phaser.GameObjects.Container;
@@ -274,7 +279,14 @@ export class BattleScene extends Phaser.Scene {
     const onLayout = (): void => this.rebuild();
     this.game.events.on(LAYOUT_EVENT, onLayout);
     // 木の絵が戦闘の途中で届いたら描き直す（兵は毎コマ apply するので、次のコマで替わる）。シーンの終わりでやめる
-    const offReady = stackTextures.onReady(() => this.forest?.update());
+    const offReady = stackTextures.onReady(() => {
+      this.forest?.update();
+      this.scenery?.update();
+    });
+    // 柵・城壁・城門の揃いを頼む（配置から引き継いだ絵があれば何も起きない。直に始めたときは、ここで焼く。対戦では頼まない。design §16.4）
+    const groups = source instanceof RemoteBattleSource ? [] : terrainGroups(this.field, this.gateCell(), this.flip);
+    this.terrainRequested = groups.length > 0;
+    if (this.terrainRequested) stackTextures.request('terrain', { groups });
     // 公開の揃いは戦闘では使わない。公開の画面を通らずに戦闘へ進んだとき（タブを裏に回して公開の 3 秒が過ぎた、など）も残さない
     // （公開の画面を通ったときは、その終わりで捨ててある。何度捨てても困らない）
     stackTextures.release('reveal');
@@ -293,6 +305,11 @@ export class BattleScene extends Phaser.Scene {
       this.ground?.destroy();
       this.ground = null;
       this.forest = null;
+      this.scenery?.destroy();
+      this.scenery = null;
+      // 地形の揃いは、戦闘の終わりで捨てる（結果へ・やめる。もう一度の配置が頼み直す）
+      if (this.terrainRequested) stackTextures.release('terrain');
+      this.terrainRequested = false;
     });
     // 確かめ用：カメラの向きの切り替えを、決まった進み具合で止める（null で止めない）・すぐ止まる先に飛ばす
     debug.cameraFreeze = (p) => {
@@ -347,9 +364,11 @@ export class BattleScene extends Phaser.Scene {
     this.fogLayer = this.add.container(0, 0);
     this.root.add([frame, groundLayer, shadowLayer, soldierLayer, effectLayer, this.fogLayer, markLayer]);
     this.ground?.destroy();
-    const gate = this.interp.latest?.view.gate;
-    this.ground = new Ground(this, this.fv, field, groundLayer, this.fogLayer, gate ? { col: gate.col, row: gate.row } : null);
+    const gate = this.gateCell();
+    this.ground = new Ground(this, this.fv, field, groundLayer, this.fogLayer, gate);
     this.forest = new Forest(this, this.fv, field, soldierLayer);
+    // 立った地形。作り直すたびに「破れていない・段 0」で作り、すぐ下の syncGate でいまの門の様子を当てる（design §16.6）
+    this.scenery = new Scenery(this, this.fv, field, gate, soldierLayer);
     this.syncGate(this.time.now, false);
     // 霧は、最初の場面が届いて部隊の絵を作ったあと（作り直し）に出す。最初の build で出すと、
     // 直後の作り直しで霧ごと壊れて、晴れる絵が見えずに音だけ鳴るため。晴れたあとの作り直しでは出さない（fogCleared）
@@ -1004,17 +1023,26 @@ export class BattleScene extends Phaser.Scene {
     this.fv.setCam(cam);
     this.ground?.update();
     this.forest?.update();
+    this.scenery?.update();
   }
 
-  // ---- 門と霧（design §14.1・§14.7：立体にはせず、地面に平たく描く） ----
+  /** 門のマス。場面が届く前（最初の組み立て）は、城壁の行の切れ目から決める */
+  private gateCell(): GateCell | null {
+    const g = this.interp.latest?.view.gate;
+    if (g) return { col: g.col, row: g.row };
+    return gateFromWalls(this.field);
+  }
 
-  /** 門の様子（傷み具合の段と、破れたか）を地面に描く。破れた瞬間だけ（effect が true のとき）、崩れる演出と音を出す */
+  // ---- 門と霧（design §16.6・§16.7：門は立った絵、瓦礫と霧は地面に平たく描く） ----
+
+  /** 門の様子（傷み具合の段と、破れたか）を、立った門の絵と地面（破れたあとの瓦礫）に当てる。破れた瞬間だけ（effect が true のとき）、崩れる演出と音を出す */
   private syncGate(now: number, effect: boolean): void {
     const g = this.interp.latest?.view.gate;
     if (!g || !this.ground) return;
     const ratio = g.men / g.maxMen;
     const stage: 0 | 1 | 2 = ratio > 2 / 3 ? 0 : ratio > 1 / 3 ? 1 : 2;
     const broken = g.status === 'gone';
+    this.scenery?.setGate(stage, broken);
     const cells = this.ground.setGate(stage, broken);
     if (broken && !this.gateBroken) {
       this.gateBroken = true;
