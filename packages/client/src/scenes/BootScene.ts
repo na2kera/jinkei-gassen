@@ -1,7 +1,7 @@
-// 起動時に絵のテクスチャを作り、タイトルへ進む。
+// 起動時に絵のテクスチャを作り（立体の絵は頼むだけ。design §14.3）、タイトルへ進む。
 
 import Phaser from 'phaser';
-import { buildTextures } from '../art/textures.ts';
+import { buildGameTextures } from '../art/gameTextures.ts';
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -9,7 +9,7 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
-    buildTextures(this);
+    buildGameTextures(this);
     this.scene.start('Title');
   }
 }

@@ -26,6 +26,8 @@ import {
 } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import { effectCounts } from './art/effects.ts';
+import type { SetId } from './art/stack/jobs.ts';
+import { stackTextures } from './art/stack/stackTextures.ts';
 import { LocalBattleSource } from './battle/LocalBattleSource.ts';
 import { unitReach } from './art/formation.ts';
 import { audioState, isMuted, sfxCounts } from './audio/sfx.ts';
@@ -132,6 +134,9 @@ function castleField(): Field {
   return f;
 }
 
+/** 開発用の口で出している、立体の絵の見本（stack.show） */
+let stackShow: Phaser.GameObjects.Container | null = null;
+
 export function installDebug(game: Phaser.Game): void {
   const api = {
     /** 実際のフレームの速さ（32部隊で 55 以上あることを確かめるため） */
@@ -145,6 +150,46 @@ export function installDebug(game: Phaser.Game): void {
     /** 演出ごとに出した回数 */
     get effects(): typeof effectCounts {
       return { ...effectCounts };
+    },
+    /**
+     * 立体の絵（design §14.3・§14.14 の段 2）：status はでき具合・焼く時間・取り込む時間・量、show は焼いた絵を画面のいちばん手前に出す
+     * （frames を渡せばそのコマを scale 倍で並べ、渡さなければ絵の全体を画面の幅に合わせて出す）、hide は消す。
+     * request・release は揃いを頼む・捨てる。failWorker はワーカーが誤りで止まったことにする（主スレッドの列に引き継ぐ道を確かめる）
+     */
+    stack: {
+      status: (): object => stackTextures.status(),
+      show(key: string, opts: { frames?: string[]; scale?: number; cols?: number } = {}): boolean {
+        const scene = game.scene.getScenes(true).find((s) => s.scene.key !== 'NetOverlay');
+        const sheet = stackTextures.sheet(key);
+        if (!scene || !sheet) return false;
+        stackShow?.destroy();
+        const c = scene.add.container(0, 0).setDepth(1e9);
+        const W = game.scale.width;
+        const H = game.scale.height;
+        c.add(scene.add.rectangle(0, 0, W, H, 0x404040).setOrigin(0, 0));
+        if (!opts.frames) {
+          const s = Math.min(1, W / sheet.w);
+          c.add(scene.add.image(0, 0, key).setOrigin(0, 0).setScale(s));
+        } else {
+          const scale = opts.scale ?? 3;
+          const cols = opts.cols ?? Math.max(1, Math.floor(W / (sheet.g.fw * scale)));
+          opts.frames.forEach((name, i) => {
+            if (!sheet.frames.has(name)) return;
+            const x = (i % cols) * sheet.g.fw * scale;
+            const y = Math.floor(i / cols) * sheet.g.fh * scale;
+            c.add(scene.add.image(x, y, key, name).setOrigin(0, 0).setScale(scale));
+          });
+        }
+        stackShow = c;
+        return true;
+      },
+      hide(): void {
+        stackShow?.destroy();
+        stackShow = null;
+      },
+      request: (set: SetId): void => stackTextures.request(set),
+      release: (set: SetId): void => stackTextures.release(set),
+      failWorker: (): boolean => stackTextures.simulateWorkerError(),
     },
     /** 起動時に作った絵（兵やタイル）の canvas。拡大して見比べるため */
     texture(key: string): HTMLCanvasElement | null {

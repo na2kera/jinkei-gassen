@@ -61,23 +61,24 @@ export function carvePart(dims: Dims, vox: Uint8Array, entry: Entry, label: stri
     x >= 0 && y >= 0 && z >= 0 && x < w && y < d && z < h && at(p.top, y, x) !== '.' && at(p.side, h - 1 - z, y) !== '.' && at(p.front, h - 1 - z, x) !== '.' && at(back, h - 1 - z, x) !== '.';
   if (p.round) {
     const base = inside;
-    inside = (x, y, z) => {
-      if (!base(x, y, z)) return false;
-      // その層で前の絵が覆う x の範囲と、横の絵が覆う y の範囲の楕円
+    // 層ごとに、前の絵が覆う x の範囲と、横の絵が覆う y の範囲の楕円（試作は毎回求めていた。値は同じで、先に 1 度だけ求める）
+    const ell = Array.from({ length: h }, (_, z) => {
       const fr = p.front[h - 1 - z]!;
       const sr = p.side[h - 1 - z]!;
       const xs = [...fr].map((c, i) => (c !== '.' ? i : -1)).filter((i) => i >= 0);
       const ys = [...sr].map((c, i) => (c !== '.' ? i : -1)).filter((i) => i >= 0);
+      if (xs.length === 0 || ys.length === 0) return null;
       const xa = xs[0]!;
       const xb = xs[xs.length - 1]!;
       const ya = ys[0]!;
       const yb = ys[ys.length - 1]!;
-      const cx = (xa + xb + 1) / 2;
-      const rx = (xb + 1 - xa) / 2;
-      const cy = (ya + yb + 1) / 2;
-      const ry = (yb + 1 - ya) / 2;
-      const ex = (x + 0.5 - cx) / rx;
-      const ey = (y + 0.5 - cy) / ry;
+      return { cx: (xa + xb + 1) / 2, rx: (xb + 1 - xa) / 2, cy: (ya + yb + 1) / 2, ry: (yb + 1 - ya) / 2 };
+    });
+    inside = (x, y, z) => {
+      if (!base(x, y, z)) return false;
+      const e = ell[z]!;
+      const ex = (x + 0.5 - e.cx) / e.rx;
+      const ey = (y + 0.5 - e.cy) / e.ry;
       return ex * ex + ey * ey <= 1.05;
     };
   }
