@@ -278,10 +278,12 @@ export const STAGES: Stage[] = [
     index: 3,
     name: '挟み撃ち',
     hint: '横から来る騎兵は、どこで止める？',
-    // 正面に歩兵4と盾兵2（前進）。あいだの行 5 の両脇（列 1・2 と列 7・8）に騎兵2ずつ（前進）。開戦してすぐ、両脇から突っ込んでくる。4秒に全軍突撃
+    // 正面に歩兵4と盾兵2（前進）。両脇の列 1 と列 8 の行 3・4 に騎兵2ずつ縦に並ぶ（前進）。開戦してすぐ、両脇から突っ込んでくる。4秒に全軍突撃。
+    // 騎兵を行 5 の列 1・2 と列 7・8 に置いた形（置き直したまま）では、横陣が 20 勝し、見本は 0 勝だった（2026-11-22 に合わせ直した）。
+    // 見本の両翼の歩兵を守備にすると 0 勝、1 行下げると星 1 になる（両翼を前へ出すのが効く）
     field: plainField(),
     roster: { hq: 1, infantry: 4, shield: 3, archer: 1, cavalry: 2 },
-    enemy: [hq(4, 0), ...at('infantry', 'advance', [3, 4, 5, 6], 2), ...at('shield', 'advance', [4, 5], 1), ...at('cavalry', 'advance', [1, 2, 7, 8], 5)],
+    enemy: [hq(4, 0), ...at('infantry', 'advance', [3, 4, 5, 6], 2), ...at('shield', 'advance', [4, 5], 1), ...at('cavalry', 'advance', [1, 8], 4), ...at('cavalry', 'advance', [1, 8], 3)],
     enemyOrders: [{ atSec: 4, target: 'all', kind: 'charge' }],
     win: { type: 'defeat' },
     // 両翼の歩兵2つずつを前へ出して、両脇の騎兵が助走をつける前にぶつかる（突入させない）。中央は盾兵3の守備で正面の敵を受け、

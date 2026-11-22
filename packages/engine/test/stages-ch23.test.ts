@@ -7,13 +7,13 @@ import { DIFFICULTY_LATER, STAR3_LATER, STAR3_PENDING_CH23 } from './helpers.ts'
 
 // 置き直した面（decisions §25）で、いまは通らない面。難しさを合わせたら外す
 /** 見本が18勝・星の平均2に届かない */
-const SOLUTION_LATER = new Set(['2-3', '2-5', '3-1', '3-3', '3-5']); // 2-5・3-1 は 20 勝するが、星の平均が 1
+const SOLUTION_LATER = new Set(['2-3', '2-5', '3-1', '3-5']); // 2-5・3-1 は 20 勝するが、星の平均が 1
 /** 横陣のままで11勝以上する */
-const LINE_LATER = new Set(['2-1', '2-2', '2-4', '3-2', '3-3', '3-4', '3-5']);
+const LINE_LATER = new Set(['2-1', '2-2', '2-4', '3-2', '3-4', '3-5']);
 /** そのまま置いて11勝以上するひな形が3つ以上 */
-const TEMPLATES_LATER = new Set(['3-2', '3-3']);
+const TEMPLATES_LATER = new Set(['3-2']);
 /** 見本を並べ替えると18勝に届かない（全15面） */
-const PERMS_LATER = new Set(['3-3', '3-5']);
+const PERMS_LATER = new Set(['3-5']);
 
 const LATER = STAGES.filter((s) => s.chapter !== 1);
 const byId = (id: string): Stage => STAGES.find((s) => s.id === id)!;
