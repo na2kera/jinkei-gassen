@@ -80,6 +80,8 @@ interface DebugHooks {
   /** ロビーのルール説明を出す・「閉じる」（design §10.6。画面のボタンと同じ道筋） */
   rulesOpen: (() => void) | null;
   rulesClose: (() => void) | null;
+  /** 配置・戦闘の画面の、マスの中心の画面の点（確かめ用。丘の高さを見る） */
+  cellScreen: ((col: number, row: number) => { x: number; y: number }) | null;
 }
 
 export const debug: DebugHooks = {
@@ -107,6 +109,7 @@ export const debug: DebugHooks = {
   tutorialSkip: null,
   rulesOpen: null,
   rulesClose: null,
+  cellScreen: null,
 };
 
 export function pushCapped<T>(arr: T[], v: T, cap: number): void {
@@ -199,6 +202,9 @@ export function installDebug(game: Phaser.Game): void {
     /** 兵種ごとの、部隊の絵が中心から届く距離（px）。14.4（0.9 マスの半分）未満なら、隣の部隊と重ならない */
     get reach(): Record<string, number> {
       return Object.fromEntries(KINDS.map((k) => [k, Math.round(unitReach(k) * 100) / 100]));
+    },
+    cellScreen(col: number, row: number): { x: number; y: number } | null {
+      return debug.cellScreen ? debug.cellScreen(col, row) : null;
     },
     get scene(): string {
       return debug.scene;
@@ -363,6 +369,35 @@ export function installDebug(game: Phaser.Game): void {
       if (i >= 0) STAGES[i] = stage;
       else STAGES.push(stage);
       return STAGES.length;
+    },
+    /**
+     * 確かめ用：対戦の地図（または渡した戦場）で、両軍の部隊を並べた仮の面を作って配置の画面を開く（立体の画面の画像を撮るため）。
+     * 部隊は、配置エリアの前の 2 行に 5 種を順に並べる（手持ちは、その数をそのまま持たせる）
+     */
+    previewDeploy(opts: { map?: PvpMapId; field?: Field; gate?: { col: number; row: number }; fog?: { col: number; row: number }[]; per?: number } = {}): boolean {
+      const base = STAGES[0];
+      if (!base) return false;
+      const field = opts.field ?? (opts.map ? pvpField(opts.map) : plainField());
+      const army = (side: Side): Placement[] => {
+        const z = field.zones[side];
+        const out: Placement[] = [];
+        const kinds: Kind[] = ['hq', 'infantry', 'shield', 'archer', 'cavalry'];
+        const rows = side === 0 ? [z.row, z.row + 1] : [z.row + z.height - 1, z.row + z.height - 2];
+        let i = 0;
+        for (const row of rows)
+          for (let col = z.col; col < z.col + z.width && out.length < (opts.per ?? 11); col++) {
+            const kind = i === 0 ? 'hq' : kinds[1 + ((i - 1) % 4)]!;
+            out.push({ kind, stance: kind === 'hq' ? 'hold' : 'advance', col, row });
+            i++;
+          }
+        return out;
+      };
+      const own = army(0);
+      const roster: Partial<Record<Kind, number>> = {};
+      for (const p of own) roster[p.kind] = (roster[p.kind] ?? 0) + 1;
+      api.addStage({ ...base, id: 'preview', name: '確かめ', field, enemy: army(1), roster, solution: own, fog: opts.fog ?? [], ...(opts.gate ? { gate: opts.gate } : {}) } as Stage);
+      session.placements = own.map((p) => ({ ...p }));
+      return api.openStage('preview') && true;
     },
     /** 確かめ用の戦場を作る道具 */
     fields: {

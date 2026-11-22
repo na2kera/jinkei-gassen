@@ -355,3 +355,10 @@ export class Forest {
     this.trees.length = 0;
   }
 }
+
+/** マスの縁を、丘の高さに沿って線で描く（選んだマス・置けるマスの枠。太さ 2px） */
+export function strokeCell(g: Phaser.GameObjects.Graphics, bv: BoardView, col: number, row: number, color: number): void {
+  const pts = bv.cellOutline(col, row, 1).map((p) => new Phaser.Math.Vector2(Math.round(p.x), Math.round(p.y)));
+  g.lineStyle(2, color, 1);
+  g.strokePoints(pts, true, true);
+}

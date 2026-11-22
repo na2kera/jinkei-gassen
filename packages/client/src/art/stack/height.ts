@@ -88,3 +88,9 @@ export function heightAt(hm: HeightMap, u: number, v: number): number {
   const g = (xx: number, yy: number): number => (xx < 0 || yy < 0 || xx >= w || yy >= h ? 0 : data[yy * w + xx]!);
   return g(x0, y0) * (1 - fx) * (1 - fy) + g(x0 + 1, y0) * fx * (1 - fy) + g(x0, y0 + 1) * (1 - fx) * fy + g(x0 + 1, y0 + 1) * fx * fy;
 }
+
+/** 戦場の丘の高さの表（丘のない戦場は null） */
+export function fieldHeight(field: { width: number; height: number; terrain: readonly string[] }): HeightMap | null {
+  if (!field.terrain.includes('hill')) return null;
+  return buildHeight(field.width, field.height, 32, (c, r) => field.terrain[r * field.width + c] === 'hill');
+}

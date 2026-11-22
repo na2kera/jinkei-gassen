@@ -59,7 +59,7 @@ export function addCellImage(scene: Phaser.Scene, fv: FieldView, col: number, ro
 }
 
 /** 戦場のまわりの枠（輪郭 2px + 暗い金 2px）。描き場所（area）の外側に付ける */
-export function drawFieldFrame(g: Phaser.GameObjects.Graphics, fv: FieldView, area: Rect = fv.rect): void {
+export function drawFieldFrame(g: Phaser.GameObjects.Graphics, fv: { rect: Rect }, area: Rect = fv.rect): void {
   const r = area;
   g.fillStyle(COLOR.dim, 1);
   g.fillRect(r.x - 4, r.y - 4, r.w + 8, r.h + 8);
@@ -71,7 +71,7 @@ export function drawFieldFrame(g: Phaser.GameObjects.Graphics, fv: FieldView, ar
  * 配置エリアの印（配置の画面だけ）。エリアの縁を、2px の点線で囲む。自軍は明るく、敵軍は暗く。
  * 塗りつぶさないのは、草地の絵を隠さず、エリアの境目だけが分かればよいため。
  */
-export function drawZone(g: Phaser.GameObjects.Graphics, fv: FieldView, zone: Zone, color: number): void {
+export function drawZone(g: Phaser.GameObjects.Graphics, fv: { cellRect(col: number, row: number): Rect }, zone: Zone, color: number): void {
   const a = fv.cellRect(zone.col, zone.row);
   const b = fv.cellRect(zone.col + zone.width - 1, zone.row + zone.height - 1);
   const x0 = Math.min(a.x, b.x);

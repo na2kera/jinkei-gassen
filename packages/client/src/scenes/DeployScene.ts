@@ -41,14 +41,15 @@ import {
   tutorialSetup,
 } from '@jinkei/engine';
 import Phaser from 'phaser';
-import { addFieldImage, drawFieldFrame, drawZone } from '../art/field.ts';
+import { drawFieldFrame, drawZone } from '../art/field.ts';
 import { COLOR, css } from '../art/palette.ts';
-import { GateSprite } from '../art/GateSprite.ts';
-import { FOG_KEY } from '../art/textures.ts';
-import { unitLift } from '../art/formation.ts';
-import { UnitSprite } from '../art/UnitSprite.ts';
+import { Forest, Ground, strokeCell } from '../art/stack/ground.ts';
+import { fieldHeight } from '../art/stack/height.ts';
+import { SquadSprite } from '../art/stack/SquadSprite.ts';
+import { stackTextures } from '../art/stack/stackTextures.ts';
 import { playFormation, playPlace, playRemove, playStance, playStart } from '../audio/sfx.ts';
-import { centeredFieldView, FieldView, type Cell } from '../battle/FieldView.ts';
+import { BoardView, type Cell } from '../battle/BoardView.ts';
+import { pickSquad } from '../battle/pick.ts';
 import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
 import { debug } from '../debug.ts';
 import { saveFormation as saveFormationTo, savedFormations as savedFormationList, savedPvpArmy, savedPvpReserve } from '../save.ts';
@@ -133,12 +134,17 @@ export class DeployScene extends Phaser.Scene {
   private field!: Field;
   private ownZone!: Zone;
   private otherZone!: Zone;
-  private fv!: FieldView;
+  private fv!: BoardView;
   private soldierLayer!: Phaser.GameObjects.Container;
+  /** 引っぱっている部隊の層（いつもいちばん手前。design §14.4） */
+  private dragLayer!: Phaser.GameObjects.Container;
   private markLayer!: Phaser.GameObjects.Container;
+  private ground: Ground | null = null;
+  private forest: Forest | null = null;
+  private enemySprites: SquadSprite[] = [];
   private popupLayer!: Phaser.GameObjects.Container;
   private dropMark!: Phaser.GameObjects.Graphics;
-  private ownSprites: UnitSprite[] = [];
+  private ownSprites: SquadSprite[] = [];
   private rosterButtons = new Map<Kind, Button>();
   private minusButtons = new Map<Kind, Button>();
   private plusButtons = new Map<Kind, Button>();
@@ -253,28 +259,29 @@ export class DeployScene extends Phaser.Scene {
     }
 
     const field = this.field;
-    this.fv = centeredFieldView(layout.field, field);
+    // 配置の画面は回さない（傾きだけ。縮み 1）。丘があれば、その高さのぶん持ち上がる（design §14.4）
+    this.fv = new BoardView(layout.field, field, { hm: fieldHeight(field) });
     // 戦場の描き場所ぜんぶ（と枠 4px）には、ボタンの押せる範囲を広げない。onDown は自軍の配置のほか、
     // 敵と地形の表示も cellAt で受けるため（design §9.9-3）。向きが変わるとシーンごと作り直すので、入れ直さなくてよい
     addHitObstacle(this, padRect(layout.field, FIELD_FRAME));
     drawFieldFrame(this.add.graphics(), this.fv, layout.field);
-    addFieldImage(this, this.fv, field, layout.field);
-    // 配置エリアは配置の画面だけで見せる。自軍は明るい金、敵軍は暗い色
+    const groundLayer = this.add.container(0, 0);
+    // 配置エリアは配置の画面だけで見せる。自軍は明るい金、敵軍は暗い色（回さないので、線は軸にそろう）
     const zones = this.add.graphics();
     drawZone(zones, this.fv, this.ownZone, COLOR.gold);
     drawZone(zones, this.fv, this.otherZone, COLOR.dim);
     if (this.pvpMode) this.drawFog(zones, this.otherZone);
-    if (!this.pvpMode) {
-      // 門（配置の画面でも見せる）と、霧のマス（何かいるかもしれない、と分かるように覆う）
-      const layer = this.add.container(0, 0);
-      if (this.stage.gate) new GateSprite(this, this.fv, this.field, this.stage.gate.col, this.stage.gate.row, layer);
-      for (const c of this.stage.fog ?? []) {
-        const r = this.fv.cellRect(c.col, c.row);
-        layer.add(this.add.image(r.x, r.y, FOG_KEY).setOrigin(0, 0));
-      }
-    }
     this.soldierLayer = this.add.container(0, 0);
+    this.dragLayer = this.add.container(0, 0);
+    const fogLayer = this.add.container(0, 0);
     this.markLayer = this.add.container(0, 0);
+    // 地面（門は地面に平たく描く。霧は地面と同じ変換の入れ物に入れ、兵の層の上に置く。design §14.1・§14.7）
+    const gate = !this.pvpMode && this.stage.gate ? { col: this.stage.gate.col, row: this.stage.gate.row } : null;
+    this.ground = new Ground(this, this.fv, field, groundLayer, fogLayer, gate);
+    if (!this.pvpMode) this.ground.addFog(this.stage.fog ?? []);
+    this.forest = new Forest(this, this.fv, field, this.soldierLayer);
+    debug.cellScreen = (c, r) => this.fv.cellCenter(c, r);
+    this.enemySprites = [];
     this.dropMark = this.add.graphics();
     if (this.tut) this.litMarks = this.add.graphics();
 
@@ -282,10 +289,9 @@ export class DeployScene extends Phaser.Scene {
       // 敵の配置は見せる（方針と、霧のマスの部隊は見せない。decisions §8）
       this.enemyVisible = stageEnemyVisible(this.stage);
       this.enemyVisible.forEach((p, i) => {
-        const s = new UnitSprite(this, 1, p.kind, 100 + i, this.soldierLayer, this.markLayer, this.fv);
-        const c = this.fv.cellCenter(p.col, p.row);
-        s.apply({ x: c.x, y: c.y, fx: 0, fy: 1, menRatio: 1, morale: 100, rout: 0, highlight: false, bounds: this.fv.rect });
+        this.enemySprites.push(new SquadSprite(this, 1, p.kind, 100 + i, this.soldierLayer, this.markLayer, this.fv, 'deploy'));
       });
+      this.applyEnemies();
     }
     // ヒント・対戦の知らせ・陣形名は、戦場の上には重ねない（中間地帯に地形があるため）。
     // 横長は操作の欄の空き、縦長は戦場の下の帯に出す
@@ -332,8 +338,15 @@ export class DeployScene extends Phaser.Scene {
       else this.scene.restart();
     };
     this.game.events.on(LAYOUT_EVENT, onLayout);
+    // 焼いた絵が届いたら描き直す（シーンが終わるときにやめる）
+    const offReady = stackTextures.onReady(() => this.onStackReady());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off(LAYOUT_EVENT, onLayout);
+      offReady();
+      // 地面の絵はテクスチャごと捨てる（作り直すたびに増えないように）
+      this.ground?.destroy();
+      this.ground = null;
+      this.forest = null;
       // 陣形の窓の名前の入力欄（HTML）を残さない
       this.dialog?.close();
       this.kindTimer?.remove();
@@ -425,7 +438,7 @@ export class DeployScene extends Phaser.Scene {
       this.dismissTutorialPopup();
       return;
     }
-    const cell = this.fv.cellAt(pointer.x, pointer.y);
+    const cell = this.pressCell(pointer.x, pointer.y);
     // 自分のエリアの外（地形・敵の兵種の名前）は出さない。表にない操作は何も起こさない
     if (!cell || !this.inOwnZone(cell)) return;
     const index = this.indexAt(cell);
@@ -561,7 +574,7 @@ export class DeployScene extends Phaser.Scene {
     const g = this.litMarks;
     if (g) {
       g.clear();
-      if (on) for (const c of l.cells) this.drawCellFrame(g, this.fv.cellRect(c.col, c.row));
+      if (on) for (const c of l.cells) strokeCell(g, this.fv, c.col, c.row, COLOR.highlight);
     }
   }
 
@@ -1033,7 +1046,7 @@ export class DeployScene extends Phaser.Scene {
     }
     const hadPopup = this.popupIndex !== null || this.popupReserve;
     this.closePopup();
-    const cell = this.fv.cellAt(pointer.x, pointer.y);
+    const cell = this.pressCell(pointer.x, pointer.y);
     if (!cell || !this.inOwnZone(cell)) {
       // 自分のエリアの外：押している間だけ、そのマスの地形を1行で出す
       // 見えている敵の部隊なら、その上に兵種の名前も出す（地形の1行とは別に出す）
@@ -1091,7 +1104,11 @@ export class DeployScene extends Phaser.Scene {
     // 箱の作りと置き方は、戦闘の画面の兵数と士気（BattleScene の drawInfo）と同じ
     const w = Math.ceil(this.kindText.width / 2) * 2 + 16;
     const h = Math.ceil(this.kindText.height / 2) * 2 + 12;
-    const { x, y } = unitBoxAt(this.fv.rect, this.fv.cellCenter(e.col, e.row), w, h, unitLift(this.fv, e.col + 0.5, e.row + 0.5));
+    // 部隊の上に出す高さは、その部隊のいま見えている兵の矩形のいちばん上の端（design §14.9）
+    const c = this.fv.cellCenter(e.col, e.row);
+    const sprite = this.enemySprites[this.enemyVisible.indexOf(e)];
+    const top = sprite?.topY();
+    const { x, y } = unitBoxAt(this.fv.uiBounds(getLayout().field), c, w, h, top !== null && top !== undefined ? Math.max(0, c.y - top) + 2 : 34);
     this.kindBox.clear();
     drawBox(this.kindBox, { x, y, w, h });
     this.kindText.setPosition(x + 8, y + 6).setVisible(true);
@@ -1125,10 +1142,12 @@ export class DeployScene extends Phaser.Scene {
     const p = this.list[press.index];
     const sprite = this.ownSprites[press.index];
     if (!p || !sprite) return;
-    sprite.apply({ x: pointer.x, y: pointer.y, fx: 0, fy: -1, menRatio: 1, morale: 100, rout: 0, highlight: true, stance: this.stancesShown() ? p.stance : null });
+    // 引っぱっている部隊は、いちばん手前の層へ（歩かせない。指の画面の位置に描く）
+    sprite.moveTo(this.dragLayer);
+    sprite.apply({ wx: p.col + 0.5, wy: p.row + 0.5, fx: 0, fy: -1, menRatio: 1, rout: 0, highlight: true, stance: this.stancesShown() ? p.stance : null, dragAt: { x: pointer.x, y: pointer.y }, time: this.time.now });
     const cell = this.fv.cellAt(pointer.x, pointer.y);
     this.dropMark.clear();
-    if (cell && this.inOwnZone(cell)) this.drawCellFrame(this.dropMark, this.fv.cellRect(cell.col, cell.row));
+    if (cell && this.inOwnZone(cell)) strokeCell(this.dropMark, this.fv, cell.col, cell.row, COLOR.highlight);
   }
 
   private onUp(pointer: Phaser.Input.Pointer): void {
@@ -1354,12 +1373,50 @@ export class DeployScene extends Phaser.Scene {
     }
   }
 
-  private drawCellFrame(g: Phaser.GameObjects.Graphics, r: Rect): void {
-    g.fillStyle(COLOR.highlight, 1);
-    g.fillRect(r.x, r.y, r.w, 2);
-    g.fillRect(r.x, r.y + r.h - 2, r.w, 2);
-    g.fillRect(r.x, r.y + 2, 2, r.h - 4);
-    g.fillRect(r.x + r.w - 2, r.y + 2, 2, r.h - 4);
+  /** 自軍の部隊の絵を、いまの配置に合わせて描き、前後を並べ直す */
+  private applyOwn(): void {
+    const bounds = this.fv.uiBounds(getLayout().field);
+    this.list.forEach((p: Placement, i) => {
+      const s = this.ownSprites[i];
+      if (!s) return;
+      const highlight = i === this.popupIndex || (this.press?.index === i && this.press.dragging);
+      // 自軍には方針の印を付ける（押さなくても方針が分かるように。敵と、方針を選べない面には付けない）
+      const stance = this.stancesShown() ? p.stance : null;
+      s.apply({ wx: p.col + 0.5, wy: p.row + 0.5, fx: 0, fy: -1, menRatio: 1, rout: 0, highlight, stance, bounds, time: this.time.now });
+    });
+    this.soldierLayer.sort('depth');
+  }
+
+  /** 見えている敵の部隊の絵（下を向いて並ぶ） */
+  private applyEnemies(): void {
+    const bounds = this.fv.uiBounds(getLayout().field);
+    this.enemyVisible.forEach((p, i) => {
+      this.enemySprites[i]?.apply({ wx: p.col + 0.5, wy: p.row + 0.5, fx: 0, fy: 1, menRatio: 1, rout: 0, highlight: false, bounds, time: this.time.now });
+    });
+    this.soldierLayer.sort('depth');
+  }
+
+  /** 焼いた絵が届いた：操作がなくても兵と木を出す（design §14.8） */
+  private onStackReady(): void {
+    if (!this.fv) return;
+    this.forest?.update();
+    this.applyEnemies();
+    // 引っぱっている間は描き直さない（離したときの refresh で描く）
+    if (!this.press?.dragging) this.applyOwn();
+  }
+
+  /**
+   * 押した画面の点のマス。立っている兵の絵（自軍と、見えている敵）を押していれば、その部隊のマス。
+   * そうでなければ地面の点のマス（丘の持ち上がった面を押せば、そのマス。design §14.4）
+   */
+  private pressCell(sx: number, sy: number): Cell | null {
+    const boxes = [...this.ownSprites, ...this.enemySprites].flatMap((s) => s.hitBoxes());
+    const id = pickSquad(boxes, null, sx, sy);
+    if (id !== null) {
+      const p = id >= 100 ? this.enemyVisible[id - 100] : this.list[id];
+      if (p) return { col: p.col, row: p.row };
+    }
+    return this.fv.cellAt(sx, sy);
   }
 
   private refresh(announce = true): void {
@@ -1367,15 +1424,8 @@ export class DeployScene extends Phaser.Scene {
     const locked = this.locked();
     if (locked) this.closePopup();
     for (const s of this.ownSprites) s.destroy();
-    this.ownSprites = this.list.map((p: Placement, i) => {
-      const s = new UnitSprite(this, 0, p.kind, i, this.soldierLayer, this.markLayer, this.fv);
-      const c = this.fv.cellCenter(p.col, p.row);
-      const highlight = i === this.popupIndex || (this.press?.index === i && this.press.dragging);
-      // 自軍には方針の印を付ける（押さなくても方針が分かるように。敵と、方針を選べない面には付けない）
-      const stance = this.stancesShown() ? p.stance : null;
-      s.apply({ x: c.x, y: c.y, fx: 0, fy: -1, menRatio: 1, morale: 100, rout: 0, highlight, stance, bounds: this.fv.rect });
-      return s;
-    });
+    this.ownSprites = this.list.map((p: Placement, i) => new SquadSprite(this, 0, p.kind, i, this.soldierLayer, this.markLayer, this.fv, 'deploy'));
+    this.applyOwn();
     if (this.selectedKind && (this.remaining(this.selectedKind) <= 0 || locked)) this.selectedKind = null;
     const run = this.tut ? session.tutorial : null;
     for (const [kind, b] of this.rosterButtons) {
