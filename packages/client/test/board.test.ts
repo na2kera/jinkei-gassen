@@ -214,3 +214,27 @@ test('R1 兵の残りの棒：戦闘（0.84）で 13px。1 未満なら満タン
   assert.equal(barLength(0.84, 0.01).fill, 1);
   assert.equal(barLength(0.3, 0.5).len, 6);
 });
+
+test('B9 狭い盤（幅 5・6。一人用）でも、マスの中の点を写して戻すと、そのマスになる（配置と 4 つの向き、返す・返さない）', () => {
+  for (const width of [5, 6]) {
+    const board = { width, height: 12 };
+    const hm = buildHeight(width, 12, 32, (c, r) => c === 1 && r === 6);
+    for (const a of AREAS)
+      for (const d of [...DIRS, 'deploy'] as const)
+        for (const flipped of [false, true]) {
+          const bv = new BoardView(a, board, { flipped, hm, cam: d === 'deploy' ? { rot: 0, k: 1 } : battleCam(d, a, board) });
+          for (let row = 0; row < 12; row++)
+            for (let col = 0; col < width; col++)
+              for (const [fx, fy] of [
+                [0.5, 0.5],
+                [0.03, 0.97],
+              ] as const) {
+                const p = bv.toScreen(col + fx, row + fy);
+                assert.deepEqual(bv.cellAt(p.x, p.y), { col, row }, `幅${width} ${d} ${flipped} (${col},${row})`);
+              }
+          // 盤が描き場所に収まる（配置は幅だけ。戦闘は背丈の余白も）
+          const r = bv.rect;
+          assert.ok(r.x >= a.x - 1 && r.x + r.w <= a.x + a.w + 1, `幅${width} ${d}`);
+        }
+  }
+});
