@@ -3,8 +3,8 @@
 // 組み立てた先が埋まっている・エリアの外のときは、いちばん近い空きマスへずらすので、6〜12 部隊のどの手持ちでも
 // エリアに収まり、重ならず、全部隊を使い切る。乱数は使わないので、同じ入力からはいつも同じ配置になる。
 //
-// 仮の形（design §13.1 の 2）：通り道つきの盤の配置エリア 8×4 に合わせて、実験の枝（exp/grid-tuning）で作り直した形を、
-// 実験用の切り替えを外して写したもの。最終の形は design §13.3 で決めて差し替える。
+// 通り道つきの盤の配置エリア 8×4 に合わせて、実験の枝（exp/grid-tuning）の5回目の実験で決めた最終の形を、
+// 実験用の切り替え（TEMPLATE_EXP・JINKEI_TPL）を外して、その既定値で写したもの（実験の記録 §21）。
 // - 列は「中央から外への左右の組」（8列なら [3,4]・[2,5]・[1,6]・[0,7]）で選び、偶数の幅でも左へ寄らないようにする。
 // - 組の片方だけが余ったとき（奇数）は、本陣の隣（本陣と左右対称になるマス）へ回せる形では回す（mate）。
 // - 奥行きは 4 行を前提にした形だが、行がエリアの外に出るときは、いちばん近い空きマスへずらすだけで止まらない（幅 4〜7 でも同じ）。
@@ -118,14 +118,26 @@ function pairAt(w: number, p: number, y: number): Cell[] {
   return pr ? pr.map((x) => ({ cx: x, cy: y })) : [];
 }
 
-/** 横陣：前列に歩兵（中央）と盾兵（外側）、後列に弓兵、両端に騎兵。あふれた前列の部隊は、後列の、前列の両端のすぐ後ろから外へ */
-const line: Layout = (c, w) => {
+/**
+ * 横陣で、騎兵のいない軍の前列を「幅 − この数」にする（幅 8 以上のとき）。4 なら 8 列で 4、2 なら 6。
+ * 4（main と同じ）と 2 のどちらにするかは、実験の記録 §23・§25 の計測の結果を待っている。決まったらこの数だけを変える。
+ */
+export const LINE_FRONT_GAP_NO_CAVALRY = 4;
+/** 横陣の本陣の行（後ろから数えて何行目か。4 行のエリアなら 1 行目）。実験の記録 §23 で決めた（A14 のため） */
+export const LINE_HQ_FROM_BACK = 3;
+
+/**
+ * 横陣：前列に歩兵（中央）と盾兵（外側）、後列に弓兵、両端に騎兵。あふれた前列の部隊は、後列の、前列の両端のすぐ後ろから外へ。
+ * 本陣は後ろから LINE_HQ_FROM_BACK 行目（4 行なら弓兵と同じ 1 行目）。そのときは、弓兵は本陣の組（中央）を空けてその外の組から置き、
+ * あふれた前列の部隊は弓兵の外へ（左右対称に保つ）。
+ */
+const line: Layout = (c, w, h) => {
   const wants: Want[] = [];
   const used = new Set<string>();
   const front = [...repeat('infantry', c.infantry), ...repeat('shield', c.shield)];
-  // 前列は、騎兵がいれば幅 - 4（8列なら4。両端に騎兵が並ぶ分と、1列ずつの余白を空ける）、いなければ幅 - 2（6）
+  // 前列は、騎兵がいれば幅 - 4（8列なら4。両端に騎兵が並ぶ分と、1列ずつの余白を空ける）、いなければ幅 - LINE_FRONT_GAP_NO_CAVALRY
   // 幅 7 以下（狭い面）は、騎兵がいれば幅 - 2、いなければ幅いっぱい
-  const cap = Math.min(w, Math.max(2, w >= 8 ? (c.cavalry > 0 ? w - 4 : w - 2) : c.cavalry > 0 ? w - 2 : w));
+  const cap = Math.min(w, Math.max(2, w >= 8 ? (c.cavalry > 0 ? w - 4 : w - LINE_FRONT_GAP_NO_CAVALRY) : c.cavalry > 0 ? w - 2 : w));
   const nFront = Math.min(cap, front.length);
   const frontCells = takeSym(rowCells(0, w), nFront, null, used);
   // 中央から外へ並んだマスに、歩兵を内側、盾兵を外側
@@ -138,16 +150,21 @@ const line: Layout = (c, w) => {
     if (i % 2 === 0) wants.push({ kind: 'cavalry', stance: 'flank', cx: --minX, cy: 0 });
     else wants.push({ kind: 'cavalry', stance: 'flank', cx: ++maxX, cy: 0 });
   }
-  takeSym([...rowCells(1, w), ...rowCells(2, w)], c.archer, null, used).forEach((q) => wants.push({ kind: 'archer', stance: 'advance', ...q }));
-  // あふれた前列の部隊：前列の端の組の後ろから外へ（回り込んでくる敵を受ける）
+  // 弓兵：1・2 行目。本陣が 1 行目にいるときは、1 行目の本陣の組（中央）を空けて、その外の組から
+  const hqOnRow1 = h - LINE_HQ_FROM_BACK === 1;
+  takeSym(hqOnRow1 ? [...rowCells(1, w, 1), ...rowCells(2, w)] : [...rowCells(1, w), ...rowCells(2, w)], c.archer, null, used).forEach((q) => {
+    used.add(`${q.cx},${q.cy}`);
+    wants.push({ kind: 'archer', stance: 'advance', ...q });
+  });
+  // あふれた前列の部隊：前列の端の組の後ろから外へ（回り込んでくる敵を受ける）。弓兵のいるマスは飛ばす
   const edge = Math.max(0, Math.ceil(nFront / (w % 2 === 0 ? 2 : 1)) - 1);
-  const over = [...rowCells(1, w, edge), ...rowCells(1, w, 0, edge)];
+  const over = [...rowCells(1, w, edge), ...rowCells(1, w, 0, edge)].filter((q) => !used.has(`${q.cx},${q.cy}`));
   front.slice(nFront).forEach((k, i) => wants.push({ kind: k, stance: 'advance', ...(over[i] ?? { cx: centerCol(w), cy: 2 }) }));
   return wants;
 };
 
 /**
- * 鶴翼：V 字。中央（盾兵。守備）が下がり、両翼（歩兵。前進）が前に張り出す。左右の翼は同じ数にする。
+ * 鶴翼：V 字。中央（盾兵。前進）が下がり、両翼（歩兵。前進）が前に張り出す。左右の翼は同じ数にする。
  * 中央は中央の行（2 行目）。翼は中央の外の列から外へ、外ほど前（いちばん外の翼の先が 0 行目）。
  * 騎兵（迂回）は2騎ずつ、翼の後ろ（1 行目のいちばん外から内へ）。弓兵（守備）は中央の後ろ。
  * 組にならない歩兵1つ・騎兵1騎は、中央の後ろ（本陣と左右対称のマス）、それも埋まれば中央の脇。
@@ -159,7 +176,8 @@ const crane: Layout = (c, w, h, mate) => {
   const cRow = Math.min(h - 2, 2);
   if (mate) used.add(`${w - 1 - mate.cx},${mate.cy}`);
   const wSt: Stance = 'advance';
-  const cSt: Stance = 'hold';
+  // 中央も前進（守備にすると総当たりで 0.3 に届かなかった。実験の記録 §28）
+  const cSt: Stance = 'advance';
   const aSt: Stance = 'hold';
   const cavSt: Stance = 'flank';
   const pairs = colPairs(w);
@@ -398,9 +416,10 @@ function ringHq(w: number, h: number): Cell {
   return { cx: centerCol(w), cy: Math.max(0, Math.min(h - 2, 2)) };
 }
 
-/** 本陣の置き場所（いちばん後ろの行の中央。横陣も同じ。方円は輪の中心） */
+/** 本陣の置き場所（いちばん後ろの行の中央。横陣は後ろから LINE_HQ_FROM_BACK 行目の中央。方円は輪の中心） */
 function hqCell(id: TemplateId, w: number, h: number): Cell {
   if (id === 'ring') return ringHq(w, h);
+  if (id === 'line') return { cx: centerCol(w), cy: Math.max(0, h - LINE_HQ_FROM_BACK) };
   return { cx: centerCol(w), cy: h - 1 };
 }
 
