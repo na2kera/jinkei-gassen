@@ -99,13 +99,12 @@ test('U7 チュートリアルの前・あいだ・あとで、面の一覧を�
   // 配置の画面と同じく、手順を進めながら配置を session に置く
   run.startTutorial('list');
   assert.equal(ses.session.stageId, 'tutorial');
+  // 本陣は最初から置いてある（design §15.7）
+  assert.deepEqual(ses.session.placements, [TUTORIAL_ARMY.find((p) => p.kind === 'hq')]);
   // 正しい操作の座標は TUTORIAL_ARMY から作る（design §13.14）
-  const hqAt = TUTORIAL_ARMY.find((p) => p.kind === 'hq')!;
   const infs = TUTORIAL_ARMY.filter((p) => p.kind === 'infantry');
   const hunt = TUTORIAL_ARMY[TUTORIAL_STANCE.index]!;
   const acts = [
-    { type: 'pickKind', kind: 'hq' },
-    { type: 'cell', col: hqAt.col, row: hqAt.row },
     { type: 'pickKind', kind: 'infantry' },
     ...infs.map((p) => ({ type: 'cell', col: p.col, row: p.row }) as const),
     { type: 'unit', col: hunt.col, row: hunt.row },

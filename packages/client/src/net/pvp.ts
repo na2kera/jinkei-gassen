@@ -7,7 +7,7 @@
 //
 // 配置の下書きと確定も、まだサーバーに届いていない分をここに持つ（シーンを作り直しても、つなぎ直しても失わない）。
 
-import type { Placement, ReserveSetup, Roster } from '@jinkei/engine';
+import type { Placement, ReserveSetup } from '@jinkei/engine';
 import type Phaser from 'phaser';
 import { savedRoomCode, saveRoomCode, savePvpArmy } from '../save.ts';
 import { RemoteBattleSource } from './RemoteBattleSource.ts';
@@ -27,13 +27,11 @@ export const pvpLocal: {
   placements: Placement[];
   /** 遊軍（design §7.8）。placements と一組で送る。使えない部屋（rules.reserve が false）ではいつも null */
   reserve: ReserveSetup | null;
-  /** 編成（兵種ごとの数）。遊軍に回した部隊も数に入る */
-  roster: Roster;
   /** まだサーバーに届けていない配置の変更がある */
   draftDirty: boolean;
   /** 自分が望む確定の状態。サーバーの席の ready と違えば、届くまで送り直す。null は望みなし */
   wantReady: boolean | null;
-} = { setupFor: null, placements: [], reserve: null, roster: {}, draftDirty: false, wantReady: null };
+} = { setupFor: null, placements: [], reserve: null, draftDirty: false, wantReady: null };
 
 /** 部屋の画面の入力途中の値（向きを変えてシーンを作り直しても消えないよう、ここに持つ） */
 /** 配置の段階を見分ける鍵（部屋のコードと battleNo の組） */

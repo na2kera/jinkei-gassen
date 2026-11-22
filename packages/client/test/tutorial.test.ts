@@ -88,11 +88,8 @@ function accepted(run: TutorialRun): TutorialAction[] {
 /** 歩兵を置く順を変えて、最初から done まで進める。途中の状態を返す */
 function walk(order: number[]): Record<string, TutorialRun> {
   const at: Record<string, TutorialRun> = {};
+  // 本陣は最初から置いてあるので、始まりは「歩兵を3つ置く」（design §15.7）
   let r = newRun('auto');
-  at.placeHq = r;
-  r = ok(r, { type: 'pickKind', kind: 'hq' });
-  at.placeHqPicked = r;
-  r = ok(r, { type: 'cell', ...HQ });
   at.placeInf = r;
   r = ok(r, { type: 'pickKind', kind: 'infantry' });
   at.placeInfPicked = r;
@@ -127,8 +124,6 @@ const PERMS = [
 test('手順は表の順に進み、各手順で受け付ける操作は表のものだけ', () => {
   const at = walk([0, 1, 2]);
   const steps: [string, TutorialStep][] = [
-    ['placeHq', 'placeHq'],
-    ['placeHqPicked', 'placeHq'],
     ['placeInf', 'placeInf'],
     ['placeInfPicked', 'placeInf'],
     ['tapUnit', 'tapUnit'],
@@ -143,8 +138,6 @@ test('手順は表の順に進み、各手順で受け付ける操作は表の�
   for (const [k, s] of steps) assert.equal(at[k]!.step, s, k);
   const key = (a: TutorialAction): string => JSON.stringify(a);
   const expect: Record<string, TutorialAction[]> = {
-    placeHq: [{ type: 'pickKind', kind: 'hq' }],
-    placeHqPicked: [{ type: 'pickKind', kind: 'hq' }, { type: 'cell', ...HQ }],
     placeInf: [{ type: 'pickKind', kind: 'infantry' }],
     placeInfPicked: [{ type: 'pickKind', kind: 'infantry' }, ...INF.map((c) => ({ type: 'cell' as const, ...c }))],
     tapUnit: [{ type: 'unit', ...HUNT }],
@@ -167,9 +160,10 @@ test('表にない操作（別の兵種・別のマス・別の部隊・別の�
     for (const a of everyAction()) if (!allowed(run, a)) ng(run, a);
   }
   // いくつかを名指しで
-  ng(at.placeHq!, { type: 'cell', ...HQ }); // 兵種を選ぶ前に置く
-  ng(at.placeHq!, { type: 'pickKind', kind: 'infantry' });
-  ng(at.placeHqPicked!, { type: 'cell', col: HQ.col, row: HQ.row - 1 });
+  // 兵種を選ぶ前に置く（画面は、カードを光るマスへ離したときも「選ぶ → マスを押す」の 2 つにして渡す）
+  ng(at.placeInf!, { type: 'cell', ...INF[0]! });
+  ng(at.placeInf!, { type: 'pickKind', kind: 'hq' });
+  ng(at.placeInf!, { type: 'unit', ...HQ });
   ng(at.placeInfPicked!, { type: 'cell', ...HQ });
   ng(at.tapUnit!, { type: 'unit', ...OTHER });
   ng(at.tapUnit!, { type: 'unit', ...HQ });
@@ -182,6 +176,13 @@ test('表にない操作（別の兵種・別のマス・別の部隊・別の�
   ng(at.orderPicked!, { type: 'target', target: 'all' }); // 2度目の「全軍」
   ng(at.march!, { type: 'target', target: 'all' });
   ng(at.fight!, { type: 'order', kind: 'charge' });
+});
+
+test('始まりには本陣（TUTORIAL_ARMY の本陣）が置いてあり、手順は歩兵を置くところから', () => {
+  const r = newRun('list');
+  assert.equal(r.step, 'placeInf');
+  assert.deepEqual(r.placed, [TUTORIAL_ARMY.find((p) => p.kind === 'hq')]);
+  assert.equal(r.picked, null);
 });
 
 test('置いたマスにはもう置けない（歩兵の光るマスは、まだ空いている所だけ）', () => {
@@ -227,10 +228,9 @@ test('歩兵を置く順の 6 通りすべてで、armyOf が TUTORIAL_ARMY と�
 test('目立たせるもの', () => {
   const at = walk([2, 0, 1]);
   const none = { kinds: [], cells: [], stances: [], start: false, targets: [], orders: [], next: false };
-  assert.deepEqual(lit(at.placeHq!), { ...none, kinds: ['hq'] });
-  assert.deepEqual(lit(at.placeHqPicked!), { ...none, cells: [HQ] });
-  assert.deepEqual(lit(at.placeInf!), { ...none, kinds: ['infantry'] });
-  assert.deepEqual(lit(at.placeInfPicked!), { ...none, cells: INF });
+  // 歩兵のカードと光るマスを、選ぶ前から両方とも目立たせる（design §15.7）
+  assert.deepEqual(lit(at.placeInf!), { ...none, kinds: ['infantry'], cells: INF });
+  assert.deepEqual(lit(at.placeInfPicked!), { ...none, kinds: ['infantry'], cells: INF });
   assert.deepEqual(lit(at.tapUnit!), { ...none, cells: [HUNT] });
   assert.deepEqual(lit(at.pickStance!), { ...none, stances: ['hunt'] });
   assert.deepEqual(lit(at.start!), { ...none, start: true });
@@ -246,7 +246,8 @@ test('目立たせるもの', () => {
 test('どの手順の一行も、全角 18 文字以内。表の文のとおり', () => {
   for (const [s, text] of Object.entries(TUTORIAL_LINES)) assert.ok([...text].length <= 18, `${s}: ${text}`);
   const at = walk([0, 1, 2]);
-  assert.equal(line(at.placeHq!), '本陣を選んで、光るマスに置こう');
+  // 本陣を置く手順はない
+  assert.equal('placeHq' in TUTORIAL_LINES, false);
   assert.equal(line(at.placeInf!), '歩兵を3つ、光るマスに置こう');
   assert.equal(line(at.tapUnit!), '部隊を押すと、動き方を選べる');
   assert.equal(line(at.pickStance!), '「本陣狙い」を選ぼう');

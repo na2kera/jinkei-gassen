@@ -7,6 +7,7 @@ import {
   plainField,
   STANDARD_WIDTH,
   PVP_MAPS,
+  PVP_RULES,
   pvpField,
   STAGES,
   type Field,
@@ -37,6 +38,7 @@ import { overflows, type Overflow } from './ui/overflow.ts';
 import { hitSnapshot, type HitSnapshot } from './ui/hitRegistry.ts';
 import { wakeState, type WakeState } from './wake.ts';
 import { client, lobbyInput, pvp, pvpLocal } from './net/pvp.ts';
+import { budgetUsed, unitCount } from './scenes/deployModel.ts';
 import { clearSave, loadSave, playerId, savedFormations, resetPlayerIdForDebug, savedName, savedRoomCode, pvpRulesSeen, setPvpRulesSeenForDebug, setStarsForDebug, setTutorialDoneForDebug } from './save.ts';
 import { session, type ResultData } from './session.ts';
 import { startTutorial, tutorialPaused } from './tutorial/run.ts';
@@ -83,6 +85,8 @@ interface DebugHooks {
   rulesClose: (() => void) | null;
   /** 配置・戦闘の画面の、マスの中心の画面の点（確かめ用。丘の高さを見る） */
   cellScreen: ((col: number, row: number) => { x: number; y: number }) | null;
+  /** 配置の画面の、手札のカード・遊軍の枠・手札の欄などの矩形（内部の px。指の操作を送って確かめるため。design §15.10） */
+  deployRects: (() => unknown) | null;
   /** 公開の回転の進み具合を止める（null で止めない。画像を撮るため） */
   revealFreeze: ((p: number | null) => void) | null;
   /** 戦闘の向きの切り替えを、決まった進み具合で止める（null で止めない、jump ですぐ止まる先へ） */
@@ -115,6 +119,7 @@ export const debug: DebugHooks = {
   rulesOpen: null,
   rulesClose: null,
   cellScreen: null,
+  deployRects: null,
   revealFreeze: null,
   cameraFreeze: null,
 };
@@ -228,6 +233,10 @@ export function installDebug(game: Phaser.Game): void {
     cellScreen(col: number, row: number): { x: number; y: number } | null {
       return debug.cellScreen ? debug.cellScreen(col, row) : null;
     },
+    /** 配置の画面の、手札のカード・遊軍の枠・手札の欄・「開戦」「完了」・ひな形の矩形（内部の px）。配置の画面でなければ null */
+    get deployRects(): unknown {
+      return debug.deployRects ? debug.deployRects() : null;
+    },
     /** 公開の回転の進み具合を止める（null で止めない） */
     revealFreeze(p: number | null): boolean {
       if (!debug.revealFreeze) return false;
@@ -288,7 +297,9 @@ export function installDebug(game: Phaser.Game): void {
         received: { ...client.received },
         sent: [...client.sentLog],
         placements: pvpLocal.placements.length,
-        roster: { ...pvpLocal.roster },
+        // 使った予算と部隊数（本陣を含む。design §15.5。兵種ごとの数は持たない）
+        budgetUsed: budgetUsed(pvpLocal.placements, pvpLocal.reserve, r?.rules.costs ?? PVP_RULES.costs),
+        units: unitCount(pvpLocal.placements, pvpLocal.reserve),
         result: client.result ? { winner: client.result.winner, reason: client.result.reason, score: client.result.score } : null,
         snapTick: client.snap?.tick ?? null,
         myArmy: r?.myArmy ?? null,

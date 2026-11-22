@@ -21,12 +21,9 @@ import {
   canOrder,
   canSummon,
   createBattle,
-  pvpArmyLimits,
   step,
   summarize,
-  validateArmy,
   viewFor,
-  type ArmyError,
   type BattleEvent,
   type BattleSummary,
   type Field,
@@ -36,10 +33,10 @@ import {
   type ReserveSetup,
   type ReserveView,
   type Side,
-  type Zone,
 } from '@jinkei/engine';
 import { fieldFor, packView, placementsFor, revealFor } from './flip.ts';
 import { fieldOf, pickMap } from './maps.ts';
+import { clearThinLastValid, deployErrors, deployState } from './draftState.ts';
 import type {
   ClientMessage,
   CloseCode,
@@ -111,11 +108,6 @@ function randomSeed(): number {
   const a = new Uint32Array(1);
   crypto.getRandomValues(a);
   return a[0] ?? 1;
-}
-
-/** 配置と遊軍の組を検査する（design §7.6。予算・部隊数は戦場の部隊 + 遊軍で数え、遊軍の値は reserveErrors で見る） */
-function deployErrors(d: Deploy, zone: Zone): ArmyError[] {
-  return validateArmy(d.army, zone, { ...pvpArmyLimits(), reserve: d.reserve });
 }
 
 /**
@@ -209,6 +201,8 @@ export class Room extends DurableObject<Env> {
     // ないものとして扱い（room は null）、下の点検で保存領域とアラームを消す
     this.room = saved === null ? null : loadRoom(saved);
     const stale = saved !== null && this.room === null;
+    // 前の版のサーバーが保存した「下書き＝本陣だけ、lastValid＝外す前の軍」をそろえる（design §15.5）
+    if (this.room !== null) clearThinLastValid(this.room, fieldOf(this.room.map));
     // 起動時の点検：接続の突き合わせ（再起動で消えた接続）、期限、戦闘の再開。
     // ここで戦闘を再開しておけば、起こしたのが見張りのアラームでも、入り直した人の接続でも同じに続く
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -356,6 +350,19 @@ export class Room extends DurableObject<Env> {
     const saved = this.ctx.storage.kv.get<RoomState>(ROOM_KEY);
     if (saved === undefined) return false;
     this.ctx.storage.kv.put(ROOM_KEY, { ...saved, v });
+    return true;
+  }
+
+  /**
+   * テスト用：保存してある部屋の、その席の lastValid だけを書き換える（「自分が下」の座標で受け取る）。前の版のサーバーが残した
+   * 「下書き＝本陣だけ、lastValid＝外す前の軍」の保存を作るため（design §15.5）。続けて abortNow で読み戻させる
+   */
+  async setSavedLastValidNow(side: Side, army: Placement[], reserve: ReserveSetup | null): Promise<boolean> {
+    const saved = this.ctx.storage.kv.get<RoomState>(ROOM_KEY);
+    const seat = saved?.seats[side];
+    if (saved === undefined || !seat) return false;
+    seat.lastValid = { army: placementsFor(side, army, fieldOf(saved.map)), reserve };
+    this.ctx.storage.kv.put(ROOM_KEY, saved);
     return true;
   }
 
@@ -702,12 +709,16 @@ export class Room extends DurableObject<Env> {
 
   /**
    * 「自分が下」の座標で届いた下書きの組を、戦場の座標にして持つ。組ごと検査を通れば lastValid にもする
-   * （配置だけ、遊軍だけを入れ替えることはしない）。遊軍の値は座標を持たないので返さない
+   * （配置だけ、遊軍だけを入れ替えることはしない）。遊軍の値は座標を持たないので返さない。
+   * 「足りないだけ」（本陣だけ・本陣＋遊軍）の下書きなら lastValid を空にする（外したはずの部隊を、時間切れや
+   * 読み込み直しで生き返らせない。design §15.5）。それ以外の不正な下書きでは、前に通った lastValid のまま
    */
   private takeDraft(seat: Seat, side: Side, d: Deploy, field: Field): void {
     const placed: Deploy = { army: placementsFor(side, d.army, field), reserve: d.reserve === null ? null : { kind: d.reserve.kind, stance: d.reserve.stance } };
     seat.draft = placed;
-    if (deployErrors(placed, field.zones[side]).length === 0) seat.lastValid = placed;
+    const state = deployState(placed, field.zones[side]);
+    if (state === 'ok') seat.lastValid = placed;
+    else if (state === 'thin') seat.lastValid = null;
   }
 
   // ---------- 切断 ----------
@@ -865,6 +876,7 @@ export class Room extends DurableObject<Env> {
     if (s === null || s.phase !== 'setup') return;
     const field = fieldOf(s.map);
     // 確定した人は確定した組、していない人は最後に検査を通った下書きの組、それもなければ既定の編成で遊軍なし（assumptions S8）。
+    // 最後の下書きが「足りないだけ」（本陣だけなど）の人は、takeDraft で lastValid を空にしてあるので、既定の編成になる（design §15.5）。
     // 配置と遊軍は組で選ぶ（design §7.7）。遊軍を使えない部屋では遊軍を外す（settle で外してあるはずだが、念のため）
     const allowed = reserveAllowed(s);
     const armies = SIDES.map((side) => s.seats[side]?.lastValid?.army ?? this.defaultArmy(side, field)) as [Placement[], Placement[]];
@@ -1204,6 +1216,8 @@ export class Room extends DurableObject<Env> {
   private roomMsg(s: RoomState, side: Side, now: number): RoomMessage {
     const field = fieldOf(s.map);
     const me = s.seats[side];
+    const thinDraft = me?.draft && deployState(me.draft, field.zones[side]) === 'thin' ? me.draft : null;
+    const mine = me?.lastValid ?? thinDraft;
     return {
       type: 'room',
       code: s.code,
@@ -1225,9 +1239,10 @@ export class Room extends DurableObject<Env> {
         reserve: reserveAllowed(s),
       },
       rematch: [s.rematch[0], s.rematch[1]],
-      // 配置と遊軍は、同じ組（最後に検査を通った組）から返す。相手の遊軍は入れない
-      myArmy: me?.lastValid ? placementsFor(side, me.lastValid.army, field) : null,
-      myReserve: me?.lastValid?.reserve ? { kind: me.lastValid.reserve.kind, stance: me.lastValid.reserve.stance } : null,
+      // 配置と遊軍は、同じ組（最後に検査を通った組）から返す。なければ、最後の下書きが「足りないだけ」（本陣だけ・本陣＋遊軍）なら
+      // その下書きを返す（外した部隊を戻さない。design §15.5）。相手の遊軍は入れない
+      myArmy: mine ? placementsFor(side, mine.army, field) : null,
+      myReserve: mine?.reserve ? { kind: mine.reserve.kind, stance: mine.reserve.stance } : null,
       opponentLeft: s.opponentLeft,
     };
   }

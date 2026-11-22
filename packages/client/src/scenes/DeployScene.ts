@@ -1,18 +1,21 @@
-// 配置の画面（design §5.1）。1人用の面（Stage）と、対戦の配置の両方をこのシーンで扱う。
-// 手持ちを選んでマスを押すと置く／置いた部隊を引きずると動く／ほかの部隊の上に落とすと入れ替わる／
-// 置いた部隊を押すと、方針の切り替え（選べるものだけ）と「外す」が出る。
+// 配置の画面（design §5.1、§15）。1人用の面（Stage）と、対戦の配置の両方をこのシーンで扱う。
+// 手札のカードを盤まで引っぱって離すと置く（カードを押して選んでからマスを押しても置ける）／置いた部隊を引っぱると動く／
+// ほかの部隊の上に落とすと入れ替わる／手札の欄まで引っぱると外れる／遊軍の枠とのあいだで出し入れする／
+// 置いた部隊を押すと、方針の切り替え（選べるものだけ）と「外す」（本陣には出さない）が出る。本陣は最初から置いてある。
+// 離した先ごとの結果は deployModel.ts（Phaser を読まない）が決める。
 //   1人用：手持ちは面で決まり、敵の配置が見える。allow に従ってひな形・方針を出し分け、ヒントを出す。
 //          配置は session に持ち、変えるたびに面ごとの最後の配置として保存する。
-//   対戦：編成（兵種ごとの数）を予算の中で足し引きする。敵のエリアは見えない（斜線で隠す）。
+//   対戦：置くたびに予算から引く（兵種ごとの数は持たない。design §15.5）。敵のエリアは見えない（斜線で隠す）。
 //          配置は pvpLocal に持ち、変わるたびに下書きを送る（0.5秒に1回まで）。「完了」で確定し、確定中は動かせない。
 //          段階の移り変わり（公開へ進むなど）は pvp.ts が決める。このシーンは、届いた room を見て表示を直すだけ。
-// どちらも、場所や手持ちの違いは下の「モード」の関数（list・roster・ownZone など）に閉じ込め、操作の作りは共通にする。
+// どちらも、場所や手持ちの違いは下の「モード」の関数（list・ownZone・cardUsable など）に閉じ込め、操作の作りは共通にする。
 // チュートリアル（design §8.6）も1人用の面として開く。操作はどれも tutorialAct を通し、受け付けたものだけを行う。
 
 import {
   defaultStance,
   listTemplates,
   MAX_UNITS,
+  PVP_RULES,
   pvpArmyLimits,
   recognizeFormation,
   stageEnemyVisible,
@@ -24,7 +27,6 @@ import {
   type Kind,
   type Placement,
   type ReserveSetup,
-  type Roster,
   type Side,
   type Stage,
   type Stance,
@@ -53,27 +55,49 @@ import { pickSquad } from '../battle/pick.ts';
 import { LocalBattleSource } from '../battle/LocalBattleSource.ts';
 import { debug } from '../debug.ts';
 import { saveFormation as saveFormationTo, savedFormations as savedFormationList, savedPvpArmy, savedPvpReserve } from '../save.ts';
-import { CELL, deployInfo, deployPanel, deployReserveSlot, getLayout, LAYOUT_EVENT, pvpDeployPanel, tutorialDeployHead, tutorialLine, type DeployInfoLayout, type Rect } from '../layout.ts';
+import { CELL, deployInfo, deployPanel, getLayout, LAYOUT_EVENT, tutorialDeployHead, tutorialLine, type DeployInfoLayout, type DeployPanel, type Rect } from '../layout.ts';
 import { client, pvp, pvpLocal, setupKey } from '../net/pvp.ts';
 import { reserveAllowed, roomReserve } from '../net/reserveMessages.ts';
 import { armyErrors, battleSetup, fitStances, openStage, session, setPlacements, stanceOk } from '../session.ts';
 import { Button } from '../ui/Button.ts';
+import { Card } from '../ui/Card.ts';
 import { addHitObstacle, FIELD_FRAME, padRect } from '../ui/hitRegistry.ts';
 import { checkFit } from '../ui/overflow.ts';
 import { KIND_LABEL, RESERVE_LABEL, ROSTER_ORDER, STANCE_LABEL } from '../ui/labels.ts';
 import { addMuteButton } from '../ui/mute.ts';
-import { drawBox } from '../ui/panel.ts';
+import { drawBox, drawFrame } from '../ui/panel.ts';
 import { unitBoxAt } from '../ui/unitBox.ts';
 import { addText } from '../ui/text.ts';
 import { FormationDialog } from '../ui/FormationDialog.ts';
 import type { SavedFormation } from '../save.ts';
 import type { BattleSceneData } from './BattleScene.ts';
 import { enemyAt } from './enemyKind.ts';
-import { canPutReserve, newReserve, recallReserve, remainingOf, shrinkKind, templateWithReserve } from './reserveSlot.ts';
+import { remainingOf } from './reserveSlot.ts';
+import {
+  canAdd,
+  canSwapReserve,
+  DRAG_LIFT,
+  dropResult,
+  ensureHq,
+  hasNonHq,
+  isDrag,
+  placeable,
+  releaseAction,
+  pvpHeadText,
+  recallPlan,
+  rosterWithoutReserve,
+  templatePlacements,
+  templateRoster,
+  trimToLimits,
+  type DragSource,
+  type DropResult,
+  type DropTarget,
+  type PvpLimits,
+} from './deployModel.ts';
 import { drawStanceIcon } from '../art/icons.ts';
 import { holdWake } from '../wake.ts';
 import { blinkOn, finishTutorial, setTutorialBattle, tutorialAct } from '../tutorial/run.ts';
-import { allowed, armyOf, armyReady, line, lit, type TutorialAction } from '../tutorial/steps.ts';
+import { allowed, apply as applyTutorial, armyOf, armyReady, line, lit, type TutorialAction } from '../tutorial/steps.ts';
 
 /** 地形の名前と効きめ（配置の画面で、マスを押している間だけ1行で出す）。数字は出さず、何に効くかだけを書く */
 const TERRAIN_TEXT: Partial<Record<Terrain, string>> = {
@@ -85,8 +109,6 @@ const TERRAIN_TEXT: Partial<Record<Terrain, string>> = {
 };
 const GATE_TEXT = '門：破れば通れる';
 
-/** これ以上動いたら「押した」ではなく「引きずった」とみなす（px） */
-const DRAG_THRESHOLD = 6;
 /** 縦長で「？」を押したときに、ヒントを出しておく長さ（ミリ秒） */
 const HINT_MS = 3000;
 /** 陣形を呼び出したときなどの1行の知らせを出しておく長さ（ミリ秒） */
@@ -98,12 +120,20 @@ const RESERVE_ICON_MIN_W = 140;
 /** 「出る」を2回押すまでの猶予（ミリ秒） */
 const LEAVE_ARM_MS = 2500;
 
+/** 押し始めを覚えたもの（カード・盤の部隊・遊軍の枠。design §15.4） */
 interface Press {
   pointerId: number;
-  index: number;
+  src: DragSource;
   startX: number;
   startY: number;
+  /** 最後に見た指の位置（盤を作り直したときに、引っぱっている表示を当て直すため） */
+  x: number;
+  y: number;
+  /** 押し始めから 8px 以上動いたか（引っぱれない元でも数える。一度立ったら戻さない） */
+  moved: boolean;
   dragging: boolean;
+  /** 盤の部隊なら、押し始めのその部隊（作り直したあとに同じ部隊かを見分ける） */
+  unit: Placement | null;
 }
 
 export interface DeploySceneData {
@@ -115,12 +145,10 @@ export interface DeploySceneData {
 /** 置いた途中の配置として使えない誤り（本陣がない・部隊が足りないのは途中なのでよい） */
 const BROKEN: ReadonlySet<ArmyError['code']> = new Set(['invalid_kind', 'invalid_stance', 'invalid_cell', 'out_of_zone', 'overlap', 'over_budget', 'too_many_units']);
 
-/** 配置の兵種ごとの数 */
-function countKinds(list: readonly Placement[]): Roster {
-  const r: Roster = {};
-  for (const p of list) r[p.kind] = (r[p.kind] ?? 0) + 1;
-  return r;
-}
+/** 手札のカードの並び（本陣のカードは出さない） */
+const CARD_ORDER: readonly Kind[] = ROSTER_ORDER.filter((k) => k !== 'hq');
+/** 「ここで外す」（design §15.2） */
+const REMOVE_LABEL = 'ここで外す';
 
 export class DeployScene extends Phaser.Scene {
   private pvpMode = false;
@@ -145,18 +173,25 @@ export class DeployScene extends Phaser.Scene {
   private popupLayer!: Phaser.GameObjects.Container;
   private dropMark!: Phaser.GameObjects.Graphics;
   private ownSprites: SquadSprite[] = [];
-  private rosterButtons = new Map<Kind, Button>();
-  private minusButtons = new Map<Kind, Button>();
-  private plusButtons = new Map<Kind, Button>();
+  /** 手札のカード（design §15.3） */
+  private cards = new Map<Kind, Card>();
+  private panel!: DeployPanel;
+  /** 「ここで外す」の枠（盤の部隊・遊軍の枠の部隊を引っぱっている間だけ、手札の場所に出す） */
+  private removeBox!: Phaser.GameObjects.Graphics;
+  private removeText!: Phaser.GameObjects.Text;
+  /** カード・遊軍の枠から引っぱっている間の、その兵種の絵（盤の部隊の一覧には入れない） */
+  private ghost: SquadSprite | null = null;
+  /** 「開戦」「完了」を、遊軍の枠を出す並びで作ったか（縦長は、枠の有無で幅が変わる） */
+  private startWithReserve: boolean | null = null;
   private templateButtons: Button[] = [];
-  private startButton!: Button;
+  private startButton: Button | null = null;
   private backButton!: Button;
   private popupButtons: Button[] = [];
   private popupIndex: number | null = null;
   /** 遊軍の枠の箱（方針の切り替えと「外す」）を出しているか */
   private popupReserve = false;
   /** 「遊軍」の枠（design §7.8）。対戦で遊軍を使えない部屋では作らない */
-  private reserveButton: Button | null = null;
+  private reserveButton: Card | null = null;
   /** 枠の中の方針の印 */
   private reserveIcon: Phaser.GameObjects.Graphics | null = null;
   private selectedKind: Kind | null = null;
@@ -203,15 +238,16 @@ export class DeployScene extends Phaser.Scene {
     const layout = getLayout();
     this.cameras.main.setSize(layout.width, layout.height);
     this.ownSprites = [];
-    this.rosterButtons = new Map();
-    this.minusButtons = new Map();
-    this.plusButtons = new Map();
+    this.cards = new Map();
+    this.ghost = null;
+    this.startWithReserve = null;
     this.templateButtons = [];
     this.popupButtons = [];
     this.popupStances = [];
     this.popupIndex = null;
     this.popupReserve = false;
     this.reserveButton = null;
+    this.startButton = null;
     this.litMarks = null;
     this.reserveIcon = null;
     this.selectedKind = null;
@@ -258,6 +294,9 @@ export class DeployScene extends Phaser.Scene {
       this.field = this.stage.field;
       this.ownZone = this.stage.field.zones[0];
       this.otherZone = this.stage.field.zones[1];
+      // 本陣は最初から置いてある。前の配置になければ（本陣を置く前に保存された配置）、初めのマスに足す。
+      // 保存は、次に配置を変えたときに書かれる（design §15.6、§15.8）
+      session.placements = ensureHq(session.placements, session.reserve, this.field, this.ownZone, MAX_UNITS);
     }
 
     const field = this.field;
@@ -326,6 +365,7 @@ export class DeployScene extends Phaser.Scene {
     this.kindBox = this.add.graphics();
     this.kindText = addText(this, 0, 0, '').setVisible(false);
 
+    this.panel = deployPanel(getLayout());
     if (this.pvpMode) this.buildPvpPanel();
     else this.buildStagePanel();
 
@@ -333,6 +373,14 @@ export class DeployScene extends Phaser.Scene {
     this.input.on(Phaser.Input.Events.POINTER_MOVE, this.onMove, this);
     this.input.on(Phaser.Input.Events.POINTER_UP, this.onUp, this);
     this.input.on(Phaser.Input.Events.POINTER_UP_OUTSIDE, this.onUp, this);
+    // 離す出来事が届かないまま、画面が隠れた・フォーカスを失ったら、引っぱりを取り消す（design §15.4）
+    const onLost = (): void => this.cancelPress();
+    const onVisibility = (): void => {
+      if (document.hidden) this.cancelPress();
+    };
+    this.game.events.on(Phaser.Core.Events.BLUR, onLost);
+    this.game.events.on(Phaser.Core.Events.HIDDEN, onLost);
+    document.addEventListener('visibilitychange', onVisibility);
 
     // 向きが変わったら作り直す。対戦では、画面の切り替えとぶつからないよう pvp.ts に頼む
     const onLayout = (): void => {
@@ -344,6 +392,12 @@ export class DeployScene extends Phaser.Scene {
     const offReady = stackTextures.onReady(() => this.onStackReady());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.events.off(LAYOUT_EVENT, onLayout);
+      this.game.events.off(Phaser.Core.Events.BLUR, onLost);
+      this.game.events.off(Phaser.Core.Events.HIDDEN, onLost);
+      document.removeEventListener('visibilitychange', onVisibility);
+      // 引っぱっている途中なら取り消す（絵はシーンと一緒に消える）
+      this.press = null;
+      this.ghost = null;
       offReady();
       // 対戦の公開の揃いは、公開へ進むときだけ残す（部屋を出る・待機に戻るときは捨てる。公開の画面が終わるときにも捨てる）
       if (this.pvpMode) {
@@ -367,7 +421,9 @@ export class DeployScene extends Phaser.Scene {
       debug.reserveOps = null;
       debug.tutorialAct = null;
       debug.tutorialSkip = null;
+      debug.deployRects = null;
     });
+    debug.deployRects = () => this.debugRects();
     debug.applyTemplate = (id) => this.useTemplate(id);
     debug.start = (viewer) => (this.pvpMode ? this.pressReady() : this.startBattle(viewer));
     debug.formationOps = {
@@ -403,13 +459,16 @@ export class DeployScene extends Phaser.Scene {
     debug.reserveOps = {
       get: () => (this.reserve ? { ...this.reserve } : null),
       put: (kind) => {
-        // 手持ちが残っていなければ、最後に置いたその兵種を戦場から外してから枠に入れる（確かめる手間を省くため）
-        if (this.remaining(kind) <= 0) {
-          const i = this.list.map((p) => p.kind).lastIndexOf(kind);
-          if (i >= 0) this.setList(this.list.filter((_, j) => j !== i));
+        // 枠が空なら、その兵種を選んで枠を押す（画面の操作と同じ）。入れられなければ、最後に置いたその兵種を
+        // 戦場から枠へ移す（確かめる手間を省くため。盤の部隊を枠へ引っぱるのと同じ結果）
+        if (!this.reserve && this.cardUsable(kind)) {
+          this.selectedKind = kind;
+          this.pressReserve();
         }
-        this.selectedKind = kind;
-        this.pressReserve();
+        if (!this.reserve || this.reserve.kind !== kind) {
+          const i = this.list.map((p) => p.kind).lastIndexOf(kind);
+          if (i >= 0) this.applyDrop(dropResult({ type: 'unit', index: i }, { type: 'reserve' }, this.dropContext()));
+        }
         return this.reserve !== null && this.reserve.kind === kind;
       },
       tap: () => this.pressReserve(),
@@ -451,7 +510,7 @@ export class DeployScene extends Phaser.Scene {
     const index = this.indexAt(cell);
     if (index >= 0) {
       // 部隊は、離したときに押したとみなす（引きずって動かすことはできない）
-      this.press = { pointerId: pointer.id, index, startX: pointer.x, startY: pointer.y, dragging: false };
+      this.beginPress(pointer, { type: 'unit', index });
       return;
     }
     this.tutorialCell(cell);
@@ -486,7 +545,7 @@ export class DeployScene extends Phaser.Scene {
     if (!before) return false;
     switch (a.type) {
       case 'pickKind':
-        if (this.rosterButtons.has(a.kind)) this.selectKind(a.kind);
+        if (this.cards.has(a.kind)) this.selectKind(a.kind);
         break;
       case 'cell':
         if (this.popupIndex !== null) this.dismissTutorialPopup();
@@ -570,9 +629,9 @@ export class DeployScene extends Phaser.Scene {
     }
     const on = blinkOn(this.time.now);
     const l = lit(run);
-    for (const [kind, b] of this.rosterButtons) b.setSelected(this.selectedKind === kind || (on && l.kinds.includes(kind)));
+    for (const [kind, b] of this.cards) b.setSelected(this.selectedKind === kind || (on && l.kinds.includes(kind)));
     // 主のボタン（開戦）は、主の見た目とふつうのボタンの見た目を入れ替える（選択中の見た目は主の見た目と同じなので）
-    this.startButton.setPrimary(!l.start || on);
+    this.startButton?.setPrimary(!l.start || on);
     // 方針の箱は、受け付ける方針だけが押せる見た目で、それだけを点滅させる
     this.popupButtons.forEach((b, i) => {
       const st = this.popupStances[i] ?? null;
@@ -587,7 +646,7 @@ export class DeployScene extends Phaser.Scene {
 
   private buildStagePanel(): void {
     const stage = this.stage;
-    const panel = deployPanel(getLayout());
+    const panel = this.panel;
     // チュートリアルは「戻る」の場所に、幅を広げた「飛ばす」（確かめずに抜け、済んだ扱いにする）。面の名前はそのぶん右へ
     const head = this.tut ? tutorialDeployHead(getLayout()) : { back: panel.back, name: panel.name };
     this.backButton = this.tut
@@ -598,41 +657,55 @@ export class DeployScene extends Phaser.Scene {
     // 面の名前が「音あり」に重ならないか（開発時だけ記録）
     checkFit(this.scene.key, name.text, name.width, name.height, panel.mute.x - 6 - head.name.x + 8, 40);
     addMuteButton(this, panel.mute);
-    // 手持ちは、その面にある兵種だけを並べる（ない兵種のボタンは出さない）
-    ROSTER_ORDER.filter((k) => (stage.roster[k] ?? 0) > 0).forEach((kind, i) => {
-      const r = panel.roster[i];
-      if (!r) return;
-      this.rosterButtons.set(kind, new Button(this, r, KIND_LABEL[kind], () => this.selectKind(kind)));
-    });
+    // 手札は、その面にある兵種だけを並べる（ない兵種のカードは出さず、左に詰める）
+    this.addCards(CARD_ORDER.filter((k) => (stage.roster[k] ?? 0) > 0));
     if (this.templatesShown()) {
       this.addTemplateButtons(panel.templates);
       // 陣形の保存と呼び出しは、ひな形と同じ並びに置き、ひな形を出さない面では出さない
       this.templateButtons.push(new Button(this, panel.formations, '陣形', () => this.openFormations()));
     }
-    this.startButton = new Button(this, panel.start, '開戦', () => this.startBattle(), { primary: true });
+    this.addRemoveBox();
   }
 
   private buildPvpPanel(): void {
-    const panel = pvpDeployPanel(getLayout());
+    const panel = this.panel;
     this.backButton = new Button(this, panel.back, '出る', () => this.pressLeave());
-    this.budgetText = addText(this, panel.budget.x, panel.budget.y, '', 16, COLOR.goldHi).setOrigin(0, 0.5);
+    // 見出しのまん中に「予算 16/24 部隊 8/11」（design §15.5）
+    this.budgetText = addText(this, panel.name.x, panel.name.y, '', 16, COLOR.goldHi).setOrigin(0, 0.5);
     addMuteButton(this, panel.mute);
-    // 対戦は5兵種すべてを並べ、本陣以外は下の「−」「＋」で数を変える（本陣は必ず1つ）
-    ROSTER_ORDER.forEach((kind, i) => {
-      const r = panel.roster[i];
-      if (!r) return;
-      this.rosterButtons.set(kind, new Button(this, r, KIND_LABEL[kind], () => this.selectKind(kind)));
-      if (kind === 'hq') return;
-      const m = panel.minus[i];
-      const p = panel.plus[i];
-      if (m) this.minusButtons.set(kind, new Button(this, m, '−', () => this.changeCount(kind, -1)));
-      if (p) this.plusButtons.set(kind, new Button(this, p, '＋', () => this.changeCount(kind, 1)));
-    });
+    this.addCards(CARD_ORDER);
     this.addTemplateButtons(panel.templates);
     this.templateButtons.push(new Button(this, panel.formations, '陣形', () => this.openFormations()));
-    this.startButton = new Button(this, panel.start, '完了', () => this.pressReady(), { primary: true });
+    this.addRemoveBox();
     // 部屋の様子（自分と相手の確定・期限）が変わったら、ボタンと表示を直す
     this.unsubscribe.push(client.subscribe(() => this.refresh(false)));
+  }
+
+  /** 手札のカード。押し始めをこのシーンに渡し、押したのか引っぱったのかは onMove・onUp で決める（design §15.3） */
+  private addCards(kinds: readonly Kind[]): void {
+    kinds.forEach((kind, i) => {
+      const r = this.panel.cards[i];
+      if (!r) return;
+      this.cards.set(kind, new Card(this, r, KIND_LABEL[kind], '', (pointer) => this.downCard(kind, pointer)));
+    });
+  }
+
+  /** 「ここで外す」の枠（ふだんは隠す） */
+  private addRemoveBox(): void {
+    const h = this.panel.hand;
+    this.removeBox = this.add.graphics().setVisible(false);
+    this.removeText = addText(this, Math.round(h.x + h.w / 2), Math.round(h.y + h.h / 2), REMOVE_LABEL).setOrigin(0.5, 0.5).setVisible(false);
+  }
+
+  /** 「開戦」「完了」を作る（縦長は、遊軍の枠を出すかで幅が変わるので、変わったら作り直す） */
+  private syncStartButton(withReserve: boolean): void {
+    if (this.startButton && this.startWithReserve === withReserve) return;
+    this.startButton?.destroy();
+    this.startWithReserve = withReserve;
+    const r = withReserve ? this.panel.start : this.panel.startFull;
+    this.startButton = this.pvpMode
+      ? new Button(this, r, '完了', () => this.pressReady(), { primary: true })
+      : new Button(this, r, '開戦', () => this.startBattle(), { primary: true });
   }
 
   private addTemplateButtons(rects: Rect[]): void {
@@ -676,8 +749,42 @@ export class DeployScene extends Phaser.Scene {
     return this.pvpMode ? reserveAllowed(client.room) : !this.tut;
   }
 
-  private roster(): Roster {
-    return this.pvpMode ? pvpLocal.roster : this.stage.roster;
+  /** 対戦の予算と部隊数の決まり（通信で届く rules。届いていなければ engine の決まり） */
+  private limits(): PvpLimits {
+    const rules = client.room?.rules;
+    return { budget: rules?.budget ?? PVP_RULES.budget, costs: rules?.costs ?? PVP_RULES.costs, maxUnits: rules?.maxUnits ?? PVP_RULES.maxUnits };
+  }
+
+  /**
+   * そのカードを使えるか（明るい・引っぱれる・押して選べる。design §15.3）。
+   * 対戦は、盤に足せるか遊軍と入れ替えられるか。一人用は残りが 1 以上。チュートリアルは、その手順で選べる兵種だけ
+   */
+  private cardUsable(kind: Kind): boolean {
+    if (this.locked()) return false;
+    if (this.pvpMode) return canAdd(kind, this.list, this.reserve, this.limits()) || canSwapReserve(kind, this.list, this.reserve, this.limits(), this.reserveShown());
+    if (this.remaining(kind) <= 0) return false;
+    const run = this.tut ? session.tutorial : null;
+    return !run || allowed(run, { type: 'pickKind', kind });
+  }
+
+  /** 離した先ごとの結果を決めるための、いまの様子（design §15.4） */
+  private dropContext(): Parameters<typeof dropResult>[2] {
+    const run = this.tut ? session.tutorial : null;
+    return {
+      list: this.list,
+      reserve: this.reserve,
+      reserveShown: this.reserveShown(),
+      canPlace: (c) => placeable(this.field, this.ownZone, c),
+      stanceOk: (k, st) => this.stanceOkFor(k, st),
+      check: (list, reserve) => this.errorsWith(list, reserve),
+      // チュートリアル：歩兵のカードを光るマスへ離す操作だけ（兵種を選んでからマスを押すのと同じ 2 つの操作として調べる）
+      ...(run
+        ? {
+            allow: (src: DragSource, t: DropTarget): boolean =>
+              src.type === 'card' && t.type === 'cell' && allowed(run, { type: 'pickKind', kind: src.kind }) && allowed(applyTutorial(run, { type: 'pickKind', kind: src.kind }), { type: 'cell', col: t.col, row: t.row }),
+          }
+        : {}),
+    };
   }
 
   private stanceOkFor(kind: Kind, stance: Stance): boolean {
@@ -698,8 +805,12 @@ export class DeployScene extends Phaser.Scene {
   }
 
   private errors(list: Placement[]): ArmyError[] {
+    return this.errorsWith(list, this.reserve);
+  }
+
+  private errorsWith(list: Placement[], reserve: ReserveSetup | null): ArmyError[] {
     // 遊軍も、手持ち・部隊数・予算に含めて数える（design §7.6）
-    return this.pvpMode ? validateArmy(list, this.ownZone, { ...pvpArmyLimits(), reserve: this.reserve }) : armyErrors(list, this.reserve);
+    return this.pvpMode ? validateArmy(list, this.ownZone, { ...pvpArmyLimits(), reserve }) : armyErrors(list, reserve);
   }
 
   /**
@@ -713,12 +824,13 @@ export class DeployScene extends Phaser.Scene {
     return !!room && room.seats[room.you]?.ready === true;
   }
 
-  // ---- 対戦の編成と下書き ----
+  // ---- 対戦の配置と下書き ----
 
   /**
    * 配置の段階に入ったときの始め方（戦いが変わった・読み込み直した・出て入り直したとき）。
-   *   1. サーバーの myArmy（その配置の段階でサーバーが覚えている、最後に検査を通った下書き）があれば、それを出す
-   *   2. なければ、手元の最後の配置（覚えている配置、なければ保存した配置）を出し、「まだ送っていない」印を立てて送る
+   *   1. サーバーの myArmy（その配置の段階でサーバーが覚えている、最後に検査を通った下書き。部隊を全部外していれば本陣だけ）があれば、それを出す
+   *   2. なければ、手元の最後の配置（覚えている配置、なければ保存した配置）を出し、本陣以外の部隊か遊軍があれば「まだ送っていない」印を立てて送る
+   *   どれもなければ、本陣だけの盤から始める（本陣だけの盤では下書きを送らない。design §15.5）
    * サーバーは新しい配置の段階に入ると下書きを消すので、2 がないと、読み込み直した人の配置が空になる
    */
   private beginPvpSetup(): void {
@@ -734,55 +846,12 @@ export class DeployScene extends Phaser.Scene {
     const reserve = reserveAllowed(room) ? base.reserve : null;
     const broken = (r: ReserveSetup | null): boolean => validateArmy(base.army, this.ownZone, { ...pvpArmyLimits(), reserve: r }).some((e) => BROKEN.has(e.code));
     const ok = !broken(null);
-    pvpLocal.placements = ok ? base.army.map((p) => ({ ...p })) : [];
     // 遊軍は、配置と一緒に検査を通るときだけ残す（予算を超えるなどしたら、遊軍だけを外す）
     pvpLocal.reserve = ok && reserve && !broken(reserve) ? { ...reserve } : null;
-    // 編成は、置いてある部隊（と遊軍）の数から始める。まだ何も置いていなければ、既定の編成（予算ちょうど）から始める
-    // 使えない部屋で外した遊軍も、編成には残す（手持ちに戻り、戦場に置ける）
-    const counted = countKinds(pvpLocal.placements);
-    const kept = ok && base.reserve && !broken(base.reserve) ? base.reserve : null;
-    if (kept) counted[kept.kind] = (counted[kept.kind] ?? 0) + 1;
-    pvpLocal.roster = pvpLocal.placements.length > 0 ? { ...counted, hq: 1 } : { ...room.rules.standardRoster };
-    // サーバーにない配置を出したときだけ、送る印を立てる
-    if (!fromServer && pvpLocal.placements.length > 0) pvp.markDraft();
-  }
-
-  private costs(): Record<Kind, number> {
-    return client.room?.rules.costs ?? (pvpArmyLimits().costs as Record<Kind, number>);
-  }
-
-  private budgetLeft(): number {
-    const budget = client.room?.rules.budget ?? pvpArmyLimits().budget ?? 0;
-    const costs = this.costs();
-    let used = 0;
-    for (const [k, n] of Object.entries(pvpLocal.roster)) used += (costs[k as Kind] ?? 0) * (n ?? 0);
-    return budget - used;
-  }
-
-  private canAdd(kind: Kind): boolean {
-    const room = client.room;
-    if (!room || kind === 'hq' || this.locked()) return false;
-    const others = Object.entries(pvpLocal.roster).reduce((n, [k, v]) => (k === 'hq' ? n : n + (v ?? 0)), 0);
-    return others < room.rules.maxUnits && this.budgetLeft() >= (this.costs()[kind] ?? Infinity);
-  }
-
-  /** 兵種の数を足し引きする。減らして置いた数を下回ったら、最後に置いたその兵種の部隊を外す */
-  private changeCount(kind: Kind, delta: 1 | -1): void {
-    if (this.locked()) return;
-    const have = pvpLocal.roster[kind] ?? 0;
-    if (delta > 0 && !this.canAdd(kind)) return;
-    if (delta < 0 && have <= 0) return;
-    pvpLocal.roster = { ...pvpLocal.roster, [kind]: have + delta };
-    if (delta < 0) {
-      // 置いた数 + 遊軍が減らした数を超えたら、最後に置いたその兵種を外す（戦場になければ遊軍の枠を空にする）
-      const next = shrinkKind(this.list, this.reserve, kind, have + delta);
-      if (next.list.length !== this.list.length || next.reserve !== this.reserve) this.setDeploy(next.list, next.reserve);
-      playRemove();
-    } else {
-      playPlace();
-    }
-    this.closePopup();
-    this.refresh();
+    // 本陣は最初から置いてある（本陣のない配置には足す。design §15.6）
+    pvpLocal.placements = ensureHq(ok ? base.army : [], pvpLocal.reserve, this.field, this.ownZone, this.limits().maxUnits + 1);
+    // サーバーにない配置を出したときだけ、送る印を立てる（本陣だけの盤では送らない）
+    if (!fromServer && (hasNonHq(pvpLocal.placements) || pvpLocal.reserve !== null)) pvp.markDraft();
   }
 
   /** 「完了」で確定し、確定中にもう一度押すと取り消す。届くまでの送り直しは pvp.ts が受け持つ */
@@ -815,9 +884,9 @@ export class DeployScene extends Phaser.Scene {
 
   // ---- 配置の操作 ----
 
-  /** まだ置いていない数（戦場と遊軍の枠の両方を引く） */
+  /** 1人用の、まだ置いていない数（戦場と遊軍の枠の両方を引く）。対戦では数を持たない */
   private remaining(kind: Kind): number {
-    return remainingOf(this.roster(), this.list, this.reserve, kind);
+    return this.pvpMode ? 0 : remainingOf(this.stage.roster, this.list, this.reserve, kind);
   }
 
   private indexAt(cell: Cell): number {
@@ -844,38 +913,47 @@ export class DeployScene extends Phaser.Scene {
     this.refresh();
   }
 
+  /**
+   * ひな形：いま盤に置いている部隊（本陣を含む）を、その形に並べ替える。兵種と数は変えず、遊軍の枠も空に戻さない。
+   * 盤に本陣しかないときは、対戦は標準の編成、一人用は手持ちの全部（遊軍の枠の 1 つを除く）を並べる（design §15.6）
+   */
   private useTemplate(id: TemplateId): void {
     if (!this.templatesShown() || this.locked()) return;
     this.closePopup();
     this.selectedKind = null;
-    // ひな形は手持ちの全部隊を並べるので、遊軍の枠は空に戻す（design §7.6）
-    const t = templateWithReserve(id, this.roster(), this.ownZone);
-    // ひな形の方針のうち、選べないものは兵種の初期設定に直す（対戦ではすべて選べる）
-    this.setDeploy(this.pvpMode ? t.placements : fitStances(this.stage, t.placements), t.reserve);
+    const reserve = this.reserve;
+    const fallback = this.pvpMode ? (client.room?.rules.standardRoster ?? PVP_RULES.standardRoster) : rosterWithoutReserve(this.stage.roster, reserve);
+    let placements = templatePlacements(id, templateRoster(this.list, fallback), this.ownZone);
+    let trimmed = false;
+    if (this.pvpMode) {
+      // 標準の編成と遊軍を合わせて予算か部隊数を超えるなら、並べた部隊を後ろから外して収める
+      const t = trimToLimits(placements, reserve, this.limits());
+      placements = t.list;
+      trimmed = t.trimmed;
+    } else {
+      // ひな形の方針のうち、選べないものは兵種の初期設定に直す（対戦ではすべて選べる）
+      placements = fitStances(this.stage, placements);
+    }
+    this.setDeploy(placements, reserve);
     playPlace();
     this.refresh();
+    if (trimmed) this.showToast('予算に合わせて部隊を外しました');
   }
 
+  /** 離した先の結果を当てる（変えたら音を鳴らし、表示を直す）。変えたら true */
+  private applyDrop(r: DropResult): boolean {
+    if (r.type !== 'apply') return false;
+    this.setDeploy(r.list, r.reserve);
+    if (r.sound === 'remove') playRemove();
+    else playPlace();
+    this.closePopup();
+    this.refresh();
+    return true;
+  }
+
+  /** 空いたマスに、選んでいる兵種を置く（チュートリアル。手順の検査は済んでいる） */
   private place(kind: Kind, cell: Cell): void {
     this.setList([...this.list, { kind, col: cell.col, row: cell.row, stance: defaultStance(kind) }]);
-    playPlace();
-  }
-
-  /** index の部隊を cell へ。そこに別の部隊がいれば入れ替える */
-  private moveTo(index: number, cell: Cell): void {
-    const list = this.list.map((p) => ({ ...p }));
-    const me = list[index];
-    if (!me) return;
-    const other = this.indexAt(cell);
-    if (other === index) return;
-    const target = other >= 0 ? list[other] : undefined;
-    if (target) {
-      target.col = me.col;
-      target.row = me.row;
-    }
-    me.col = cell.col;
-    me.row = cell.row;
-    this.setList(list);
     playPlace();
   }
 
@@ -953,71 +1031,30 @@ export class DeployScene extends Phaser.Scene {
   }
 
   /**
-   * 呼び出した陣形を置く。保存した順に置いていき、手持ちを超える兵種・配置エリアの外・置けないマス（城壁）・
-   * 重なるマスの部隊は飛ばす。選べない方針は兵種の初期設定に直す。手持ちが余っても足さない（手で置く）。
-   * 対戦では、陣形の編成をそのまま編成にし、予算を超える場合は後ろの部隊から外して収める。
+   * 呼び出した陣形を置く（design §15.6）。保存した順に置いていき、配置エリアの外・置けないマス（城壁）・重なるマスの部隊は飛ばす。
+   * 選べない方針は兵種の初期設定に直す。本陣がなければ、いまの本陣を補う。
+   * 対戦は予算と部隊数を超えるあいだ、遊軍 → 後ろの部隊の順に外す。一人用は手持ちを超える部隊を除く（手持ちが余っても足さない）
    */
   private recallFormation(f: SavedFormation): void {
     if (this.locked()) return;
-    const z = this.ownZone;
-    let units = f.units.map((u) => ({ ...u }));
-    let trimmed = false;
-    // 陣形に遊軍があれば、枠に入れる（使えない部屋・本陣は入れない）
-    let wantReserve: ReserveSetup | null = f.reserve && f.reserve.kind !== 'hq' && this.reserveShown() ? { ...f.reserve } : null;
-    let skipped = 0;
-    if (f.reserve && !wantReserve) skipped++;
-    if (this.pvpMode) {
-      const costs = this.costs();
-      const budget = client.room?.rules.budget ?? pvpArmyLimits().budget ?? 0;
-      const maxUnits = client.room?.rules.maxUnits ?? MAX_UNITS - 1;
-      // 本陣は1つだけ。2つ目からは外す
-      let hq = 0;
-      units = units.filter((u) => (u.kind === 'hq' ? ++hq === 1 : true));
-      // 遊軍も予算と部隊数に数える（いちばん後ろの部隊として、先に外す）
-      const cost = (list: typeof units): number =>
-        list.reduce((n, u) => n + (u.kind === 'hq' ? 0 : (costs[u.kind] ?? 0)), 0) + (wantReserve ? (costs[wantReserve.kind] ?? 0) : 0);
-      const count = (list: typeof units): number => list.filter((u) => u.kind !== 'hq').length + (wantReserve ? 1 : 0);
-      while (units.length > 0 && (cost(units) > budget || count(units) > maxUnits)) {
-        trimmed = true;
-        if (wantReserve) {
-          wantReserve = null;
-          continue;
-        }
-        // 後ろの部隊（本陣以外）から外す
-        const i = units.map((u) => u.kind !== 'hq').lastIndexOf(true);
-        if (i < 0) break;
-        units.splice(i, 1);
-      }
-      const roster = countKinds(units);
-      if (wantReserve) roster[wantReserve.kind] = (roster[wantReserve.kind] ?? 0) + 1;
-      pvpLocal.roster = { ...roster, hq: 1 };
-    }
-    const roster = this.roster();
-    const used: Roster = {};
-    const placed: Placement[] = [];
-    const taken = new Set<string>();
-    for (const u of units) {
-      const col = z.col + u.col;
-      const row = z.row + u.row;
-      const inside = u.col >= 0 && u.row >= 0 && u.col < z.width && u.row < z.height;
-      const terrain = inside ? this.field.terrain[row * this.field.width + col] : undefined;
-      const key = `${col},${row}`;
-      if (!inside || terrain === 'wall' || taken.has(key) || (used[u.kind] ?? 0) >= (roster[u.kind] ?? 0)) {
-        skipped++;
-        continue;
-      }
-      taken.add(key);
-      used[u.kind] = (used[u.kind] ?? 0) + 1;
-      placed.push({ kind: u.kind, col, row, stance: this.stanceOkFor(u.kind, u.stance) ? u.stance : defaultStance(u.kind) });
-    }
-    // 遊軍は、戦場に置いたあと手持ちが残っていれば枠に入れる（足りなければ入れない）
-    const reserve = recallReserve(wantReserve, roster, placed, (k, s) => this.stanceOkFor(k, s));
-    if (wantReserve && !reserve) skipped++;
-    this.setDeploy(placed, reserve);
+    const plan = recallPlan({
+      units: f.units,
+      reserve: f.reserve,
+      field: this.field,
+      zone: this.ownZone,
+      reserveShown: this.reserveShown(),
+      stanceOk: (k, st) => this.stanceOkFor(k, st),
+      currentHq: this.list.find((p) => p.kind === 'hq') ?? null,
+      ...(this.pvpMode ? { pvp: this.limits() } : { roster: this.stage.roster }),
+      check: (list, reserve) => this.errorsWith(list, reserve),
+    });
+    // 結果の組が検査を通らなければ（起きないはず）、配置を変えない
+    if (!plan.ok) return;
+    this.setDeploy(plan.list, plan.reserve);
     playPlace();
     this.refresh();
-    if (skipped > 0) this.showToast('置けない部隊を除きました');
-    else if (trimmed) this.showToast('予算に合わせて部隊を外しました');
+    if (plan.skipped) this.showToast('置けない部隊を除きました');
+    else if (plan.trimmed) this.showToast('予算に合わせて部隊を外しました');
   }
 
   /** 1行の知らせを、戦場の上の端に少しのあいだ出す（地形の説明と同じ場所） */
@@ -1066,10 +1103,13 @@ export class DeployScene extends Phaser.Scene {
     }
     const index = this.indexAt(cell);
     if (index >= 0) {
-      // 部隊のいるマスでは、部隊の操作（方針の切り替え）を優先する
-      this.press = { pointerId: pointer.id, index, startX: pointer.x, startY: pointer.y, dragging: false };
-    } else if (!hadPopup && this.selectedKind && this.remaining(this.selectedKind) > 0) {
-      this.place(this.selectedKind, cell);
+      // 部隊のいるマスでは、部隊の操作（方針の切り替え・引っぱる）を優先する
+      this.beginPress(pointer, { type: 'unit', index });
+    } else if (!hadPopup && this.selectedKind && this.cardUsable(this.selectedKind)) {
+      // 押して選ぶ置き方：カードを選んでいる間に空いたマスを押すと置く（カードをそのマスへ離したのと同じ検査を通す）
+      const r = dropResult({ type: 'card', kind: this.selectedKind }, { type: 'cell', col: cell.col, row: cell.row }, this.dropContext());
+      if (this.applyDrop(r)) return;
+      this.showTerrain(pointer.id, cell);
     } else {
       this.showTerrain(pointer.id, cell);
     }
@@ -1139,22 +1179,153 @@ export class DeployScene extends Phaser.Scene {
     this.terrainText.setVisible(false);
   }
 
+  // ---- 引っぱる操作（design §15.4） ----
+
+  /** 押し始めを覚える */
+  private beginPress(pointer: Phaser.Input.Pointer, src: DragSource): void {
+    const unit = src.type === 'unit' ? this.list[src.index] : undefined;
+    this.press = { pointerId: pointer.id, src, startX: pointer.x, startY: pointer.y, x: pointer.x, y: pointer.y, moved: false, dragging: false, unit: unit ? { ...unit } : null };
+  }
+
+  /** 押し始めを受け付けるか（暗いカード・「完了」のあと・ダイアログの間・別の指を覚えている間は受け付けない） */
+  private canPress(): boolean {
+    return !this.press && !this.locked() && !this.dialog;
+  }
+
+  /** カードの押し始め */
+  private downCard(kind: Kind, pointer: Phaser.Input.Pointer): void {
+    if (!this.canPress()) return;
+    const card = this.cards.get(kind);
+    if (!card?.isEnabled) return;
+    this.hideKind();
+    this.beginPress(pointer, { type: 'card', kind });
+  }
+
+  /** 遊軍の枠の押し始め（動かさずに離したら、いまの pressReserve） */
+  private downReserve(pointer: Phaser.Input.Pointer): void {
+    if (!this.canPress() || !this.reserveButton?.isEnabled) return;
+    this.hideKind();
+    this.beginPress(pointer, { type: 'reserve' });
+  }
+
+  /** 引っぱり始められる元か（チュートリアルは歩兵のカードだけ。枠は部隊がいるときだけ） */
+  private canDrag(src: DragSource): boolean {
+    if (this.tut) return src.type === 'card';
+    if (src.type === 'reserve') return this.reserve !== null;
+    return true;
+  }
+
   private onMove(pointer: Phaser.Input.Pointer): void {
     const press = this.press;
     if (!press || pointer.id !== press.pointerId) return;
-    // チュートリアルでは、置いた部隊を動かせない
-    if (this.tut) return;
-    if (!press.dragging && Math.hypot(pointer.x - press.startX, pointer.y - press.startY) < DRAG_THRESHOLD) return;
+    press.x = pointer.x;
+    press.y = pointer.y;
+    // 動いた量は、引っぱれない元でも数える（大きく動かしてから離したのを「押した」にしないため）
+    press.moved = isDrag(press.moved, press.startX, press.startY, pointer.x, pointer.y);
+    if (!press.moved || !this.canDrag(press.src)) return;
+    if (!press.dragging) this.startDrag(press);
+    this.showDrag();
+  }
+
+  /** 引っぱり始めた：方針の箱を閉じ、絵をいちばん手前の層へ、「ここで外す」を出す */
+  private startDrag(press: Press): void {
     press.dragging = true;
-    const p = this.list[press.index];
-    const sprite = this.ownSprites[press.index];
-    if (!p || !sprite) return;
-    // 引っぱっている部隊は、いちばん手前の層へ（歩かせない。指の画面の位置に描く）
-    sprite.moveTo(this.dragLayer);
-    sprite.apply({ wx: p.col + 0.5, wy: p.row + 0.5, fx: 0, fy: -1, menRatio: 1, rout: 0, highlight: true, stance: this.stancesShown() ? p.stance : null, dragAt: { x: pointer.x, y: pointer.y }, time: this.time.now });
-    const cell = this.fv.cellAt(pointer.x, pointer.y);
+    this.hideTerrain();
+    if (this.popupIndex !== null || this.popupReserve) {
+      this.closePopup();
+      this.refresh(false);
+    }
+    const src = press.src;
+    if (src.type === 'card' || src.type === 'reserve') {
+      const kind = src.type === 'card' ? src.kind : this.reserve?.kind;
+      if (kind) this.ghost = new SquadSprite(this, 0, kind, 999, this.dragLayer, this.markLayer, this.fv, 'deploy');
+    }
+    // 盤の部隊（本陣を除く）か遊軍の枠の部隊を引っぱっている間は、手札の場所に「ここで外す」を出す
+    const removable = (src.type === 'unit' && press.unit?.kind !== 'hq') || src.type === 'reserve';
+    this.setRemoveShown(removable);
+  }
+
+  private setRemoveShown(v: boolean): void {
+    for (const c of this.cards.values()) c.setVisible(!v);
+    this.removeBox.setVisible(v);
+    this.removeText.setVisible(v);
+    if (v) this.drawRemove(false);
+  }
+
+  private drawRemove(hot: boolean): void {
+    this.removeBox.clear();
+    drawFrame(this.removeBox, this.panel.hand, hot ? 'solid' : 'line');
+    this.removeText.setColor(css(hot ? COLOR.ink : COLOR.cream));
+    this.children.bringToTop(this.removeBox);
+    this.children.bringToTop(this.removeText);
+  }
+
+  /** 見えている矩形（広げる前）の上か */
+  private static within(r: Rect, x: number, y: number): boolean {
+    return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+  }
+
+  /**
+   * 離す先。手札の欄と遊軍の枠は、指の場所そのもので決め、盤より先に取る。
+   * 盤のマスは、絵の足もと（指の 24px 上）で、地面から求める（兵の絵には吸わせない）
+   */
+  private dropTarget(x: number, y: number): DropTarget {
+    if (DeployScene.within(this.panel.hand, x, y)) return { type: 'hand' };
+    const slot = this.reserveButton?.rect;
+    if (slot && DeployScene.within(slot, x, y)) return { type: 'reserve' };
+    const cell = this.fv.cellAt(x, y - DRAG_LIFT);
+    return cell ? { type: 'cell', col: cell.col, row: cell.row } : { type: 'none' };
+  }
+
+  /** 引っぱっている間の絵と、離す先の印（金・赤）を、いまの指の場所に合わせる */
+  private showDrag(): void {
+    const press = this.press;
+    if (!press?.dragging) return;
+    const at = { x: press.x, y: press.y - DRAG_LIFT };
+    const look = { fx: 0, fy: -1, menRatio: 1, rout: 0, highlight: true, dragAt: at, time: this.time.now };
+    if (press.src.type === 'unit') {
+      const p = this.list[press.src.index];
+      const sprite = this.ownSprites[press.src.index];
+      if (p && sprite) {
+        // 引っぱっている部隊は、いちばん手前の層へ（歩かせない。指の画面の位置に描く）
+        sprite.moveTo(this.dragLayer);
+        sprite.apply({ ...look, wx: p.col + 0.5, wy: p.row + 0.5, stance: this.stancesShown() ? p.stance : null });
+      }
+    } else if (this.ghost) {
+      const r = this.reserve;
+      const stance = press.src.type === 'reserve' && r && this.stancesShown() ? r.stance : null;
+      this.ghost.apply({ ...look, wx: 0.5, wy: 0.5, stance });
+    }
+    const target = this.dropTarget(press.x, press.y);
+    const result = dropResult(press.src, target, this.dropContext());
     this.dropMark.clear();
-    if (cell && this.inOwnZone(cell)) strokeCell(this.dropMark, this.fv, cell.col, cell.row, COLOR.highlight);
+    if (target.type === 'cell') strokeCell(this.dropMark, this.fv, target.col, target.row, result.type === 'none' ? COLOR.red : COLOR.gold);
+    this.children.bringToTop(this.dropMark);
+    if (this.removeBox.visible) this.drawRemove(target.type === 'hand' && result.type === 'apply');
+    this.reserveButton?.setHot(target.type === 'reserve' && result.type === 'apply');
+    // 引っぱっている絵は、操作の欄（「ここで外す」・遊軍の枠）の上でも見えるよう、いちばん手前に出す
+    this.children.bringToTop(this.dragLayer);
+  }
+
+  /** 引っぱっている表示を片付ける（元の絵は、次の refresh で元のマスへ戻る） */
+  private clearDrag(): void {
+    this.ghost?.destroy();
+    this.ghost = null;
+    this.dropMark.clear();
+    this.setRemoveShown(false);
+    this.reserveButton?.setHot(false);
+  }
+
+  /**
+   * 何も変えずに取り消す（タッチの取り消し・画面が隠れた・フォーカスを失った・確定になった・配置が変わって部隊がなくなった）。
+   * 引っぱっている絵を片付け、元の絵を元のマスへ戻し、押し始めを空にする
+   */
+  private cancelPress(): void {
+    if (!this.press) return;
+    const dragging = this.press.dragging;
+    this.press = null;
+    this.clearDrag();
+    if (dragging) this.refresh(false);
   }
 
   private onUp(pointer: Phaser.Input.Pointer): void {
@@ -1166,25 +1337,52 @@ export class DeployScene extends Phaser.Scene {
     }
     const press = this.press;
     if (!press || pointer.id !== press.pointerId) return;
-    this.press = null;
-    this.dropMark.clear();
-    // タッチのキャンセル（と、引きずる間に確定された場合）は、表示を戻すだけにして、移動も方針の切り替えも確定しない
-    if (pointer.wasCanceled || this.locked()) {
-      this.refresh();
+    // タッチの取り消し（と、引っぱる間に確定された場合）は、表示を戻すだけにして、何も確定しない
+    if (pointer.wasCanceled || this.locked() || this.dialog) {
+      this.cancelPress();
       return;
     }
-    if (this.tut) {
-      this.tutorialUnit(press.index);
+    press.x = pointer.x;
+    press.y = pointer.y;
+    // 動かす出来事が来ないまま、離す出来事にだけ動きが出ることがあるので、離した座標でも見分ける
+    press.moved = isDrag(press.moved, press.startX, press.startY, pointer.x, pointer.y);
+    const action = releaseAction(press.moved, this.canDrag(press.src));
+    if (action === 'none') {
+      // 引っぱれない元（空の遊軍の枠、チュートリアルの盤の部隊）を大きく動かした：何も起きない
+      this.cancelPress();
       return;
     }
+    if (action === 'drop' && !press.dragging) this.startDrag(press);
     if (press.dragging) {
-      const cell = this.fv.cellAt(pointer.x, pointer.y);
-      // エリアの外に落としたら元のマスに戻す
-      if (cell && this.inOwnZone(cell)) this.moveTo(press.index, cell);
-      this.refresh();
+      const target = this.dropTarget(pointer.x, pointer.y);
+      const result = dropResult(press.src, target, this.dropContext());
+      this.press = null;
+      this.clearDrag();
+      if (result.type === 'apply' && this.tut && press.src.type === 'card' && target.type === 'cell') {
+        // チュートリアル：カードからの「離す」を、いまの操作 2 つ（兵種を選ぶ → マスを押す）に直して渡す
+        tutorialAct({ type: 'pickKind', kind: press.src.kind });
+        this.selectedKind = press.src.kind;
+        this.tutorialCell(target);
+        return;
+      }
+      if (!this.applyDrop(result)) this.refresh(false);
       return;
     }
-    this.openPopup(press.index);
+    this.press = null;
+    // 動かさずに離した：押したとみなす
+    const src = press.src;
+    if (src.type === 'card') this.selectKind(src.kind);
+    else if (src.type === 'reserve') this.pressReserve();
+    else if (this.tut) this.tutorialUnit(src.index);
+    else this.openPopup(src.index);
+  }
+
+  /** 開発用の口：手札・遊軍の枠・手札の欄の矩形と、内部の大きさ（画面の点に直して、指の操作を送るため） */
+  private debugRects(): { cards: Record<string, Rect>; reserve: Rect | null; hand: Rect; start: Rect | null; templates: Rect[]; width: number; height: number } {
+    const cards: Record<string, Rect> = {};
+    for (const [k, c] of this.cards) cards[k] = { ...c.rect };
+    const l = getLayout();
+    return { cards, reserve: this.reserveButton ? { ...this.reserveButton.rect } : null, hand: { ...this.panel.hand }, start: this.startButton ? { ...this.startButton.rect } : null, templates: this.panel.templates.map((r) => ({ ...r })), width: l.width, height: l.height };
   }
 
   // ---- 方針の切り替えと「外す」 ----
@@ -1198,7 +1396,10 @@ export class DeployScene extends Phaser.Scene {
     // 方針の切り替えを出さない面では「外す」だけを出す
     const stances = this.stancesShown() ? STANCES.filter((s) => this.stanceOkFor(p.kind, s)) : [];
     const items: { label: string; stance: Stance | null }[] = stances.map((s) => ({ label: STANCE_LABEL[s], stance: s }));
-    items.push({ label: '外す', stance: null });
+    // 本陣は外せない（本陣の箱には「外す」を出さない。design §15.6）
+    if (p.kind !== 'hq') items.push({ label: '外す', stance: null });
+    // 方針の切り替えを出さない面の本陣は、箱に出すものがない
+    if (items.length === 0) return;
     // 「本陣狙い」が枠に触れないだけの大きさ
     const w = 88;
     const h = 28;
@@ -1257,12 +1458,10 @@ export class DeployScene extends Phaser.Scene {
       }
       return;
     }
+    // 空の枠を、何も選ばずに押したときは、何も起きない。選んでいれば、カードを枠へ離したのと同じ検査を通して入れる
     const kind = this.selectedKind;
-    if (!canPutReserve(kind, this.roster(), this.list, r)) return;
-    this.closePopup();
-    this.setDeploy(this.list, newReserve(kind));
-    playPlace();
-    this.refresh();
+    if (!kind) return;
+    this.applyDrop(dropResult({ type: 'card', kind }, { type: 'reserve' }, this.dropContext()));
   }
 
   /** 枠の部隊の箱。選べる方針と「外す」を、枠の上に縦に並べる（上に入らなければ下に出す） */
@@ -1331,27 +1530,33 @@ export class DeployScene extends Phaser.Scene {
     this.refresh();
   }
 
-  /** 枠を出す・消す（対戦では、遊軍を使えるかが途中で変わる）と、中身の表示 */
+  /**
+   * 枠を出す・消す（対戦では、遊軍を使えるかが途中で変わる）と、中身の表示。縦長では「開戦」「完了」の幅も、枠の有無で変わる。
+   * 枠は、使える場面で「完了」を押していなければ、空でも明るい（盤の部隊を入れる受け皿になるため。design §15.4）
+   */
   private syncReserveSlot(locked: boolean): void {
     const shown = this.reserveShown();
+    this.syncStartButton(shown);
     if (!shown) {
       this.reserveButton?.destroy();
       this.reserveButton = null;
       this.reserveIcon?.destroy();
       this.reserveIcon = null;
       if (this.popupReserve) this.closePopup();
+      if (this.press?.src.type === 'reserve') this.cancelPress();
       return;
     }
     if (!this.reserveButton) {
-      this.reserveButton = new Button(this, deployReserveSlot(getLayout(), this.pvpMode), RESERVE_LABEL, () => this.pressReserve());
+      // ふつうの Button にしない（離したときに押したと決めると、枠からの引っぱりが始まらないため）
+      this.reserveButton = new Card(this, this.panel.reserve, RESERVE_LABEL, '', (pointer) => this.downReserve(pointer));
       this.reserveIcon = this.add.graphics();
       // 開いている箱があれば、その下にならないようにする
       this.children.bringToTop(this.popupLayer);
     }
     const r = this.reserve;
     const b = this.reserveButton;
-    b.setText(r ? `${RESERVE_LABEL} ${KIND_LABEL[r.kind]}` : RESERVE_LABEL)
-      .setEnabled(!locked && (r !== null || canPutReserve(this.selectedKind, this.roster(), this.list, r)))
+    b.setLines(r ? `${RESERVE_LABEL} ${KIND_LABEL[r.kind]}` : RESERVE_LABEL, '')
+      .setEnabled(!locked)
       .setSelected(this.popupReserve);
     // 方針の印（戦場の自軍と同じ札）を枠の右の内側に。方針を選べない面と、文字に触れるほど狭い枠（縦長）では出さない
     const g = this.reserveIcon;
@@ -1386,7 +1591,9 @@ export class DeployScene extends Phaser.Scene {
     this.list.forEach((p: Placement, i) => {
       const s = this.ownSprites[i];
       if (!s) return;
-      const highlight = i === this.popupIndex || (this.press?.index === i && this.press.dragging);
+      // 引っぱっている部隊は showDrag が描く
+      if (this.draggingIndex() === i) return;
+      const highlight = i === this.popupIndex;
       // 自軍には方針の印を付ける（押さなくても方針が分かるように。敵と、方針を選べない面には付けない）
       const stance = this.stancesShown() ? p.stance : null;
       s.apply({ wx: p.col + 0.5, wy: p.row + 0.5, fx: 0, fy: -1, menRatio: 1, rout: 0, highlight, stance, bounds, time: this.time.now });
@@ -1408,8 +1615,22 @@ export class DeployScene extends Phaser.Scene {
     if (!this.fv) return;
     this.forest?.update();
     this.applyEnemies();
-    // 引っぱっている間は描き直さない（離したときの refresh で描く）
-    if (!this.press?.dragging) this.applyOwn();
+    this.applyOwn();
+    this.ghost?.destroy();
+    this.ghost = null;
+    // 引っぱっている部隊の絵も、届いた絵で描き直す（カード・枠からの絵は作り直す）
+    const press = this.press;
+    if (press?.dragging && press.src.type !== 'unit') {
+      const kind = press.src.type === 'card' ? press.src.kind : this.reserve?.kind;
+      if (kind) this.ghost = new SquadSprite(this, 0, kind, 999, this.dragLayer, this.markLayer, this.fv, 'deploy');
+    }
+    this.showDrag();
+  }
+
+  /** 引っぱっている盤の部隊の番号（なければ -1） */
+  private draggingIndex(): number {
+    const p = this.press;
+    return p?.dragging && p.src.type === 'unit' ? p.src.index : -1;
   }
 
   /**
@@ -1427,34 +1648,49 @@ export class DeployScene extends Phaser.Scene {
   }
 
   private refresh(announce = true): void {
-    if (!this.fv || !this.startButton) return;
+    if (!this.fv) return;
     const locked = this.locked();
     if (locked) this.closePopup();
+    // 引っぱっている途中に、確定になった・配置が変わって覚えている部隊がなくなった・枠が空になったら、取り消す（design §15.4）
+    const press = this.press;
+    if (press) {
+      const p = press.src.type === 'unit' ? this.list[press.src.index] : undefined;
+      const u = press.unit;
+      const lost =
+        (press.src.type === 'unit' && (!p || !u || p.kind !== u.kind || p.col !== u.col || p.row !== u.row)) ||
+        (press.src.type === 'reserve' && press.dragging && !this.reserve) ||
+        (press.src.type === 'card' && !this.cardUsable(press.src.kind));
+      if (locked || lost) {
+        this.press = null;
+        this.clearDrag();
+      }
+    }
+    // 自軍の絵を作り直す（対戦では、部屋の知らせが来るたびに呼ばれる。引っぱっている表示は、終わりで当て直す）
     for (const s of this.ownSprites) s.destroy();
     this.ownSprites = this.list.map((p: Placement, i) => new SquadSprite(this, 0, p.kind, i, this.soldierLayer, this.markLayer, this.fv, 'deploy'));
     this.applyOwn();
-    if (this.selectedKind && (this.remaining(this.selectedKind) <= 0 || locked)) this.selectedKind = null;
-    const run = this.tut ? session.tutorial : null;
-    for (const [kind, b] of this.rosterButtons) {
-      const n = this.remaining(kind);
-      // チュートリアルでは、その手順で選べる兵種だけを押せる見た目にする
-      const ok = !run || allowed(run, { type: 'pickKind', kind });
-      b.setText(`${KIND_LABEL[kind]}${n}`).setEnabled(n > 0 && !locked && ok).setSelected(this.selectedKind === kind);
+    if (this.selectedKind && !this.cardUsable(this.selectedKind)) this.selectedKind = null;
+    const costs = this.limits().costs;
+    for (const [kind, c] of this.cards) {
+      // 対戦はコスト、一人用は残りの数（design §15.3）
+      const second = this.pvpMode ? `コスト${costs[kind] ?? 0}` : `残${this.remaining(kind)}`;
+      c.setLines(KIND_LABEL[kind], second).setEnabled(this.cardUsable(kind)).setSelected(this.selectedKind === kind);
     }
     for (const b of this.templateButtons) b.setEnabled(!locked);
     this.syncReserveSlot(locked);
     const errors = this.errors(this.list);
+    const start = this.startButton;
     if (this.pvpMode) {
-      for (const [kind, b] of this.minusButtons) b.setEnabled(!locked && (pvpLocal.roster[kind] ?? 0) > 0);
-      for (const [kind, b] of this.plusButtons) b.setEnabled(this.canAdd(kind));
-      this.budgetText?.setText(`残り ${this.budgetLeft()}`);
-      // 確定中は「取消」（押すと取り消す）。確定できるのは、検査を通る配置のときだけ
-      this.startButton.setText(locked ? '取消' : '完了').setEnabled(locked || errors.length === 0);
+      this.budgetText?.setText(pvpHeadText(this.list, this.reserve, this.limits()));
+      // 確定中は「取消」（押すと取り消す）。確定できるのは、検査を通る配置のときだけ（本陣だけでは押せない）
+      start?.setText(locked ? '取消' : '完了').setEnabled(locked || errors.length === 0);
     } else {
       // チュートリアルの「開戦」は、start の手順になるまで押せない見た目
-      this.startButton.setEnabled(errors.length === 0 && (!run || run.step === 'start'));
+      const run = this.tut ? session.tutorial : null;
+      start?.setEnabled(errors.length === 0 && (!run || run.step === 'start'));
     }
     this.updateFormation(announce);
+    this.showDrag();
   }
 
   override update(): void {
