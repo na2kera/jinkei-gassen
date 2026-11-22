@@ -1,10 +1,10 @@
 // ひな形（design §3.7）。手持ちと配置エリアから、配置と方針を返す。
 // 形は「自軍から見た」座標（cx: 自分から見て左が 0、cy: 敵に近い前の行が 0）で組み立て、最後に戦場の座標へ写す。
-// 組み立てた先が埋まっている・エリアの外のときは、いちばん近い空きマスへずらすので、6〜12 部隊のどの手持ちでも
+// 組み立てた先が埋まっている・エリアの外のときは、いちばん近い空きマスへずらすので、6〜11 部隊（MAX_UNITS）のどの手持ちでも
 // エリアに収まり、重ならず、全部隊を使い切る。乱数は使わないので、同じ入力からはいつも同じ配置になる。
 //
-// 通り道つきの盤の配置エリア 8×4 に合わせて、実験の枝（exp/grid-tuning）の5回目の実験で決めた最終の形を、
-// 実験用の切り替え（TEMPLATE_EXP・JINKEI_TPL）を外して、その既定値で写したもの（実験の記録 §21）。
+// 通り道つきの盤の配置エリア 8×4 に合わせて、実験の枝（exp/grid-tuning）の5回目・7回目の実験で決めた最終の形を、
+// 実験用の切り替え（TEMPLATE_EXP・JINKEI_TPL）を外して、その既定値で写したもの（実験の記録 §21・§35・§43）。
 // - 列は「中央から外への左右の組」（8列なら [3,4]・[2,5]・[1,6]・[0,7]）で選び、偶数の幅でも左へ寄らないようにする。
 // - 組の片方だけが余ったとき（奇数）は、本陣の隣（本陣と左右対称になるマス）へ回せる形では回す（mate）。
 // - 奥行きは 4 行を前提にした形だが、行がエリアの外に出るときは、いちばん近い空きマスへずらすだけで止まらない（幅 4〜7 でも同じ）。
@@ -119,10 +119,10 @@ function pairAt(w: number, p: number, y: number): Cell[] {
 }
 
 /**
- * 横陣で、騎兵のいない軍の前列を「幅 − この数」にする（幅 8 以上のとき）。4 なら 8 列で 4、2 なら 6。
- * 4（main と同じ）と 2 のどちらにするかは、実験の記録 §23・§25 の計測の結果を待っている。決まったらこの数だけを変える。
+ * 横陣で、騎兵のいない軍の前列を「幅 − この数」にする（幅 8 以上のとき）。2 なら 8 列で 6。
+ * 4（main と同じ）と 2 を比べ、2 に決めた（実験の記録 §23・§25・§35）。
  */
-export const LINE_FRONT_GAP_NO_CAVALRY = 4;
+export const LINE_FRONT_GAP_NO_CAVALRY = 2;
 /** 横陣の本陣の行（後ろから数えて何行目か。4 行のエリアなら 1 行目）。実験の記録 §23 で決めた（A14 のため） */
 export const LINE_HQ_FROM_BACK = 3;
 
@@ -385,9 +385,13 @@ const crescent: Layout = (c, w, h, mate) => {
 };
 
 /**
- * 雁行：右前から左後ろへの斜めの段々（1段は横2マス、段ごとに左へ2列・後ろへ1行）。前の段から歩兵・盾兵（前進）、弓兵（守備）。
+ * 雁行：右前から左後ろへの斜めの段々（1段は横2マス、段ごとに左へ2列・後ろへ1行）。前の段から歩兵、盾兵、弓兵の順に埋める。
+ * 方針は、0・1 行目（前に出た側）は前進、ECHELON_HOLD_ROW 行目から後ろ（下がった側）は兵種によらず守備。
+ * 標準の手持ちでは、前の2段に歩兵が入り、後ろの段の盾兵・弓兵が守備になる（実験の記録 §35。全部前進だと R11 で全勝した）。
  * 騎兵（迂回）は前に出た側（右）の端の列。入りきらない部隊は、段のすぐ後ろ。
  */
+/** 雁行で、この行（自軍から見て前が 0）から後ろの段を守備にする */
+const ECHELON_HOLD_ROW = 2;
 const echelon: Layout = (c, w, h) => {
   const wants: Want[] = [];
   const diag: Cell[] = [];
@@ -400,10 +404,9 @@ const echelon: Layout = (c, w, h) => {
   const second = diag.map((p) => ({ cx: p.cx, cy: p.cy + 1 })).filter((p) => p.cy < h);
   const cells = [...diag, ...second];
   const body = [...repeat('infantry', c.infantry), ...repeat('shield', c.shield), ...repeat('archer', c.archer)];
-  const st = (k: Kind): Stance => (k === 'archer' ? 'hold' : 'advance');
   body.forEach((k, i) => {
     const p = cells[i] ?? { cx: 0, cy: h - 1 };
-    wants.push({ kind: k, stance: st(k), cx: p.cx, cy: p.cy });
+    wants.push({ kind: k, stance: p.cy >= ECHELON_HOLD_ROW ? 'hold' : 'advance', cx: p.cx, cy: p.cy });
   });
   for (let k = 0; k < c.cavalry; k++) wants.push({ kind: 'cavalry', stance: 'flank', cx: w - 1, cy: k });
   return wants;
