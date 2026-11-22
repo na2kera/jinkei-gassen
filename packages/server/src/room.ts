@@ -119,6 +119,17 @@ function deployErrors(d: Deploy, zone: Zone): ArmyError[] {
 }
 
 /**
+ * 下書きの様子（design §15.5）。
+ *   ok：検査を通る。thin：誤りが「盤に本陣以外の部隊がない」（too_few_units）だけ（本陣だけ、本陣＋遊軍）。bad：それ以外の不正。
+ * 配置の画面では本陣が最初から置いてあるので、「置いた部隊を全部外して本陣だけにした」下書きがふつうに届く
+ */
+export function deployState(d: Deploy, zone: Zone): 'ok' | 'thin' | 'bad' {
+  const errors = deployErrors(d, zone);
+  if (errors.length === 0) return 'ok';
+  return errors.every((e) => e.code === 'too_few_units') ? 'thin' : 'bad';
+}
+
+/**
  * 見る人に渡す振り返り（design §7.7）。相手の呼ばなかった遊軍を消し、相手の星の割合を判定の割合と同じ値にする
  * （呼ばなかった遊軍がいたことを、戦いのあとも相手に知らせない）。保存してある振り返りは書き換えず、写しを作る。
  * 遊軍の前に保存した振り返り（項目がない）は、そのまま写す
@@ -702,12 +713,16 @@ export class Room extends DurableObject<Env> {
 
   /**
    * 「自分が下」の座標で届いた下書きの組を、戦場の座標にして持つ。組ごと検査を通れば lastValid にもする
-   * （配置だけ、遊軍だけを入れ替えることはしない）。遊軍の値は座標を持たないので返さない
+   * （配置だけ、遊軍だけを入れ替えることはしない）。遊軍の値は座標を持たないので返さない。
+   * 「足りないだけ」（本陣だけ・本陣＋遊軍）の下書きなら lastValid を空にする（外したはずの部隊を、時間切れや
+   * 読み込み直しで生き返らせない。design §15.5）。それ以外の不正な下書きでは、前に通った lastValid のまま
    */
   private takeDraft(seat: Seat, side: Side, d: Deploy, field: Field): void {
     const placed: Deploy = { army: placementsFor(side, d.army, field), reserve: d.reserve === null ? null : { kind: d.reserve.kind, stance: d.reserve.stance } };
     seat.draft = placed;
-    if (deployErrors(placed, field.zones[side]).length === 0) seat.lastValid = placed;
+    const state = deployState(placed, field.zones[side]);
+    if (state === 'ok') seat.lastValid = placed;
+    else if (state === 'thin') seat.lastValid = null;
   }
 
   // ---------- 切断 ----------
@@ -865,6 +880,7 @@ export class Room extends DurableObject<Env> {
     if (s === null || s.phase !== 'setup') return;
     const field = fieldOf(s.map);
     // 確定した人は確定した組、していない人は最後に検査を通った下書きの組、それもなければ既定の編成で遊軍なし（assumptions S8）。
+    // 最後の下書きが「足りないだけ」（本陣だけなど）の人は、takeDraft で lastValid を空にしてあるので、既定の編成になる（design §15.5）。
     // 配置と遊軍は組で選ぶ（design §7.7）。遊軍を使えない部屋では遊軍を外す（settle で外してあるはずだが、念のため）
     const allowed = reserveAllowed(s);
     const armies = SIDES.map((side) => s.seats[side]?.lastValid?.army ?? this.defaultArmy(side, field)) as [Placement[], Placement[]];
@@ -1204,6 +1220,8 @@ export class Room extends DurableObject<Env> {
   private roomMsg(s: RoomState, side: Side, now: number): RoomMessage {
     const field = fieldOf(s.map);
     const me = s.seats[side];
+    const thinDraft = me?.draft && deployState(me.draft, field.zones[side]) === 'thin' ? me.draft : null;
+    const mine = me?.lastValid ?? thinDraft;
     return {
       type: 'room',
       code: s.code,
@@ -1225,9 +1243,10 @@ export class Room extends DurableObject<Env> {
         reserve: reserveAllowed(s),
       },
       rematch: [s.rematch[0], s.rematch[1]],
-      // 配置と遊軍は、同じ組（最後に検査を通った組）から返す。相手の遊軍は入れない
-      myArmy: me?.lastValid ? placementsFor(side, me.lastValid.army, field) : null,
-      myReserve: me?.lastValid?.reserve ? { kind: me.lastValid.reserve.kind, stance: me.lastValid.reserve.stance } : null,
+      // 配置と遊軍は、同じ組（最後に検査を通った組）から返す。なければ、最後の下書きが「足りないだけ」（本陣だけ・本陣＋遊軍）なら
+      // その下書きを返す（外した部隊を戻さない。design §15.5）。相手の遊軍は入れない
+      myArmy: mine ? placementsFor(side, mine.army, field) : null,
+      myReserve: mine?.reserve ? { kind: mine.reserve.kind, stance: mine.reserve.stance } : null,
       opponentLeft: s.opponentLeft,
     };
   }
