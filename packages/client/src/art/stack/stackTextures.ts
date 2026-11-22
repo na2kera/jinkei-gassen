@@ -96,6 +96,9 @@ class StackTextures {
     dropped: 0,
     mainSteps: 0,
     mainStepMsMax: 0,
+    /** 揃いを捨てた回数・取り込んだ回数（鍵ごと。同じ鍵を二度取り込んでいないか確かめるため） */
+    releases: {} as Record<string, number>,
+    imports: {} as Record<string, number>,
   };
 
   /** 起動で呼ぶ。頼むだけで、待たない */
@@ -131,6 +134,7 @@ class StackTextures {
   release(set: SetId): void {
     this.released.add(set);
     this.book.release(set);
+    this.stats.releases[set] = (this.stats.releases[set] ?? 0) + 1;
     this.wanted = this.wanted.filter((s) => s.set !== set);
     this.inbox = this.inbox.filter((x) => x.sheet.set !== set);
     const gone = new Set<string>();
@@ -235,6 +239,8 @@ class StackTextures {
       setReadyAt: Object.fromEntries(SET_IDS.map((set) => [set, this.isReady(set) ? round1(Math.max(...setSheets(set).map((s) => this.ready.get(s.key)!.readyAt))) : null])),
       fallbackDraws: this.stats.fallbackDraws,
       dropped: this.stats.dropped,
+      releases: this.stats.releases,
+      imports: this.stats.imports,
       loadedMb: round1(all.reduce((a, s) => a + s.bytes * s.places, 0) / 1e6),
       sheets: all.map((s) => ({ key: s.key, w: s.w, h: s.h, frames: s.frames.size, bakeMs: round1(s.bakeMs), importMs: round1(s.importMs), readyAt: round1(s.readyAt), by: s.by, places: s.places })),
     };
@@ -395,6 +401,7 @@ class StackTextures {
       return;
     }
     for (const f of s.frames) tex.add(f.name, 0, f.x, f.y, s.g.fw, s.g.fh);
+    this.stats.imports[s.key] = (this.stats.imports[s.key] ?? 0) + 1;
     const importMs = performance.now() - t0;
     this.stats.importMsMax = Math.max(this.stats.importMsMax, importMs);
     this.stats.importMsTotal += importMs;

@@ -408,7 +408,7 @@ export function installDebug(game: Phaser.Game): void {
      * 確かめ用：対戦の地図（または渡した戦場）で、両軍の部隊を並べた仮の面を作って配置の画面を開く（立体の画面の画像を撮るため）。
      * 部隊は、配置エリアの前の 2 行に 5 種を順に並べる（手持ちは、その数をそのまま持たせる）
      */
-    previewDeploy(opts: { map?: PvpMapId; field?: Field; gate?: { col: number; row: number }; fog?: { col: number; row: number }[]; per?: number } = {}): boolean {
+    previewDeploy(opts: { map?: PvpMapId; field?: Field; gate?: { col: number; row: number }; fog?: { col: number; row: number }[]; per?: number; own?: Placement[]; enemy?: Placement[] } = {}): boolean {
       const base = STAGES[0];
       if (!base) return false;
       const field = opts.field ?? (opts.map ? pvpField(opts.map) : plainField());
@@ -426,10 +426,10 @@ export function installDebug(game: Phaser.Game): void {
           }
         return out;
       };
-      const own = army(0);
+      const own = opts.own ?? army(0);
       const roster: Partial<Record<Kind, number>> = {};
       for (const p of own) roster[p.kind] = (roster[p.kind] ?? 0) + 1;
-      api.addStage({ ...base, id: 'preview', name: '確かめ', field, enemy: army(1), roster, solution: own, fog: opts.fog ?? [], ...(opts.gate ? { gate: opts.gate } : {}) } as Stage);
+      api.addStage({ ...base, id: 'preview', name: '確かめ', field, enemy: opts.enemy ?? army(1), roster, solution: own, fog: opts.fog ?? [], ...(opts.gate ? { gate: opts.gate } : {}) } as Stage);
       session.placements = own.map((p) => ({ ...p }));
       return api.openStage('preview') && true;
     },
