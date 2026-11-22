@@ -12,7 +12,8 @@ import { SIDE_ART_W, sideArtColors, sideArtRows, TALL_ART_W } from '../src/art/t
 import { centeredFieldView, type FieldView, type PickTarget, type Point } from '../src/battle/FieldView.ts';
 import { followInspect } from '../src/battle/inspect.ts';
 import { nextView, parseView, VIEW_CYCLE, type ViewMode } from '../src/battle/viewMode.ts';
-import { CELL, FIELD_COLS, FIELD_ROWS, type Rect } from '../src/layout.ts';
+import { CELL, computeLayout, FIELD_COLS, FIELD_ROWS, LANDSCAPE_H, LANDSCAPE_W, type Rect } from '../src/layout.ts';
+import { FRAME_HALF, MARK_X, markLayout, markRects, POLE_X } from '../src/art/marks.ts';
 import { VIEW_LABEL } from '../src/ui/labels.ts';
 
 /** 標準の戦場の幅と高さ（10 × 12。design §13.2） */
@@ -682,4 +683,64 @@ test('視点ごとの盤の大きさが design §13.7 の表のとおりで、�
   }
   // 幅 5 の面は、盤の左端が描き場所の x 80（半マスずらして 2px 単位に揃える）
   assert.equal(centeredFieldView({ x: 0, y: 0, w: 320, h: 384 }, { width: 5, height: H }).rect.x, 80);
+});
+
+// ---- 印（旗・号令の印・方針の印・号令の相手の枠）の描く範囲（design §13.14。Codex のコードレビュー 3 回目の P2） ----
+
+test('印の描く先は、どの視点でも境界（uiBounds）からはみ出さない（左端 x=0.45・右端の境目・上下の端。縦長と横長）', () => {
+  const inside = (r: Rect, b: Rect): boolean => r.x >= b.x && r.y >= b.y && r.x + r.w <= b.x + b.w && r.y + r.h <= b.y + b.h;
+  // engine の移動の限界（端から 0.45 マス）と、そのあいだを細かく
+  const xs: number[] = [];
+  for (let x = 0.45; x <= W - 0.45 + 1e-9; x += 0.05) xs.push(Math.round(x * 100) / 100);
+  const ys = [0.45, 1, H / 2, H - 1, H - 0.45];
+  let n = 0;
+  for (const l of [computeLayout(390, 760), computeLayout(LANDSCAPE_W, LANDSCAPE_H)]) {
+    const area = l.field;
+    for (const mode of ['top', 'oblique', 'side'] as const) {
+      const fv = centeredFieldView(area, { width: W, height: H }, false, mode);
+      const b = fv.uiBounds(area);
+      for (const x of xs) {
+        for (const y of ys) {
+          const p = fv.toScreen(x, y);
+          const cx = Math.round(p.x);
+          const cy = Math.round(p.y);
+          for (const hq of [false, true]) {
+            for (const morale of [0, 100]) {
+              const r = markRects(markLayout({ cx, cy, hq, standing: fv.standing, morale, bounds: b }), cx, cy);
+              for (const [k, rect] of Object.entries(r)) {
+                assert.ok(inside(rect, b), `${l.mode} ${mode} (${x},${y}) hq=${hq} ${k} ${JSON.stringify(rect)} ⊄ ${JSON.stringify(b)}`);
+                n++;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.ok(n > 10000);
+});
+
+test('印は、はみ出さない位置では寄せない（いままでの置き場所のまま）。左端では号令の印が境界の左の端に寄る', () => {
+  const area = computeLayout(390, 760).field;
+  const fv = centeredFieldView(area, { width: W, height: H }, false, 'top');
+  const b = fv.uiBounds(area);
+  // まん中の部隊：号令の印 (−16, −16)、方針の印 (−16, 6)、枠 ±16、旗竿は右の 12
+  const c = fv.toScreen(W / 2, H / 2);
+  const mid = markLayout({ cx: Math.round(c.x), cy: Math.round(c.y), hq: false, standing: false, morale: 100, bounds: b });
+  assert.deepEqual(mid.order, { x: MARK_X, y: MARK_X });
+  assert.deepEqual(mid.stance, { x: MARK_X, y: 6 });
+  assert.deepEqual(mid.frame, { x: -FRAME_HALF, y: -FRAME_HALF, w: FRAME_HALF * 2, h: FRAME_HALF * 2 });
+  assert.equal(mid.mirror, false);
+  assert.equal(mid.poleX, POLE_X);
+  // 左端（x=0.45 → 画面の x 14）：印の左の端が境界の左の端（x 0）にそろう
+  const e = fv.toScreen(0.45, H / 2);
+  const cx = Math.round(e.x);
+  assert.equal(cx, b.x + 14);
+  const left = markLayout({ cx, cy: Math.round(e.y), hq: false, standing: false, morale: 100, bounds: b });
+  assert.equal(cx + left.order.x, b.x);
+  assert.equal(cx + left.stance.x, b.x);
+  assert.equal(cx + left.frame.x, b.x);
+  // 右端：旗は竿の左に付け替える
+  const r = fv.toScreen(W - 0.45, H / 2);
+  assert.equal(markLayout({ cx: Math.round(r.x), cy: Math.round(r.y), hq: false, standing: false, morale: 100, bounds: b }).mirror, true);
 });

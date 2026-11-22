@@ -72,14 +72,6 @@ export class FieldView {
     return this.mode !== 'top';
   }
 
-  /**
-   * 号令の印を、uiBounds に収まるよう寄せるか（横からだけ）。真上と斜めは false（§5.8 の前の置き方のまま）。
-   * 旗を左右どちらに出すかは、どの視点でも実際に描く旗の右端（はためく 1px を含む）で決める（art/UnitSprite.ts。design §13.14）
-   */
-  get fitMarks(): boolean {
-    return this.mode !== 'top' && this.mode !== 'oblique';
-  }
-
   /** 高さのある地形の絵の組（art/tallArt.ts で、絵の鍵と置き方を選ぶ） */
   get art(): ArtKind {
     return this.mode === 'top' ? 'flat' : this.mode === 'side' ? 'side' : 'oblique';

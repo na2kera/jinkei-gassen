@@ -11,6 +11,7 @@ import type { FieldView } from '../battle/FieldView.ts';
 import type { Rect } from '../layout.ts';
 import { dirOf, SCATTER, slotsOf, soldierPoint, type Slot } from './formation.ts';
 import { drawOrderIcon, drawStanceIcon } from './icons.ts';
+import { markLayout, POLE_W, WAVE_PX } from './marks.ts';
 import { ART, COLOR, SIDE_COLOR } from './palette.ts';
 import { soldierKey, soldierSize, standKey, standSize, type Dir4, type SoldierShape } from './textures.ts';
 
@@ -44,18 +45,6 @@ export interface UnitLook {
   /** 旗がはみ出さないようにする範囲（FieldView.uiBounds） */
   bounds?: Rect;
 }
-
-/**
- * 旗竿の左の端（部隊の中心から。px）。兵の並び（横に ±7px、絵の端で約 ±10px。art/formation.ts）の外に立てる。
- * 左に付け替えるときは、竿の右の端が −POLE_X になる
- */
-const POLE_X = 12;
-/** 旗竿の幅と、はためくときに旗の下半分がずれる 1px */
-const POLE_W = 2;
-const WAVE_PX = 1;
-/** 号令の印・方針の印・号令の相手の枠の、部隊の中心からの離れ（兵の並びの外側。px） */
-const MARK_X = -16;
-const FRAME_HALF = 16;
 
 export class UnitSprite {
   private readonly slots: Slot[];
@@ -166,34 +155,26 @@ export class UnitSprite {
     const hq = this.kind === 'hq';
     const cx = Math.round(look.x);
     const cy = Math.round(look.y);
-    const flagW = hq ? 10 : 6;
-    const flagH = hq ? 8 : 4;
-    // 立った兵のときは、兵より高く旗を立てる
-    const standing = this.fv.standing;
-    const poleH = standing ? (hq ? 30 : 26) : hq ? 24 : 20;
-    let poleTop = standing ? (hq ? -34 : -30) : hq ? -22 : -18;
-    // 戦場の右端からはみ出すなら、旗を竿の左に付け替える。上端からはみ出すなら、竿ごと下げる。
-    // 右端の判定は、実際に描く旗の右の端（竿の左の端 + 竿の幅 + 旗の幅 + はためく 1px）で行う（どの視点でも。design §13.14）
-    let mirror = false;
-    const b = look.bounds;
-    const fit = this.fv.fitMarks;
-    if (b) {
-      if (cx + POLE_X + POLE_W + flagW + WAVE_PX > b.x + b.w) mirror = true;
-      if (cy + poleTop < b.y) poleTop = b.y - cy;
-    }
-    // 号令の印（7 × 7）の左上。fitMarks のときは、uiBounds に収まるよう寄せる
-    let orderX = MARK_X;
-    let orderY = standing ? -26 : MARK_X;
-    if (b && fit) {
-      orderX = Math.min(Math.max(orderX, b.x - cx), b.x + b.w - 7 - cx);
-      orderY = Math.min(Math.max(orderY, b.y - cy), b.y + b.h - 7 - cy);
-    }
-    const m = Math.max(0, Math.min(100, look.morale)) / 100;
-    // 旗の位置は 2px 単位に揃える。士気が下がるほど旗が下がる
-    const fy = poleTop + Math.round(((1 - m) * (poleH - flagH)) / 2) * 2;
+    // 置き場所は art/marks.ts で決める（旗の向き、上の端で下げる、印と枠を境界の中に寄せる。どの視点でも同じ）
+    const L = markLayout({ cx, cy, hq, standing: this.fv.standing, morale: look.morale, bounds: look.bounds });
     const wave = look.wave ? Math.floor(time / 120) % 2 : 0;
     const key = alive
-      ? [look.highlight ? 1 : 0, look.rout > 0 ? 1 : 0, fy, poleTop, mirror ? 1 : 0, wave, look.order ?? '', look.stance ?? '', orderX, orderY].join('|')
+      ? [
+          look.highlight ? 1 : 0,
+          look.rout > 0 ? 1 : 0,
+          L.flagY,
+          L.poleTop,
+          L.mirror ? 1 : 0,
+          wave,
+          look.order ?? '',
+          look.stance ?? '',
+          L.order.x,
+          L.order.y,
+          L.stance.x,
+          L.stance.y,
+          L.frame.x,
+          L.frame.y,
+        ].join('|')
       : 'dead';
     g.setPosition(cx, cy);
     if (key === this.marksKey) return;
@@ -201,24 +182,22 @@ export class UnitSprite {
     g.clear();
     if (!alive) return;
     if (look.highlight) {
-      // 号令の相手の枠。部隊の中心のまわりに描く（マスには合わせない）。
-      // 立った兵のときは、兵（足もとから上へ伸びる）を囲む平たい形にする
-      const top = standing ? -18 : -FRAME_HALF;
-      const bottom = standing ? 6 : FRAME_HALF;
-      const half = FRAME_HALF;
+      // 号令の相手の枠。部隊の中心のまわりに描く（マスには合わせない）
+      const f = L.frame;
       g.fillStyle(COLOR.highlight, 1);
-      g.fillRect(-half, top, half * 2, 2);
-      g.fillRect(-half, bottom - 2, half * 2, 2);
-      g.fillRect(-half, top + 2, 2, bottom - top - 4);
-      g.fillRect(half - 2, top + 2, 2, bottom - top - 4);
+      g.fillRect(f.x, f.y, f.w, 2);
+      g.fillRect(f.x, f.y + f.h - 2, f.w, 2);
+      g.fillRect(f.x, f.y + 2, 2, f.h - 4);
+      g.fillRect(f.x + f.w - 2, f.y + 2, 2, f.h - 4);
     }
     if (look.rout > 0) return;
     // 旗竿は画面の上下に立てる（部隊の向きでは回さない）
-    const poleX = mirror ? -POLE_X - POLE_W : POLE_X;
+    const { mirror, poleX, flagW, flagH } = L;
+    const fy = L.flagY;
     g.fillStyle(COLOR.pole, 1);
-    g.fillRect(poleX, poleTop, POLE_W, poleH);
+    g.fillRect(poleX, L.poleTop, POLE_W, L.poleH);
     const color = SIDE_COLOR[this.team];
-    const x0 = mirror ? poleX - flagW : poleX + POLE_W;
+    const x0 = L.flagX;
     // はためくときは、旗の下半分を 1px ずらす
     const shift = wave ? (mirror ? -WAVE_PX : WAVE_PX) : 0;
     if (hq) {
@@ -241,8 +220,8 @@ export class UnitSprite {
         g.fillRect((mirror ? poleX - w : poleX + POLE_W) + (i > 0 ? shift : 0), fy + i * 2, w, 2);
       }
     }
-    if (look.order) drawOrderIcon(g, look.order, orderX, orderY);
-    if (look.stance) drawStanceIcon(g, look.stance, MARK_X, 6);
+    if (look.order) drawOrderIcon(g, look.order, L.order.x, L.order.y);
+    if (look.stance) drawStanceIcon(g, look.stance, L.stance.x, L.stance.y);
   }
 
   hide(): void {
