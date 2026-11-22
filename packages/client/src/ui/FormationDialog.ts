@@ -6,7 +6,7 @@
 // 保存の知らせは、窓の下の端の1行に出す（窓の外に出すと、窓に隠れるため）。
 // 名前の入力欄は、一覧を作り直しても作り直さない（打っている途中で焦点が外れないように）。
 
-import type { Kind, ReserveSetup } from '@jinkei/engine';
+import { STANDARD_ZONE_DEPTH, STANDARD_ZONE_WIDTH, type Kind, type ReserveSetup } from '@jinkei/engine';
 import Phaser from 'phaser';
 import { COLOR } from '../art/palette.ts';
 import type { Layout, Rect } from '../layout.ts';
@@ -26,6 +26,11 @@ const DELETE_ARM_MS = 2500;
 const MESSAGE_MS = 2500;
 /** 窓の下の端の、知らせの行の高さ */
 const MESSAGE_H = 26;
+
+/** 縮小図の枠の大きさと、1マスの点の大きさ（px） */
+const MINI_W = 28;
+const MINI_H = 16;
+const MINI_DOT = 3;
 
 /** 小さな配置の絵の、兵種ごとの点の色 */
 const DOT: Record<Kind, number> = {
@@ -154,19 +159,25 @@ export class FormationDialog {
     }
   }
 
-  /** 小さな配置の絵（1マスを2px の点にし、兵種で色を変える） */
+  /**
+   * 小さな配置の絵（1マスを3px の点にし、兵種で色を変える）。保存した陣形は配置エリアの左上を原点に持つので、
+   * 配置エリアの大きさ（STANDARD_ZONE_WIDTH × STANDARD_ZONE_DEPTH。通り道は含まない）を 28 × 16 の枠の中央に描く（design §13.8）
+   */
   private drawMini(f: SavedFormation, x: number, y: number): void {
     const g = this.add(this.scene.add.graphics());
     g.fillStyle(COLOR.outline, 1);
-    g.fillRect(x, y, 28, 16);
+    g.fillRect(x, y, MINI_W, MINI_H);
     g.fillStyle(COLOR.panel2, 1);
-    g.fillRect(x + 1, y + 1, 26, 14);
-    // 配置エリア（幅 f.width × 奥行き6）を、横幅 24px に収める
-    const ox = x + 2 + Math.floor((12 - Math.min(12, f.width)) / 2) * 2;
+    g.fillRect(x + 1, y + 1, MINI_W - 2, MINI_H - 2);
+    const cols = STANDARD_ZONE_WIDTH;
+    const rows = STANDARD_ZONE_DEPTH;
+    // 狭い面で保存した陣形（幅 f.width）は、エリアの幅の中で中央に寄せる
+    const ox = x + Math.floor((MINI_W - cols * MINI_DOT) / 2) + Math.floor(((cols - Math.min(cols, f.width)) * MINI_DOT) / 2);
+    const oy = y + Math.floor((MINI_H - rows * MINI_DOT) / 2);
     for (const u of f.units) {
-      if (u.col < 0 || u.col >= 12 || u.row < 0 || u.row >= 6) continue;
+      if (u.col < 0 || u.col >= cols || u.row < 0 || u.row >= rows) continue;
       g.fillStyle(DOT[u.kind], 1);
-      g.fillRect(ox + u.col * 2, y + 2 + u.row * 2, 2, 2);
+      g.fillRect(ox + u.col * MINI_DOT, oy + u.row * MINI_DOT, MINI_DOT, MINI_DOT);
     }
   }
 

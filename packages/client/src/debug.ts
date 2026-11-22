@@ -5,6 +5,7 @@
 import {
   KINDS,
   plainField,
+  STANDARD_WIDTH,
   PVP_MAPS,
   pvpField,
   STAGES,
@@ -111,6 +112,26 @@ export function pushCapped<T>(arr: T[], v: T, cap: number): void {
   if (arr.length > cap) arr.splice(0, arr.length - cap);
 }
 
+/** 城の場面の城壁の行（陣営1の配置エリアの最前列） */
+function castleWallRow(f: Field): number {
+  const z1 = f.zones[1];
+  return z1.row + z1.height - 1;
+}
+
+/** 城の場面の門の列（戦場のまん中） */
+function castleGateCol(f: Field): number {
+  return Math.floor(f.width / 2);
+}
+
+/** 城の場面の戦場（標準の盤。城壁の行は通り道の列も含めて横切る。design §3.8・§13.2 の 6） */
+function castleField(): Field {
+  const f = plainField();
+  const row = castleWallRow(f);
+  const gate = castleGateCol(f);
+  for (let c = 0; c < f.width; c++) if (c !== gate) f.terrain[row * f.width + c] = 'wall';
+  return f;
+}
+
 export function installDebug(game: Phaser.Game): void {
   const api = {
     /** 実際のフレームの速さ（32部隊で 55 以上あることを確かめるため） */
@@ -130,7 +151,7 @@ export function installDebug(game: Phaser.Game): void {
       if (!game.textures.exists(key)) return null;
       return game.textures.get(key).getSourceImage() as HTMLCanvasElement;
     },
-    /** 兵種ごとの、部隊の絵が中心から届く距離（px）。10 以下なら、隣の部隊と重ならない */
+    /** 兵種ごとの、部隊の絵が中心から届く距離（px）。14.4（0.9 マスの半分）未満なら、隣の部隊と重ならない */
     get reach(): Record<string, number> {
       return Object.fromEntries(KINDS.map((k) => [k, Math.round(unitReach(k) * 100) / 100]));
     },
@@ -261,20 +282,34 @@ export function installDebug(game: Phaser.Game): void {
       else game.scene.start('Battle', data);
       return true;
     },
-    /** 城壁と門の場面（engine の sim/terrain-scenes.ts の castleSetup と同じ形）を戦闘の画面で流す */
+    /**
+     * 城壁と門の場面（engine の sim/terrain-scenes.ts の castleSetup にならった形）を戦闘の画面で流す。
+     * engine の場面は 12 × 16 のままなので、ここでは標準の盤の配置エリアから作る（design §13.10）：
+     * 城壁は陣営1のエリアの最前列（通り道の列も含めて横切る）、切れ目（門）は戦場のまん中の列
+     */
     castle(win = false): unknown {
       const at = (kind: Placement['kind'], stance: Placement['stance'], cols: number[], row: number): Placement[] =>
         cols.map((col) => ({ kind, stance, col, row }));
-      const f = plainField();
-      for (let c = 0; c < f.width; c++) if (c !== 5) f.terrain[5 * f.width + c] = 'wall';
-      f.zones = [f.zones[0], { col: 0, row: 0, width: f.width, height: 6 }];
+      const f = castleField();
+      const z0 = f.zones[0];
+      const wallRow = castleWallRow(f);
+      const gate = castleGateCol(f);
+      const back0 = z0.row + z0.height - 1;
       return api.startCustom({
         field: f,
         armies: [
-          [{ kind: 'hq', stance: 'hold', col: 5, row: 14 }, ...at('infantry', 'advance', [3, 4, 5, 6], 10), ...at('shield', 'advance', [4, 6], 11)],
-          [{ kind: 'hq', stance: 'hold', col: 5, row: 1 }, ...at('infantry', 'hold', [4, 6], 3), ...at('archer', 'hold', [2, 8], 2)],
+          [
+            { kind: 'hq', stance: 'hold', col: gate, row: back0 },
+            ...at('infantry', 'advance', [gate - 2, gate - 1, gate, gate + 1], z0.row),
+            ...at('shield', 'advance', [gate - 1, gate + 1], z0.row + 1),
+          ],
+          [
+            { kind: 'hq', stance: 'hold', col: gate, row: wallRow - 3 },
+            ...at('infantry', 'hold', [gate - 1, gate + 1], wallRow - 1),
+            ...at('archer', 'hold', [z0.col + 1, z0.col + z0.width - 2], wallRow - 2),
+          ],
         ],
-        gate: { side: 1, col: 5, row: 5, win },
+        gate: { side: 1, col: gate, row: wallRow, win },
       });
     },
     /** 面を仮に足す（同じ id があれば置き換える）。第2章・第3章のデータができるまで、霧・狭い戦場・門・ステージ選択を確かめるため */
@@ -286,15 +321,10 @@ export function installDebug(game: Phaser.Game): void {
     },
     /** 確かめ用の戦場を作る道具 */
     fields: {
-      plain: (width = 12) => plainField(width),
+      plain: (width = STANDARD_WIDTH) => plainField(width),
       pvp: (id: PvpMapId) => pvpField(id),
-      /** engine の sim/terrain-scenes.ts の castleField と同じ形：城壁は行 5、切れ目（門）は列 5 */
-      castle: () => {
-        const f = plainField();
-        for (let c = 0; c < f.width; c++) if (c !== 5) f.terrain[5 * f.width + c] = 'wall';
-        f.zones = [f.zones[0], { col: 0, row: 0, width: f.width, height: 6 }];
-        return f;
-      },
+      /** castle の場面の戦場：城壁は陣営1のエリアの最前列、切れ目（門）はまん中の列 */
+      castle: () => castleField(),
       maps: () => PVP_MAPS,
     },
     /** フレームを止める・再開する（タブを裏にしてフレームが進まない状態を作り、その間に段階を進めて確かめるため） */

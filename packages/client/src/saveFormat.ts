@@ -1,7 +1,7 @@
 // 端末に残す記録の形と、読んだ値の掃除（design §5.4）。読み書きそのものは save.ts。
 // Phaser・window・import.meta を使わない計算だけにして、画面なしで確かめられるようにする（test/reserve.test.ts）。
 
-import { KINDS, MAX_UNITS, reserveErrors, STANCES, STANDARD_WIDTH, type Placement, type ReserveSetup } from '@jinkei/engine';
+import { KINDS, MAX_UNITS, reserveErrors, STANCES, STANDARD_ZONE_WIDTH, type Placement, type ReserveSetup } from '@jinkei/engine';
 import { parseView, type ViewMode } from './battle/viewMode.ts';
 
 /**
@@ -107,7 +107,7 @@ export function copyFormation(f: Omit<SavedFormation, 'reserve'> & { reserve?: u
  *   対戦のルールを見た印だけを引き継ぐ。面ごとの配置と遊軍・保存した陣形・対戦の配置と遊軍は、座標が合わないので捨てる
  *   （行 10 は古いエリアにも新しいエリアにもあるので、座標の検査では見分けられない）。読むだけでは書き戻さず、次に書くときに v 2 になる。
  * - それ以外：空の保存。
- * 数の上限（配置・陣形の部隊・対戦の配置）は engine の MAX_UNITS、陣形の幅の上限は STANDARD_WIDTH を読む
+ * 数の上限（配置・陣形の部隊・対戦の配置）は engine の MAX_UNITS、陣形の幅の上限は配置エリアの幅 STANDARD_ZONE_WIDTH を読む（戦場の幅 STANDARD_WIDTH は通り道を含むため。design §13.9）
  */
 export function sanitizeSave(raw: unknown): SaveData {
   const data = emptySave();
@@ -145,7 +145,7 @@ export function sanitizeSave(raw: unknown): SaveData {
     for (const f of raw.formations) {
       if (!isRecord(f) || typeof f.name !== 'string' || !Number.isInteger(f.width) || !Array.isArray(f.units)) continue;
       const len = [...f.name].length;
-      if (len < 1 || len > 8 || (f.width as number) < 1 || (f.width as number) > STANDARD_WIDTH) continue;
+      if (len < 1 || len > 8 || (f.width as number) < 1 || (f.width as number) > STANDARD_ZONE_WIDTH) continue;
       if (f.units.length > MAX_UNITS || !f.units.every(isPlacement)) continue;
       if (data.formations.length >= MAX_FORMATIONS) break;
       // 遊軍の値が壊れていれば、遊軍だけを捨てる（陣形そのものは残す）

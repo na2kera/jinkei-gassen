@@ -1,5 +1,5 @@
 // 戦場の絵。地形ごとのタイルを、FieldView が決めたマスの位置に1枚の絵として貼り合わせる
-// （192 マスを別々の絵にするより軽いため）。配置エリアの印は配置の画面だけで重ねる。
+// （120 マスを別々の絵にするより軽いため）。配置エリアの印は配置の画面だけで重ねる。
 
 import type { Field, Zone } from '@jinkei/engine';
 import Phaser from 'phaser';
@@ -13,7 +13,7 @@ let serial = 0;
 
 /**
  * 戦場の背景を作って置く。戻り値は置いた Image（作り直すときは destroy する）。
- * area は描き場所（12列ぶん）。戦場が狭いときは、戦場の外側の列に岩壁を敷く（谷の狭い道を表す）
+ * area は描き場所（標準の戦場 10 列ぶん）。戦場が狭いときは、戦場の外側の列に岩壁を敷く（谷の狭い道を表す）
  */
 export function addFieldImage(scene: Phaser.Scene, fv: FieldView, field: Field, area: Rect = fv.rect): Phaser.GameObjects.Image {
   const r = area;
