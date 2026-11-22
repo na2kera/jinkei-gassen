@@ -65,11 +65,13 @@ export const STAGES: Stage[] = [
     hint: '敵の騎兵は、どこを通る？',
     field: plainField(),
     roster: { hq: 1, infantry: 5, shield: 3 },
-    // 騎兵3（列 2〜4、行 2）が先に当たり、歩兵4（列 3〜6、行 1）があとから来る。どちらも前進（2026-11-17 に作り直した。design §3.10）
-    enemy: [hq(4, 0), ...at('cavalry', 'advance', [2, 3, 4], 2), ...at('infantry', 'advance', [3, 4, 5, 6], 1)],
+    // 騎兵3（列 4〜6、行 3）が先に当たり、歩兵4（列 2・3・4・7、行 2）があとから来る。どちらも前進（2026-11-17 に作り直した。design §3.10）。
+    // 2026-11-22 に新しい盤で合わせ直した：騎兵の列を、横陣が盾兵を置く列（2・7・8）と重ならない列 4〜6 にし、
+    // 歩兵の列を選び直した（design §3.10 の条件 1〜4 を、騎兵の列 × 歩兵の列の組み合わせで当たって選んだ）
+    enemy: [hq(4, 0), ...at('cavalry', 'advance', [4, 5, 6], 3), ...at('infantry', 'advance', [2, 3, 4, 7], 2)],
     win: { type: 'defeat' },
     allow: BASIC,
-    solution: [hq(4, 11), ...at('shield', 'hold', [2, 3, 4], 8), ...at('infantry', 'advance', [1, 2, 5, 6, 7], 9)],
+    solution: [hq(4, 11), ...at('shield', 'hold', [4, 5, 6], 8), ...at('infantry', 'advance', [1, 2, 7, 8], 9), ...at('infantry', 'advance', [3], 10)],
   },
   {
     id: '1-3',

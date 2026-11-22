@@ -2,7 +2,6 @@
 // 見本の勝ち・星と、星3つの配置（置く順を変えた3通りを含む）は stages.test.ts で確かめている。
 import { describe, expect, it } from 'vitest';
 import { STAGES, STANDARD_HEIGHT, STANDARD_WIDTH, stageLineArmy } from '../src/index.ts';
-import { DIFFICULTY_LATER } from './helpers.ts';
 import { cavalryCols, isGuarded, isUnguarded, stage12Report, stage12Samples } from '../sim/stage12.ts';
 
 const s12 = STAGES.find((s) => s.id === '1-2')!;
@@ -16,9 +15,7 @@ describe('1-2 盾の壁の条件', () => {
     for (const p of s12.enemy) if (p.kind !== 'hq') expect(p.stance).toBe('advance');
   });
 
-  // 置き直した面（decisions §25）では、横陣の盾兵の列（2・7）と騎兵の列（2〜4）が列 2 で重なる。難しさを合わせるときに、騎兵の列で直す
-  it('敵の騎兵の列は、横陣が盾兵を置く列と重ならない', (ctx) => {
-    ctx.skip(DIFFICULTY_LATER);
+  it('敵の騎兵の列は、横陣が盾兵を置く列と重ならない', () => {
     const cols = cavalryCols(s12);
     // 横陣が盾兵を置く列は、横陣のひな形から読む（12×16 の盤では列 2・8・9 だった）
     const lineShields = stageLineArmy(s12).filter((p) => p.kind === 'shield').map((p) => p.col);
@@ -50,9 +47,7 @@ describe('1-2 盾の壁の条件', () => {
     }
   });
 
-  it('条件 1〜4：受けている配置は勝ち、受けていない配置は負け、時間切れと長い膠着がなく、横陣そのままでは勝てない', (ctx) => {
-    // 置き直した面では、受けている配置の 20 戦 18 勝以上が 32 個（36 個が条件）、受けていない配置の勝率が 0.375（0.3 以下が条件）
-    ctx.skip(DIFFICULTY_LATER);
+  it('条件 1〜4：受けている配置は勝ち、受けていない配置は負け、時間切れと長い膠着がなく、横陣そのままでは勝てない', () => {
     const r = stage12Report(s12);
     // 1. 受けている配置40個のうち36個以上が20戦で18勝以上、800戦の勝率 0.9 以上
     expect(r.guardedGood, JSON.stringify(r)).toBeGreaterThanOrEqual(36);
