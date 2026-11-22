@@ -231,6 +231,8 @@ export class DeployScene extends Phaser.Scene {
 
     if (this.pvpMode) {
       pvp.arrived('Deploy');
+      // 公開の揃いを頼む（配置の時間のうちに焼ける。公開の画面が終わるときに捨てる。design §14.3）
+      stackTextures.request('reveal');
       const room = client.room;
       // 部屋の様子がまだない（起きないはず）ときは、pvp.ts が次の room で画面を選び直すので、ここでは何もしない
       if (!room) return;

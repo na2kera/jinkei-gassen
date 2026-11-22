@@ -68,7 +68,7 @@ export interface SavedFormation {
 export const MAX_FORMATIONS = 8;
 
 export function emptySave(): SaveData {
-  return { v: SAVE_VERSION, stars: {}, placements: {}, reserves: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], pvpReserve: null, formations: [], view: 'top', tutorialDone: false, pvpRulesSeen: false };
+  return { v: SAVE_VERSION, stars: {}, placements: {}, reserves: {}, muted: false, pid: null, name: '', roomCode: null, pvpArmy: [], pvpReserve: null, formations: [], view: 'right', tutorialDone: false, pvpRulesSeen: false };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

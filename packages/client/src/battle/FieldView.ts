@@ -11,7 +11,8 @@
 
 import type { Rect } from '../layout.ts';
 import { CELL } from '../layout.ts';
-import type { ViewMode } from './viewMode.ts';
+/** 古い投影の視点（真上・斜め・横から）。立体の画面の向き（viewMode.ts）とは別 */
+export type ViewMode = 'top' | 'oblique' | 'side';
 
 export interface Point {
   x: number;

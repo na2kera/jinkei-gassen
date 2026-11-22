@@ -82,6 +82,10 @@ interface DebugHooks {
   rulesClose: (() => void) | null;
   /** 配置・戦闘の画面の、マスの中心の画面の点（確かめ用。丘の高さを見る） */
   cellScreen: ((col: number, row: number) => { x: number; y: number }) | null;
+  /** 公開の回転の進み具合を止める（null で止めない。画像を撮るため） */
+  revealFreeze: ((p: number | null) => void) | null;
+  /** 戦闘の向きの切り替えを、決まった進み具合で止める（null で止めない、jump ですぐ止まる先へ） */
+  cameraFreeze: ((p: number | null | 'jump') => void) | null;
 }
 
 export const debug: DebugHooks = {
@@ -110,6 +114,8 @@ export const debug: DebugHooks = {
   rulesOpen: null,
   rulesClose: null,
   cellScreen: null,
+  revealFreeze: null,
+  cameraFreeze: null,
 };
 
 export function pushCapped<T>(arr: T[], v: T, cap: number): void {
@@ -205,6 +211,18 @@ export function installDebug(game: Phaser.Game): void {
     },
     cellScreen(col: number, row: number): { x: number; y: number } | null {
       return debug.cellScreen ? debug.cellScreen(col, row) : null;
+    },
+    /** 公開の回転の進み具合を止める（null で止めない） */
+    revealFreeze(p: number | null): boolean {
+      if (!debug.revealFreeze) return false;
+      debug.revealFreeze(p);
+      return true;
+    },
+    /** 戦闘の向きの切り替えを止める（確かめ用。p は 0〜1、null で止めない、'jump' ですぐ止まる先へ） */
+    cameraFreeze(p: number | null | 'jump'): boolean {
+      if (!debug.cameraFreeze) return false;
+      debug.cameraFreeze(p);
+      return true;
     },
     get scene(): string {
       return debug.scene;

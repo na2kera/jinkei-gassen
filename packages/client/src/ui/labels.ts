@@ -69,9 +69,18 @@ export const RESERVE_FROM_LABEL: Record<'left' | 'right', string> = {
   right: '遊軍 右から',
 };
 
-/** 視点のボタンの文字（design §5.8.1） */
+/** 視点のボタンの文字（design §14.11・§14.16 の案。ボタンに収まらなければ、短い案（VIEW_LABEL_SHORT）にする） */
 export const VIEW_LABEL: Record<ViewMode, string> = {
-  top: '視点：真上',
-  oblique: '視点：斜め',
+  right: '視点：右斜め',
+  left: '視点：左斜め',
   side: '視点：横',
+  back: '視点：後ろ',
+};
+
+/** 視点のボタンの短い案 */
+export const VIEW_LABEL_SHORT: Record<ViewMode, string> = {
+  right: '視点：右',
+  left: '視点：左',
+  side: '視点：横',
+  back: '視点：後ろ',
 };

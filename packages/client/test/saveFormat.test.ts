@@ -32,7 +32,7 @@ function full(v: unknown): Record<string, unknown> {
     pvpArmy: [hq, inf],
     pvpReserve: { kind: 'archer', stance: 'hold' },
     formations: [{ name: '鶴翼', width: STANDARD_ZONE_WIDTH, units: [fHq], reserve: { kind: 'shield', stance: 'advance' } }],
-    view: 'oblique',
+    view: 'left',
     tutorialDone: true,
     pvpRulesSeen: true,
   };
@@ -51,7 +51,7 @@ test('v 1 からは星・音・pid・名前・部屋のコード・視点・チ�
   assert.equal(d.pid, PID);
   assert.equal(d.name, 'たろう');
   assert.equal(d.roomCode, '0420');
-  assert.equal(d.view, 'oblique');
+  assert.equal(d.view, 'left');
   assert.equal(d.tutorialDone, true);
   assert.equal(d.pvpRulesSeen, true);
   assert.deepEqual(d.placements, {});
@@ -76,7 +76,7 @@ test('v 2 は、すべての項目を読み戻す。書いたものを JSON に�
   assert.deepEqual(d.pvpArmy, [hq, inf]);
   assert.deepEqual(d.pvpReserve, { kind: 'archer', stance: 'hold' });
   assert.deepEqual(d.formations, [{ name: '鶴翼', width: STANDARD_ZONE_WIDTH, units: [fHq], reserve: { kind: 'shield', stance: 'advance' } }]);
-  assert.equal(d.view, 'oblique');
+  assert.equal(d.view, 'left');
   assert.deepEqual(sanitizeSave(JSON.parse(JSON.stringify(d))), d);
 });
 
@@ -89,8 +89,14 @@ test('v が 1・2 でない保存（版なし・知らない版・形の違う�
   for (const raw of [null, 'x', 2, [], [full(2)]]) assert.deepEqual(sanitizeSave(raw), emptySave(), JSON.stringify(raw));
 });
 
-test('将軍の視点が残っている保存（v 1・v 2）は、真上として読む', () => {
-  for (const v of [1, 2]) assert.equal(sanitizeSave({ ...full(v), view: 'general' }).view, 'top');
+test('古い視点が残っている保存（v 1・v 2）：横はそのまま横、真上・斜め・将軍は右斜めとして読む（design §14.11。版は上げない）', () => {
+  for (const v of [1, 2]) {
+    assert.equal(sanitizeSave({ ...full(v), view: 'general' }).view, 'right');
+    assert.equal(sanitizeSave({ ...full(v), view: 'top' }).view, 'right');
+    assert.equal(sanitizeSave({ ...full(v), view: 'oblique' }).view, 'right');
+    assert.equal(sanitizeSave({ ...full(v), view: 'side' }).view, 'side');
+    for (const d of ['right', 'left', 'back'] as const) assert.equal(sanitizeSave({ ...full(v), view: d }).view, d);
+  }
 });
 
 test('数の上限は engine の MAX_UNITS、陣形の幅は 1〜STANDARD_ZONE_WIDTH（配置エリアの幅。v 2）', () => {
@@ -130,7 +136,7 @@ test('壊れた値は、その項目だけを捨てる（v 1 の引き継ぐ項�
     assert.equal(d.pid, null);
     assert.equal(d.name, '');
     assert.equal(d.roomCode, null);
-    assert.equal(d.view, 'top');
+    assert.equal(d.view, 'right');
     assert.equal(d.pvpRulesSeen, false);
   }
   const d = sanitizeSave({

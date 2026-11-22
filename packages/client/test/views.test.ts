@@ -9,9 +9,9 @@ import { dirOf, slotsOf, soldierPoint, unitLift } from '../src/art/formation.ts'
 import { groundTerrain, placeTall, placeTallCell, tallArt, tallScale } from '../src/art/tallArt.ts';
 import { STANDARD_HEIGHT, STANDARD_WIDTH } from '@jinkei/engine';
 import { SIDE_ART_W, sideArtColors, sideArtRows, TALL_ART_W } from '../src/art/textures.ts';
-import { centeredFieldView, type FieldView, type PickTarget, type Point } from '../src/battle/FieldView.ts';
+import { centeredFieldView, type FieldView, type PickTarget, type Point, type ViewMode } from '../src/battle/FieldView.ts';
 import { followInspect } from '../src/battle/inspect.ts';
-import { nextView, parseView, VIEW_CYCLE, type ViewMode } from '../src/battle/viewMode.ts';
+import { nextView, parseView, VIEW_CYCLE } from '../src/battle/viewMode.ts';
 import { CELL, computeLayout, FIELD_COLS, FIELD_ROWS, LANDSCAPE_H, LANDSCAPE_W, type Rect } from '../src/layout.ts';
 import { FRAME_HALF, MARK_X, markLayout, markRects, POLE_X } from '../src/art/marks.ts';
 import { VIEW_LABEL } from '../src/ui/labels.ts';
@@ -483,25 +483,26 @@ test('横から：高さのある絵と、柵のマスの下地', () => {
 
 // ---- V6 ----
 
-test('V6 保存：view に3つの値が入り、読み戻せる。知らない値（なくした将軍の視点を含む）は top', () => {
+test('V6 保存：view に盤の 4 つの向きが入り、読み戻せる。横はそのまま横、知らない値（真上・斜め・将軍を含む）は右斜め（design §14.11）', () => {
   for (const v of VIEW_CYCLE) {
     // 保存は JSON にして localStorage に置くので、文字に直して戻しても同じ値になる
     const back = parseView(JSON.parse(JSON.stringify({ view: v })).view);
     assert.equal(back, v);
   }
-  for (const bad of ['', 'Top', 'front', 'general', 3, null, undefined, {}]) assert.equal(parseView(bad), 'top');
+  for (const bad of ['', 'top', 'oblique', 'Top', 'front', 'general', 3, null, undefined, {}]) assert.equal(parseView(bad), 'right');
+  assert.equal(parseView('side'), 'side');
 });
 
-test('視点のボタン：真上 → 斜め → 横 → 真上 と回り、保存に残った将軍は真上で読む', () => {
-  assert.equal(nextView('top'), 'oblique');
-  assert.equal(nextView('oblique'), 'side');
-  assert.equal(nextView('side'), 'top');
-  assert.equal(parseView('general'), 'top');
+test('視点のボタン：右斜め → 左斜め → 横 → 後ろ → 右斜め と回る（試作と同じ順）', () => {
+  assert.equal(nextView('right'), 'left');
+  assert.equal(nextView('left'), 'side');
+  assert.equal(nextView('side'), 'back');
+  assert.equal(nextView('back'), 'right');
   assert.deepEqual(
     VIEW_CYCLE.map((v) => VIEW_LABEL[v]),
-    ['視点：真上', '視点：斜め', '視点：横'],
+    ['視点：右斜め', '視点：左斜め', '視点：横', '視点：後ろ'],
   );
-  assert.deepEqual(Object.keys(VIEW_LABEL).sort(), ['oblique', 'side', 'top']);
+  assert.deepEqual(Object.keys(VIEW_LABEL).sort(), ['back', 'left', 'right', 'side']);
 });
 
 // ---- V9 ----
