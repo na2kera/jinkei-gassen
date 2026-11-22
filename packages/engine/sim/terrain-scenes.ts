@@ -3,7 +3,15 @@
 
 import { plainField, type BattleSetup, type Field, type Placement, type Stance, type Terrain } from '../src/index.ts';
 
-export function withTerrain(cells: [number, number, Terrain][], base: Field = plainField()): Field {
+/**
+ * 地形の場面の戦場：標準の盤を通り道つきの 10×12 に変えたあとも、main の 12 × 16（配置エリア 6 行、通り道なし）で作る。
+ * 地形の倍率と決まりを確かめる場面で、座標と期待値をこの大きさで決めてあるため。新しい盤で測り直すかは design §13.5 で決める。
+ */
+export function sceneField(width = 12): Field {
+  return plainField(width, 16, 6, 0);
+}
+
+export function withTerrain(cells: [number, number, Terrain][], base: Field = sceneField()): Field {
   const f: Field = { ...base, terrain: base.terrain.slice(), zones: [{ ...base.zones[0] }, { ...base.zones[1] }] };
   for (const [col, row, t] of cells) f.terrain[row * f.width + col] = t;
   return f;
@@ -66,7 +74,7 @@ function small(field: Field, a: Placement[], b: Placement[], seed: number): Batt
 /** T1：陣営1の歩兵3（守備）を行 5 の 4〜6 列に、陣営0の歩兵3（前進）を行 10 の 4〜6 列に置く。丘は守る側の3マスだけ（行 5）。
  *  攻める側は行 6（丘の外）で近接の距離に入るので、近接は攻める側が丘に上がる前に始まる。値は守る側（陣営1）の得点率 */
 export function t1(hill: boolean, seeds = SEEDS_40): number {
-  const field = hill ? withTerrain([[4, 5, 'hill'], [5, 5, 'hill'], [6, 5, 'hill']]) : plainField();
+  const field = hill ? withTerrain([[4, 5, 'hill'], [5, 5, 'hill'], [6, 5, 'hill']]) : sceneField();
   return mean(seeds.map((s) => scoreFor(runSetup(small(field, at('infantry', 'advance', [4, 5, 6], 10), at('infantry', 'hold', [4, 5, 6], 5), s)).state, 1)));
 }
 
@@ -103,7 +111,7 @@ export function t3(river: boolean, seeds = SEEDS_40): number {
 export function t4(fence: boolean, cav: 'none' | 'front' | 'rear', seeds = SEEDS_40): number {
   if (cav !== 'none') return t4Cav(cav, seeds).score;
   const W = 3;
-  const field = plainField(W);
+  const field = sceneField(W);
   field.zones = [
     { col: 0, row: 0, width: W, height: 16 },
     { col: 0, row: 0, width: W, height: 16 },
@@ -126,7 +134,7 @@ export const T4_CAV_WIDTH = 8;
  */
 export function t4Cav(cav: 'front' | 'rear', seeds = SEEDS_40): { score: number; impacts: number; pinnedImpacts: number; sideRearShare: number } {
   const W = T4_CAV_WIDTH;
-  const field = plainField(W);
+  const field = sceneField(W);
   field.zones = [
     { col: 0, row: 0, width: W, height: 16 },
     { col: 0, row: 0, width: W, height: 16 },
