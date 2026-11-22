@@ -9,10 +9,10 @@ const row = (j: number): number => zone.row + j;
 const back = row(zone.height - 1);
 
 describe('PVP_RULES', () => {
-  it('予算 24、値段は既定の値段（本陣 0）、本陣以外の上限 11（MAX_UNITS − 1）', () => {
+  it('予算 24、値段は既定の値段（本陣 0）、本陣以外の上限 10（MAX_UNITS − 1）', () => {
     expect(PVP_RULES.budget).toBe(24);
     expect(PVP_RULES.costs).toEqual({ infantry: 2, shield: 3, archer: 3, cavalry: 4, hq: 0 });
-    expect(PVP_RULES.maxUnits).toBe(11);
+    expect(PVP_RULES.maxUnits).toBe(10);
     expect(PVP_RULES.maxUnits).toBe(MAX_UNITS - 1);
   });
   it('予算ちょうどは通り、1 超えると落ちる', () => {

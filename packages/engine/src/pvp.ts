@@ -16,7 +16,7 @@ export const PVP_RULES: { budget: number; costs: Record<Kind, number>; maxUnits:
   standardRoster: { hq: 1, infantry: 4, shield: 2, cavalry: 1, archer: 2 },
 };
 
-/** validateArmy にそのまま渡せる、対戦の配置の条件（本陣1つが必須、本陣以外は 1〜11、予算 24） */
+/** validateArmy にそのまま渡せる、対戦の配置の条件（本陣1つが必須、本陣以外は 1〜10、予算 24） */
 export function pvpArmyLimits(): ArmyLimits {
   return {
     maxUnits: PVP_RULES.maxUnits + 1,

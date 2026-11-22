@@ -26,8 +26,8 @@ export const STANDARD_WIDTH = STANDARD_ZONE_WIDTH + STANDARD_LANE * 2;
 export const STANDARD_HEIGHT = 12;
 export const STANDARD_ZONE_DEPTH = 4;
 
-/** 本陣を含めた1軍の部隊数の上限（§2、decisions §22） */
-export const MAX_UNITS = 12;
+/** 本陣を含めた1軍の部隊数の上限（§2、decisions §22）。12 から 11 にした（実験の記録 §18・§25。上限 12 では歩兵だけ 11 部隊が全部に勝ち越した） */
+export const MAX_UNITS = 11;
 
 /**
  * 平地だけの戦場を作る。配置エリアは、陣営1が上側の depth 行、陣営0が下側の depth 行で、

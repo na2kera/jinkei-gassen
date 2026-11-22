@@ -29,7 +29,7 @@ export { listTemplates, applyTemplate } from './templates.ts';
 
 /**
  * 総当たりと合格条件の手持ち（design §3.9）。仮の値：R10（本陣1、歩兵3、盾兵2、騎兵2、弓兵2）。
- * main の R15（歩5・盾3・騎3・弓3。15 部隊）は部隊数の上限 12 を超えるので、実験の枝（exp/grid-tuning）で
+ * main の R15（歩5・盾3・騎3・弓3。15 部隊）は部隊数の上限 11 を超えるので、実験の枝（exp/grid-tuning）で
  * 通り道つきの盤を測ったときの R10 を入れている。最終の値は design §13.3 で決める。
  */
 export const STANDARD_ROSTER = { hq: 1, infantry: 3, shield: 2, cavalry: 2, archer: 2 } as const;

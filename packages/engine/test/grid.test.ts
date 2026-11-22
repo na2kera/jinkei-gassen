@@ -42,14 +42,14 @@ function rowsOf(side: Side): { front: number; back: number } {
 }
 
 describe('定数', () => {
-  it('戦場は 10×12、配置エリアは 8×4、通り道は両端の 1 列ずつ。部隊は 12 まで、対戦の予算は 24', () => {
+  it('戦場は 10×12、配置エリアは 8×4、通り道は両端の 1 列ずつ。部隊は 11 まで（本陣を含む）、対戦の予算は 24', () => {
     expect(STANDARD_ZONE_WIDTH).toBe(8);
     expect(STANDARD_LANE).toBe(1);
     expect(STANDARD_WIDTH).toBe(STANDARD_ZONE_WIDTH + STANDARD_LANE * 2);
     expect(STANDARD_WIDTH).toBe(10);
     expect(STANDARD_HEIGHT).toBe(12);
     expect(STANDARD_ZONE_DEPTH).toBe(4);
-    expect(MAX_UNITS).toBe(12);
+    expect(MAX_UNITS).toBe(11);
     expect(PVP_RULES.budget).toBe(24);
     expect(PVP_RULES.maxUnits).toBe(MAX_UNITS - 1);
   });
@@ -199,7 +199,7 @@ describe('遊軍の現れるマス', () => {
 });
 
 describe('ひな形と陣形の見分け（新しい配置エリア 8×4）', () => {
-  const rosters: Roster[] = [STANDARD_ROSTER, PVP_RULES.standardRoster, { hq: 1, infantry: 11 }, { hq: 1, infantry: 3, shield: 3, cavalry: 2, archer: 3 }];
+  const rosters: Roster[] = [STANDARD_ROSTER, PVP_RULES.standardRoster, { hq: 1, infantry: MAX_UNITS - 1 }, { hq: 1, infantry: 3, shield: 3, cavalry: 2, archer: 2 }];
   it('ひな形は、どの手持ちでも通り道に置かない', () => {
     for (const t of listTemplates()) {
       for (const roster of rosters) {
