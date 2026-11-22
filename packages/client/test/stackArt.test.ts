@@ -17,7 +17,7 @@ import { centerOf, colorsFor, dimsOf, MODEL_IDS, modelParts, TREE_DIMS, TREE_IDS
 import { countFor, modelFor, slotOffset } from '../src/art/stack/squad.ts';
 import { ART, COLOR, SIDE_COLOR, TERRAIN } from '../src/art/palette.ts';
 
-const PROTO_DIR = process.env.JG_PROTO_DIR ?? '/private/tmp/claude-501/-Users-keranatsuki-dev/9e43ce8f-2131-4df5-a974-08fd67e898f4/scratchpad/proto17v2';
+const PROTO_DIR = process.env.JG_PROTO_DIR ?? new URL('../../../../../proto17v2/', import.meta.url).pathname;
 const HAVE_PROTO = fs.existsSync(path.join(PROTO_DIR, 'art.js')) && fs.existsSync(path.join(PROTO_DIR, 'main.js'));
 const SKIP_PROTO = HAVE_PROTO ? false : `試作がない（${PROTO_DIR}）。GOLDEN との比べで代える`;
 
