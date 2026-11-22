@@ -20,6 +20,8 @@
 //   POST /api/rooms/:code/test/step?n=…  刻みを n 回進める（timing.testManualTicks が 1 の部屋だけ）。{ tick } を返す
 //   POST /api/rooms/:code/test/seated?pid=…  部屋の isSeated(pid) の答えを { seated } で返す（何も書き換えないことの確認）
 //   POST /api/rooms/:code/test/version?v=…  保存した部屋の形の版を v に書き換える（盤が変わる前の部屋の片付けの確認。{ ok }）
+//   POST /api/rooms/:code/test/lastvalid?side=…  本文 { army, reserve }（自分が下の座標）を、保存した席の lastValid に書く
+//        （前の版のサーバーが残した「下書き＝本陣だけ、lastValid＝外す前の軍」を作るため。design §15.5。{ ok }）
 //   回数の上限の鍵を、見出し X-Test-Rl-Key か、入室の ?rlkey= で差し替える（テストごとに別の送信元として数えるため）
 
 import { DEFAULT_TIMING, parseTimingOverride, type Timing } from './timing.ts';
@@ -28,6 +30,7 @@ import { originAllowed } from './origin.ts';
 import { isPid, isRoomCode, normalizeName } from './validate.ts';
 import { isMapId } from './maps.ts';
 import type { Room } from './room.ts';
+import type { Placement, ReserveSetup } from '@jinkei/engine';
 
 export { Room } from './room.ts';
 
@@ -205,7 +208,7 @@ export default {
         if (!(await withinLimit(env.CREATE_LIMITER, limitKey(request, url, env)))) return json({ error: 'rate_limited' }, 429);
         return await createRoom(request, env);
       }
-      const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state|test\/step|test\/seated|test\/version)$/.exec(path);
+      const m = /^\/api\/rooms\/([^/]+)\/(ws|test\/alarm|test\/abort|test\/state|test\/step|test\/seated|test\/version|test\/lastvalid)$/.exec(path);
       if (m !== null) {
         const code = m[1] ?? '';
         if (m[2] === 'ws') return await joinRoom(request, url, env, code);
@@ -234,6 +237,12 @@ export default {
           const v = Number(url.searchParams.get('v'));
           if (!Number.isInteger(v) || v < 0 || v > 99) return json({ error: 'invalid v' }, 400);
           return json({ ok: await stub.setSavedVersionNow(v) });
+        }
+        if (m[2] === 'test/lastvalid') {
+          const side = Number(url.searchParams.get('side'));
+          if (side !== 0 && side !== 1) return json({ error: 'invalid side' }, 400);
+          const body = (await request.json()) as { army: Placement[]; reserve: ReserveSetup | null };
+          return json({ ok: await stub.setSavedLastValidNow(side, body.army, body.reserve ?? null) });
         }
         if (m[2] === 'test/step') {
           const n = Number(url.searchParams.get('n') ?? '1');

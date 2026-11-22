@@ -21,12 +21,9 @@ import {
   canOrder,
   canSummon,
   createBattle,
-  pvpArmyLimits,
   step,
   summarize,
-  validateArmy,
   viewFor,
-  type ArmyError,
   type BattleEvent,
   type BattleSummary,
   type Field,
@@ -36,10 +33,10 @@ import {
   type ReserveSetup,
   type ReserveView,
   type Side,
-  type Zone,
 } from '@jinkei/engine';
 import { fieldFor, packView, placementsFor, revealFor } from './flip.ts';
 import { fieldOf, pickMap } from './maps.ts';
+import { clearThinLastValid, deployErrors, deployState } from './draftState.ts';
 import type {
   ClientMessage,
   CloseCode,
@@ -111,22 +108,6 @@ function randomSeed(): number {
   const a = new Uint32Array(1);
   crypto.getRandomValues(a);
   return a[0] ?? 1;
-}
-
-/** 配置と遊軍の組を検査する（design §7.6。予算・部隊数は戦場の部隊 + 遊軍で数え、遊軍の値は reserveErrors で見る） */
-function deployErrors(d: Deploy, zone: Zone): ArmyError[] {
-  return validateArmy(d.army, zone, { ...pvpArmyLimits(), reserve: d.reserve });
-}
-
-/**
- * 下書きの様子（design §15.5）。
- *   ok：検査を通る。thin：誤りが「盤に本陣以外の部隊がない」（too_few_units）だけ（本陣だけ、本陣＋遊軍）。bad：それ以外の不正。
- * 配置の画面では本陣が最初から置いてあるので、「置いた部隊を全部外して本陣だけにした」下書きがふつうに届く
- */
-export function deployState(d: Deploy, zone: Zone): 'ok' | 'thin' | 'bad' {
-  const errors = deployErrors(d, zone);
-  if (errors.length === 0) return 'ok';
-  return errors.every((e) => e.code === 'too_few_units') ? 'thin' : 'bad';
 }
 
 /**
@@ -220,6 +201,8 @@ export class Room extends DurableObject<Env> {
     // ないものとして扱い（room は null）、下の点検で保存領域とアラームを消す
     this.room = saved === null ? null : loadRoom(saved);
     const stale = saved !== null && this.room === null;
+    // 前の版のサーバーが保存した「下書き＝本陣だけ、lastValid＝外す前の軍」をそろえる（design §15.5）
+    if (this.room !== null) clearThinLastValid(this.room, fieldOf(this.room.map));
     // 起動時の点検：接続の突き合わせ（再起動で消えた接続）、期限、戦闘の再開。
     // ここで戦闘を再開しておけば、起こしたのが見張りのアラームでも、入り直した人の接続でも同じに続く
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -367,6 +350,19 @@ export class Room extends DurableObject<Env> {
     const saved = this.ctx.storage.kv.get<RoomState>(ROOM_KEY);
     if (saved === undefined) return false;
     this.ctx.storage.kv.put(ROOM_KEY, { ...saved, v });
+    return true;
+  }
+
+  /**
+   * テスト用：保存してある部屋の、その席の lastValid だけを書き換える（「自分が下」の座標で受け取る）。前の版のサーバーが残した
+   * 「下書き＝本陣だけ、lastValid＝外す前の軍」の保存を作るため（design §15.5）。続けて abortNow で読み戻させる
+   */
+  async setSavedLastValidNow(side: Side, army: Placement[], reserve: ReserveSetup | null): Promise<boolean> {
+    const saved = this.ctx.storage.kv.get<RoomState>(ROOM_KEY);
+    const seat = saved?.seats[side];
+    if (saved === undefined || !seat) return false;
+    seat.lastValid = { army: placementsFor(side, army, fieldOf(saved.map)), reserve };
+    this.ctx.storage.kv.put(ROOM_KEY, saved);
     return true;
   }
 

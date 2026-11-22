@@ -4,7 +4,8 @@
 
 import { PVP_RULES } from '@jinkei/engine';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client, army, BACK, FRONT, holdArmy, MID, setupPair, startServer, zc } from './helpers.mjs';
+import { Client, army, BACK, FRONT, holdArmy, MID, setupPair, startServer, testRoute, zc, ZONE } from './helpers.mjs';
+import { clearThinLastValid, deployState } from '../src/draftState.ts';
 
 let server;
 beforeAll(async () => {
@@ -106,6 +107,81 @@ describe('下書きを「通る／足りないだけ／それ以外の不正」�
     A.send({ type: 'ready', army: HQ_ONLY, reserve: { kind: 'cavalry', stance: 'flank' } });
     const e2 = await A.waitMsg((m) => m.type === 'error', { from: from2, label: 'thin ready 2' });
     expect(e2.armyErrors.map((x) => x.code)).toEqual(['too_few_units']);
+    A.close();
+    B.close();
+  });
+});
+
+/** 前の版のサーバーが残した保存を作る：席の lastValid を、外す前の軍（自分が下の座標）に書き戻し、作り直させて読み戻す */
+async function legacyReload(c, armyBefore, reserve = null) {
+  const r = await fetch(`${server.base}/api/rooms/${c.code}/test/lastvalid?side=${c.room.you}`, { method: 'POST', body: JSON.stringify({ army: armyBefore, reserve }) });
+  expect((await r.json()).ok).toBe(true);
+  await testRoute(server.base, c.code, 'abort');
+}
+
+describe('前の版のサーバーが保存した状態を読み戻す（design §15.5）', () => {
+  it('計算：配置の段階で、確定していない席の下書きが「足りないだけ」なら lastValid を空にする。通る・不正な下書き、確定した席、ほかの段階は変えない', () => {
+    const zone = ZONE;
+    const seat = (draft, lastValid, ready = false) => ({ draft, lastValid, ready });
+    const thin = { army: HQ_ONLY, reserve: null };
+    const thinRes = { army: HQ_ONLY, reserve: { kind: 'infantry', stance: 'advance' } };
+    const ok = { army: HQ_INF, reserve: null };
+    const bad = { army: [...HQ_INF, { kind: 'archer', col: zc(0), row: FRONT, stance: 'hold' }], reserve: null };
+    expect([thin, thinRes, ok, bad].map((d) => deployState(d, zone))).toEqual(['thin', 'thin', 'ok', 'bad']);
+    const field = { zones: [zone, zone] };
+    const s = { phase: 'setup', seats: [seat(thin, ok), seat(thinRes, ok)] };
+    expect(clearThinLastValid(s, field)).toBe(true);
+    expect(s.seats.map((x) => x.lastValid)).toEqual([null, null]);
+    const keep = { phase: 'setup', seats: [seat(ok, ok), seat(bad, ok)] };
+    expect(clearThinLastValid(keep, field)).toBe(false);
+    expect(keep.seats.map((x) => x.lastValid)).toEqual([ok, ok]);
+    const ready = { phase: 'setup', seats: [seat(thin, ok, true), null] };
+    expect(clearThinLastValid(ready, field)).toBe(false);
+    const battle = { phase: 'battle', seats: [seat(thin, ok), null] };
+    expect(clearThinLastValid(battle, field)).toBe(false);
+  });
+
+  it('下書き＝本陣だけ・lastValid＝本陣＋歩兵の保存 → 読み戻し → 読み込み直すと本陣だけ、時間切れでは標準の軍', async () => {
+    let { A, B } = await setupPair(server.base, TIMING);
+    B.send({ type: 'ready', army: holdArmy() });
+    A.send({ type: 'draft', army: HQ_ONLY });
+    await sentinel(A);
+    await legacyReload(A, HQ_INF);
+    A = await rejoin(A);
+    expect(A.room.myArmy).toEqual(HQ_ONLY);
+    const rev = await A.waitMsg((m) => m.type === 'reveal', { ms: 10_000 });
+    expect(kinds(rev.armies[A.room.you])).toEqual(PVP_RULES.standardRoster);
+    A.close();
+    B.close();
+  });
+
+  it('下書き＝本陣＋遊軍・lastValid＝本陣＋歩兵の保存でも同じ（遊軍も生き返らない）', async () => {
+    let { A, B } = await setupPair(server.base, TIMING);
+    B.send({ type: 'ready', army: holdArmy() });
+    A.send({ type: 'draft', army: HQ_ONLY, reserve: { kind: 'infantry', stance: 'advance' } });
+    await sentinel(A);
+    await legacyReload(A, HQ_INF, { kind: 'cavalry', stance: 'flank' });
+    A = await rejoin(A);
+    expect(A.room.myArmy).toEqual(HQ_ONLY);
+    expect(A.room.myReserve).toEqual({ kind: 'infantry', stance: 'advance' });
+    const rev = await A.waitMsg((m) => m.type === 'reveal', { ms: 10_000 });
+    expect(kinds(rev.armies[A.room.you])).toEqual(PVP_RULES.standardRoster);
+    expect(rev.myReserve ?? null).toBeNull();
+    A.close();
+    B.close();
+  });
+
+  it('下書きが通るときの保存は、読み戻しても lastValid のまま（いままでどおり）', async () => {
+    let { A, B } = await setupPair(server.base, TIMING);
+    B.send({ type: 'ready', army: holdArmy() });
+    A.send({ type: 'draft', army: HQ_INF });
+    // 通る下書きでは「いまの下書きのままの確定」が通ってしまうので、番兵を使わず少し待つ
+    await new Promise((r) => setTimeout(r, 800));
+    await testRoute(server.base, A.code, 'abort');
+    A = await rejoin(A);
+    expect(A.room.myArmy).toEqual(HQ_INF);
+    const rev = await A.waitMsg((m) => m.type === 'reveal', { ms: 10_000 });
+    expect(kinds(rev.armies[A.room.you])).toEqual({ hq: 1, infantry: 1 });
     A.close();
     B.close();
   });
