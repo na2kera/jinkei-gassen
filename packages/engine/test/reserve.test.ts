@@ -370,8 +370,16 @@ describe('R4 マスがふさがっているとき', () => {
     expect(ev).toEqual([]);
     expect(a).toEqual(b);
   });
-  it('城壁の面（3-2 の戦場）：守る側（陣営1）の遊軍は城壁の内側の行に現れ、城壁の行とその向こうには現れない', () => {
+  /**
+   * 3-2 の面から、両軍の最後の部隊を1つずつ抜いたもの。面は両軍とも 11 部隊（上限いっぱい）なので、
+   * 遊軍を足す枠を空ける（抜くのは、城壁の外の迂回の騎兵と、本陣のそばの騎兵）
+   */
+  const castleStage = (): Stage => {
     const st = STAGES.find((x) => x.id === '3-2') as Stage;
+    return { ...st, enemy: st.enemy.slice(0, -1), solution: st.solution.slice(0, -1) };
+  };
+  it('城壁の面（3-2 の戦場）：守る側（陣営1）の遊軍は城壁の内側の行に現れ、城壁の行とその向こうには現れない', () => {
+    const st = castleStage();
     const wallRow = st.gate!.row;
     let n = 0;
     for (const from of ['left', 'right'] as const) {
@@ -395,7 +403,7 @@ describe('R4 マスがふさがっているとき', () => {
     expect(s0.units[s0.units.length - 1]!.home.y).toBeGreaterThan(wallRow + 1);
   });
   it('門が破れたあとも、城壁の行とその向こうには現れない', () => {
-    const st = STAGES.find((x) => x.id === '3-2') as Stage;
+    const st = castleStage();
     const s = make({ ...stageSetup(st, st.solution, 5000), reserves: [null, cav] });
     stepTo(s, 50);
     // 門を壊したことにして、両隣の城壁を平地にする（step の中の崩れ方と同じ）
@@ -407,7 +415,7 @@ describe('R4 マスがふさがっているとき', () => {
       const u = clone(s.units[0]!);
       u.id = s.units.length;
       u.side = 1;
-      u.x = 11.5;
+      u.x = s.field.width - 0.5; // 陣営1から見た左の端の列
       u.y = r + 0.5;
       u.status = 'active';
       s.units.push(u);

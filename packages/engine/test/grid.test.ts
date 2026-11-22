@@ -223,7 +223,7 @@ describe('ひな形と陣形の見分け（新しい配置エリア 8×4）', ()
   });
 });
 
-// 面と対戦の地図の約束（design §13.2 の 6）。面の置き直し（§13.5）が済むまで、いまの面では落ちるものがある
+// 面と対戦の地図の約束（design §13.2 の 6）
 describe('面と対戦の地図', () => {
   const fields: [string, Field, Placement[]][] = [
     ...PVP_MAPS.map((m): [string, Field, Placement[]] => [`対戦の地図 ${m.id}`, pvpField(m.id), []]),

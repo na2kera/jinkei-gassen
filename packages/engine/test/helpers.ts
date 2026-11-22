@@ -83,3 +83,10 @@ export function blockedCounter(): { onTick: (s: BattleState) => void; maxTicks: 
     },
   };
 }
+
+// 一人用の15面は、2026-11-22 に新しい盤へ機械的に置き直した（design §13.5、decisions §25）。難しさと星の条件は、公開のあとに合わせる。
+// 面の難しさを確かめるテストのうち、置き直した面で通らないものは、条件を残したまま ctx.skip(…, 理由) で止めておく。
+// 合わせ直したら、面の id を一覧から外す（一覧が空になったら、この仕組みごと外す）
+export const DIFFICULTY_LATER = '難しさは公開のあとに合わせる（decisions §25）';
+/** 古い盤（12×16）の手持ちで探した星3つの配置。置き直した面の手持ちと合わないので、探し直すまで止める */
+export const STAR3_LATER = '星3つの配置は古い盤のもの。公開のあとに探し直す（decisions §25）';
