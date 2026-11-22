@@ -6,10 +6,8 @@ import { lineStats, ORDER_PERMS, runStage, solutionStats, STAGE_SEEDS, stageStat
 import { DIFFICULTY_LATER, STAR3_LATER, STAR3_PENDING_CH23 } from './helpers.ts';
 
 // 置き直した面（decisions §25）で、いまは通らない面。難しさを合わせたら外す
-/** 見本が18勝・星の平均2に届かない */
-const SOLUTION_LATER = new Set([]); // 2-5・3-1 は 20 勝するが、星の平均が 1
 /** 横陣のままで11勝以上する */
-const LINE_LATER = new Set(['2-2', '3-2']);
+const LINE_LATER = new Set(['3-2']);
 /** そのまま置いて11勝以上するひな形が3つ以上 */
 const TEMPLATES_LATER = new Set(['3-2']);
 
@@ -119,8 +117,7 @@ describe('第2章・第3章の面の作り', () => {
 
 describe('第2章・第3章の面の手ごたえ', () => {
   for (const s of LATER) {
-    it(`${s.id} ${s.name}：見本が種20個のうち18個以上で勝ち、星の平均が2以上`, (ctx) => {
-      ctx.skip(SOLUTION_LATER.has(s.id), DIFFICULTY_LATER);
+    it(`${s.id} ${s.name}：見本が種20個のうち18個以上で勝ち、星の平均が2以上`, () => {
       const r = solutionStats(s);
       expect(r.wins).toBeGreaterThanOrEqual(18);
       expect(r.starsMean).toBeGreaterThanOrEqual(2);
@@ -192,6 +189,21 @@ function lessonRun(s: Stage, terrain: Terrain): { rem: number; impacts: number; 
 const withoutTerrain = (s: Stage, terrain: Terrain): Stage => ({ ...s, field: { ...s.field, terrain: s.field.terrain.map((t) => (t === terrain ? 'plain' : t)) } });
 
 describe('地形の学びが、新しい盤で成り立つ（地形だけを外した面と比べる。design §13.5）', () => {
+  it('2-2：森を平地に替えると、見本の残りの割合の平均が 0.2 以上下がる。森の中の部隊への騎兵の突入は起きず、霧の騎兵が最初に当たるのは森の中の部隊', () => {
+    // 実測（2026-11-22）：森あり 0.566（20 勝）、森なし 0.085（0 勝。騎兵の突入 140 回）。別の種 20 個でも同じ。
+    // 森ありでは突入 0 回で、霧の騎兵6の最初の相手は、120 回とも森の中の歩兵（列 2・7、行 9・10）
+    const s = byId('2-2');
+    const on = lessonRun(s, 'forest');
+    const off = lessonRun(withoutTerrain(s, 'forest'), 'forest');
+    expect(on.rem - off.rem, `森あり ${on.rem} 森なし ${off.rem}`).toBeGreaterThanOrEqual(0.2);
+    expect(on.impactsOnTerrain).toBe(0);
+    const inForest = new Set(s.solution.filter((p) => terrainAt(s.field, p.col + 0.5, p.row + 0.5) === 'forest').map((p) => `${p.col},${p.row}`));
+    expect(inForest.size).toBeGreaterThan(0);
+    const total = [...on.firstContact.values()].reduce((a, b) => a + b, 0);
+    const hit = [...on.firstContact].filter(([k]) => inForest.has(k)).reduce((a, [, n]) => a + n, 0);
+    expect(total, JSON.stringify([...on.firstContact])).toBe(STAGE_SEEDS.length * s.enemy.filter((p) => p.kind === 'cavalry').length);
+    expect(hit, JSON.stringify([...on.firstContact])).toBeGreaterThanOrEqual(Math.ceil(total * 0.9));
+  }, 300_000);
   it('3-5：右の端の柵を平地に替えると、見本の残りの割合の平均が 0.02 以上下がる。霧の騎兵が最初に当たるのは、柵の盾兵かその後ろの歩兵', () => {
     // 実測（2026-11-22）：柵あり 0.602、柵なし 0.572（差 0.030。別の種 20 個でも 0.606 と 0.576）。
     // 霧の騎兵2の最初の相手は、40 回とも柵の盾兵（列 8、行 8）の後ろの歩兵（列 8、行 9）
