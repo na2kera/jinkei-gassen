@@ -82,6 +82,7 @@ import {
   hasNonHq,
   isDrag,
   placeable,
+  releaseAction,
   pvpHeadText,
   recallPlan,
   rosterWithoutReserve,
@@ -128,6 +129,8 @@ interface Press {
   /** 最後に見た指の位置（盤を作り直したときに、引っぱっている表示を当て直すため） */
   x: number;
   y: number;
+  /** 押し始めから 8px 以上動いたか（引っぱれない元でも数える。一度立ったら戻さない） */
+  moved: boolean;
   dragging: boolean;
   /** 盤の部隊なら、押し始めのその部隊（作り直したあとに同じ部隊かを見分ける） */
   unit: Placement | null;
@@ -1181,7 +1184,7 @@ export class DeployScene extends Phaser.Scene {
   /** 押し始めを覚える */
   private beginPress(pointer: Phaser.Input.Pointer, src: DragSource): void {
     const unit = src.type === 'unit' ? this.list[src.index] : undefined;
-    this.press = { pointerId: pointer.id, src, startX: pointer.x, startY: pointer.y, x: pointer.x, y: pointer.y, dragging: false, unit: unit ? { ...unit } : null };
+    this.press = { pointerId: pointer.id, src, startX: pointer.x, startY: pointer.y, x: pointer.x, y: pointer.y, moved: false, dragging: false, unit: unit ? { ...unit } : null };
   }
 
   /** 押し始めを受け付けるか（暗いカード・「完了」のあと・ダイアログの間・別の指を覚えている間は受け付けない） */
@@ -1217,11 +1220,10 @@ export class DeployScene extends Phaser.Scene {
     if (!press || pointer.id !== press.pointerId) return;
     press.x = pointer.x;
     press.y = pointer.y;
-    if (!this.canDrag(press.src)) return;
-    if (!press.dragging) {
-      if (!isDrag(false, press.startX, press.startY, pointer.x, pointer.y)) return;
-      this.startDrag(press);
-    }
+    // 動いた量は、引っぱれない元でも数える（大きく動かしてから離したのを「押した」にしないため）
+    press.moved = isDrag(press.moved, press.startX, press.startY, pointer.x, pointer.y);
+    if (!press.moved || !this.canDrag(press.src)) return;
+    if (!press.dragging) this.startDrag(press);
     this.showDrag();
   }
 
@@ -1343,7 +1345,14 @@ export class DeployScene extends Phaser.Scene {
     press.x = pointer.x;
     press.y = pointer.y;
     // 動かす出来事が来ないまま、離す出来事にだけ動きが出ることがあるので、離した座標でも見分ける
-    if (!press.dragging && this.canDrag(press.src) && isDrag(false, press.startX, press.startY, pointer.x, pointer.y)) this.startDrag(press);
+    press.moved = isDrag(press.moved, press.startX, press.startY, pointer.x, pointer.y);
+    const action = releaseAction(press.moved, this.canDrag(press.src));
+    if (action === 'none') {
+      // 引っぱれない元（空の遊軍の枠、チュートリアルの盤の部隊）を大きく動かした：何も起きない
+      this.cancelPress();
+      return;
+    }
+    if (action === 'drop' && !press.dragging) this.startDrag(press);
     if (press.dragging) {
       const target = this.dropTarget(pointer.x, pointer.y);
       const result = dropResult(press.src, target, this.dropContext());

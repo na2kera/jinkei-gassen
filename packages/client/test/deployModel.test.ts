@@ -29,6 +29,7 @@ import {
   isDrag,
   placeable,
   pvpHeadText,
+  releaseAction,
   recallPlan,
   rosterWithoutReserve,
   templateRoster,
@@ -81,6 +82,21 @@ test('一度 8px を超えてから元の場所に戻して離しても、押し
   assert.equal(dragging, true);
   dragging = isDrag(dragging, 0, 0, 0, 0);
   assert.equal(dragging, true);
+});
+
+test('離したとき：動かさずに離せば押した。8px 以上動いたら、引っぱれる元は離した先へ、引っぱれない元（空の遊軍の枠など）は何も起きない', () => {
+  // 押し始め (0,0) → 動かす出来事で 100px → 枠の外で離す。空の枠は引っぱれないが、押したには戻さない
+  let moved = isDrag(false, 0, 0, 100, 0);
+  moved = isDrag(moved, 0, 0, 100, 0);
+  assert.equal(releaseAction(moved, false), 'none');
+  assert.equal(releaseAction(moved, true), 'drop');
+  // 動かす出来事なしで、離した座標だけが 8px 以上離れている
+  assert.equal(releaseAction(isDrag(false, 0, 0, 0, 30), false), 'none');
+  // 大きく動かしてから元の場所へ戻して離しても、押したにはならない
+  assert.equal(releaseAction(isDrag(isDrag(false, 0, 0, 40, 0), 0, 0, 0, 0), false), 'none');
+  // 枠の中で動かさずに離した（7px まで）：押した
+  assert.equal(releaseAction(isDrag(false, 0, 0, 7, 0), false), 'tap');
+  assert.equal(releaseAction(isDrag(false, 0, 0, 7, 0), true), 'tap');
 });
 
 // ---- 本陣の初めのマス ----

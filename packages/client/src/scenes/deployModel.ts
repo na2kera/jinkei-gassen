@@ -22,6 +22,16 @@ export function isDrag(already: boolean, startX: number, startY: number, x: numb
   return already || Math.hypot(x - startX, y - startY) >= DRAG_THRESHOLD;
 }
 
+/**
+ * 離したときにすること。moved は押し始めから 8px 以上動いたか（isDrag。動いた量だけで決める）、canDrag はその元を引っぱってよいか。
+ *   drop：引っぱって離した（離した先の結果を当てる）。tap：動かさずに離した（押した）。
+ *   none：引っぱれない元（空の遊軍の枠、チュートリアルの盤の部隊）を大きく動かした。押したには戻さず、何も起きない
+ */
+export function releaseAction(moved: boolean, canDrag: boolean): 'drop' | 'tap' | 'none' {
+  if (!moved) return 'tap';
+  return canDrag ? 'drop' : 'none';
+}
+
 // ---- 置けるマス・本陣の初めのマス（§15.6） ----
 
 export interface CellPos {
