@@ -175,7 +175,9 @@ export function starSearch(stage: Stage, opts: { iters: number; screen: number; 
 }
 
 export function starMain(args: string[]): void {
-  const ids = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && (args[i - 1] as string).startsWith('--')));
+  // 値を取るオプション（--iters など）だけが、次の引数を値として使う。--quiet は値を取らない
+  const VALUED = ['--iters', '--screen', '--keep', '--rand'];
+  const ids = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && VALUED.includes(args[i - 1] as string)));
   const opts = { iters: Number(arg(args, '--iters', '400')), screen: Number(arg(args, '--screen', '6')), keep: Number(arg(args, '--keep', '4')), rand: Number(arg(args, '--rand', '1')), quiet: args.includes('--quiet') };
   for (const id of ids) {
     const stage = STAGES.find((s) => s.id === id);
