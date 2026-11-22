@@ -320,3 +320,21 @@ test('P11 lineDepth：兵の残りの棒（兵の depth に 1.4 × k × 0.75 + 0
 test('P12 線がなければ何もしない', () => {
   assert.equal(lineDepth([], [], 0.5, 1, 2, 123.4, 1), 123.4);
 });
+
+test('P13 BoardView.lineDepth：線を登録すると、盤の回転（返した表示は 180° 足す）で直す。線を外すとそのまま', async () => {
+  const { BoardView, deg } = await import('../src/battle/BoardView.ts');
+  const area = { x: 0, y: 0, w: 390, h: 500 };
+  for (const flipped of [false, true])
+    for (const r of [0, 45, 59]) {
+      const bv = new BoardView(area, { width: 10, height: 12 }, { flipped, cam: { rot: deg(r), k: 0.65 } });
+      const p = { x: WALL.x + 0.2, y: WALL.y + (flipped ? 1 : -1) * (22.8 / TS) };
+      const d = bv.project(p.x, p.y).depth;
+      assert.equal(bv.lineDepth(p.x, p.y, d, 1.3), d, '線がなければそのまま');
+      bv.setLines([WALL]);
+      const want = lineDepth([WALL], [bv.project(WALL.x, WALL.y).depth], bv.groundRotation, p.x, p.y, d, 1.3);
+      assert.equal(bv.lineDepth(p.x, p.y, d, 1.3), want);
+      if (r === 45) assert.ok(want < bv.project(WALL.x, WALL.y).depth, `${flipped ? '返した表示' : 'ふつう'} 45°：奥の兵は線より奥`);
+      bv.setLines([]);
+      assert.equal(bv.lineDepth(p.x, p.y, d, 1.3), d);
+    }
+});

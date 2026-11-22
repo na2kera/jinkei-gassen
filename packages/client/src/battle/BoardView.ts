@@ -5,6 +5,7 @@
 import type { Rect } from '../layout.ts';
 import { ANGLES, SQUASH } from '../art/stack/bake.ts';
 import { heightAt, type HeightMap } from '../art/stack/height.ts';
+import { lineDepth, type DepthLine } from '../art/stack/props.ts';
 
 export interface Point {
   x: number;
@@ -92,6 +93,8 @@ export class BoardView {
   private s = 0;
   private cx = 0;
   private cy = 0;
+  /** 兵との前後を直す線（城壁・城門。design §16.5）。立った地形（ground.ts の Scenery）が登録する */
+  private lines: readonly DepthLine[] = [];
 
   constructor(area: Rect, field: BoardSize, opts: { flipped?: boolean; hm?: HeightMap | null; cam?: Cam } = {}) {
     this.area = area;
@@ -129,6 +132,21 @@ export class BoardView {
   /** 盤のまん中の画面の位置 */
   get center(): Point {
     return { x: this.cx, y: this.cy };
+  }
+
+  /** 前後を直す線を登録する（城壁・城門。門が破れたら、門と崩れた城壁の線を外して登録し直す） */
+  setLines(lines: readonly DepthLine[]): void {
+    this.lines = lines;
+  }
+
+  /**
+   * 兵（や棒）の depth を、城壁・城門の線のどちら側にいるかで直す（design §16.5）。(x, y) は足もと（戦場の座標）、
+   * sz は 兵の大きさ ÷ 盤の縮み。線がなければ何もしない
+   */
+  lineDepth(x: number, y: number, depth: number, sz: number): number {
+    if (this.lines.length === 0) return depth;
+    const ds = this.lines.map((L) => this.project(L.x, L.y).depth);
+    return lineDepth(this.lines, ds, this.groundRotation, x, y, depth, sz);
   }
 
   /** 戦場の座標（マス）→ 盤のまん中を原点にした盤の px（返した表示なら符号を返す） */

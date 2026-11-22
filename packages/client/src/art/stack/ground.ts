@@ -9,9 +9,10 @@ import { COLOR, TERRAIN, css } from '../palette.ts';
 import { FOG_KEY, gateKey, RUBBLE_KEY, tileKey } from '../textures.ts';
 import { abgr, ANGLES } from './bake.ts';
 import { HILL_MAX } from './height.ts';
-import { treeFrameName, TREE_SCALES } from './jobs.ts';
+import { treeFrameName, TREE_SCALES, wrapAngle } from './jobs.ts';
 import { stackTextures } from './stackTextures.ts';
 import type { TreeId } from './parts.ts';
+import { propPlaces, type PropPlace } from './props.ts';
 
 /** 決まった乱数（試作と同じ） */
 export function rng(seed: number): () => number {
@@ -360,6 +361,124 @@ export class Forest {
   destroy(): void {
     for (const t of this.trees) t.img.destroy();
     this.trees.length = 0;
+  }
+}
+
+// ---- 柵・城壁・城門（design §16.5・§16.6） ----
+
+/** 止まった向きの縮みで焼いた、地形の絵の大きさ（大きさ 1 のほか） */
+const PROP_STOP_SCALES = [0.94, 0.65, 0.79] as const;
+
+interface PropImg {
+  img: Phaser.GameObjects.Image;
+  key: string;
+}
+
+/**
+ * 立った地形（柵・城壁・城門）。マスごとに 1 枚の絵を、兵の層に入れ、depth の順に重ねる。
+ * 地形なので盤と一緒に回り、盤と同じ縮みで描く：止まった縮みで焼いた絵がその向きにあれば使い、なければ大きさ 1 の絵を k 倍。
+ * 城壁と城門の線を BoardView に登録し、兵の前後を直させる。門の様子（傷み具合・破れたか）は setGate で受け取る
+ */
+export class Scenery {
+  private readonly scene: Phaser.Scene;
+  private readonly bv: BoardView;
+  private readonly field: Field;
+  private readonly gate: GateLook | null;
+  private readonly layer: Phaser.GameObjects.Container;
+  private stage: 0 | 1 | 2 = 0;
+  private broken = false;
+  private places: PropPlace[] = [];
+  private readonly imgs = new Map<string, PropImg>();
+
+  constructor(scene: Phaser.Scene, bv: BoardView, field: Field, gate: GateLook | null, layer: Phaser.GameObjects.Container) {
+    this.scene = scene;
+    this.bv = bv;
+    this.field = field;
+    this.gate = gate;
+    this.layer = layer;
+    this.place();
+    this.update();
+  }
+
+  /** 立った地形の絵の数（見えていないものを含む） */
+  get count(): number {
+    return this.places.length;
+  }
+
+  /** 門の様子。段が変われば門の絵を替え、破れたら門と両隣の城壁の絵を消して、残った城壁を切り口の閉じた型に替える */
+  setGate(stage: 0 | 1 | 2, broken: boolean): void {
+    if (!this.gate || (stage === this.stage && broken === this.broken)) return;
+    this.stage = stage;
+    this.broken = broken;
+    this.place();
+    this.update();
+  }
+
+  /** 置き方を決め直す（いまの門の様子で）。要らなくなったマスの絵は消し、前後の線を登録し直す */
+  private place(): void {
+    this.places = propPlaces(this.field, this.gate, this.stage, this.broken);
+    const live = new Set<string>();
+    for (const p of this.places) {
+      const id = `${p.col},${p.row}`;
+      live.add(id);
+      if (!this.imgs.has(id)) {
+        const img = this.scene.add.image(0, 0, '__DEFAULT').setVisible(false);
+        this.layer.add(img);
+        this.imgs.set(id, { img, key: '' });
+      }
+    }
+    for (const [id, o] of [...this.imgs]) {
+      if (live.has(id)) continue;
+      o.img.destroy();
+      this.imgs.delete(id);
+    }
+    this.bv.setLines(this.places.flatMap((p) => (p.line ? [p.line] : [])));
+  }
+
+  /** カメラが変わったとき・絵が届いたときに呼ぶ */
+  update(): void {
+    if (this.places.length === 0) return;
+    const k = this.bv.cam.k;
+    const up = this.bv.angleIndex(0, -1);
+    for (const p of this.places) {
+      const o = this.imgs.get(`${p.col},${p.row}`)!;
+      const a = wrapAngle(up + p.rot);
+      let ref = null;
+      let display = k;
+      for (const s of PROP_STOP_SCALES) {
+        if (Math.abs(k - s) >= 0.006) continue;
+        ref = stackTextures.prop(p.id, a, s);
+        if (ref) display = k / s;
+        break;
+      }
+      // その縮みの絵がない（向きが違う・まだ届かない）ときは、大きさ 1 の絵を k 倍で
+      if (!ref) {
+        ref = stackTextures.prop(p.id, a, 1);
+        display = k;
+      }
+      if (!ref) {
+        o.img.setVisible(false);
+        continue;
+      }
+      // 取り込み直した絵（同じ鍵の新しいテクスチャ）にも切り替わるよう、取り込んだ時刻も見る
+      const key = `${ref.key}|${ref.frame}|${ref.sheet.readyAt}`;
+      if (key !== o.key) {
+        o.img.setTexture(ref.key, ref.frame).setOrigin(ref.sheet.g.ax / ref.sheet.g.fw, ref.sheet.g.ay / ref.sheet.g.fh);
+        o.key = key;
+      }
+      const cx = p.col + 0.5;
+      const cy = p.row + 0.5;
+      const pos = this.bv.project(cx, cy, this.bv.ground(cx, cy));
+      // depth：城壁・城門はマスのまん中、柵は柵の線の上の点（design §16.5）
+      o.img.setVisible(true).setPosition(Math.round(pos.x), Math.round(pos.y)).setScale(display).setDepth(this.bv.project(p.dx, p.dy).depth);
+    }
+  }
+
+  destroy(): void {
+    for (const o of this.imgs.values()) o.img.destroy();
+    this.imgs.clear();
+    this.places = [];
+    this.bv.setLines([]);
   }
 }
 
